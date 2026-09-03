@@ -1,13 +1,22 @@
 <?php
 /**
  * Plugin Name: Crawler Nets Updater
- * Description: Keeps crawler-nets.conf's Googlebot/Bingbot sections current
- *              from the vendors' own published IP-range lists, without ever
- *              touching anything else in the file. Deployed as a mu-plugin
- *              on wp-opsec.eagleeye-intelligence.com specifically — the
- *              file it writes lives on dashboard.eagleeye-intelligence.com
- *              (same host, same www-data user), which is what every Opsec
- *              install's Whitelist tab fetches by default.
+ * Description: Keeps crawler-nets.conf's vendor sections current from
+ *              each vendor's own published IP-range list, without ever
+ *              touching anything else in the file. Deployed as a
+ *              mu-plugin on wp-opsec.eagleeye-intelligence.com, writing
+ *              to that same site's own wp-content/uploads/wp-opsec/ —
+ *              deliberately, not the system-level
+ *              /etc/eagleeye/crawler-nets.conf (root:root, also feeds a
+ *              separate iptables deployment script): this file lives
+ *              entirely inside a normal WordPress install, so the
+ *              www-data user that WP-Cron runs as can write it directly
+ *              with no privilege boundary to cross. Every Opsec
+ *              install's Whitelist tab points at this URL by default
+ *              (see whitelist/module.php's DEFAULT_URL) and re-fetches
+ *              it daily, so a change here reaches the whole fleet
+ *              through the mechanism that already exists — no
+ *              per-install action needed.
  *
  * Not part of the Opsec plugin itself: this is single-host infrastructure
  * automation for eagleeye's own crawler-nets.conf, not something every
@@ -20,16 +29,16 @@
  * should ever be silently dropped just because an automated source no
  * longer lists it. This only ever APPENDS ranges that are genuinely new
  * (not already present anywhere in the file, in any section), into the
- * existing "# Googlebot" / "# Bingbot" section, with a dated comment
- * matching the file's own established annotation style. It never removes
- * or rewrites an existing line.
+ * matching existing section, with a dated comment matching the file's
+ * own established annotation style. It never removes or rewrites an
+ * existing line.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WPOPSEC_CNU_TARGET_FILE', '/var/www/wordpress/wp-content/uploads/wp-opsec/crawler-nets.conf' );
+define( 'WPOPSEC_CNU_TARGET_FILE', WP_CONTENT_DIR . '/uploads/wp-opsec/crawler-nets.conf' );
 
 define(
 	'WPOPSEC_CNU_SOURCES',
