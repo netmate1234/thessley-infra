@@ -39,6 +39,21 @@ define(
 			'heading' => '# Googlebot / Google infrastructure',
 			'format'  => 'json_prefixes',
 		),
+		// Google publishes its crawler fleet as three separate official
+		// feeds, not one — this covers AdsBot-Google (ad-quality checks)
+		// and Google-Inspection / user-triggered fetch tools respectively,
+		// both genuinely distinct bots seen in real traffic, both Google's
+		// own infrastructure. Same section as the main Googlebot feed.
+		'Google special-crawlers'        => array(
+			'url'     => 'https://developers.google.com/static/search/apis/ipranges/special-crawlers.json',
+			'heading' => '# Googlebot / Google infrastructure',
+			'format'  => 'json_prefixes',
+		),
+		'Google user-triggered-fetchers' => array(
+			'url'     => 'https://developers.google.com/static/search/apis/ipranges/user-triggered-fetchers.json',
+			'heading' => '# Googlebot / Google infrastructure',
+			'format'  => 'json_prefixes',
+		),
 		'Bingbot'     => array(
 			'url'     => 'https://www.bing.com/toolbox/bingbot.json',
 			'heading' => '# Bingbot / MSN (Microsoft)',
@@ -51,6 +66,20 @@ define(
 		),
 		'OpenAI GPTBot' => array(
 			'url'     => 'https://openai.com/gptbot.json',
+			'heading' => '# OpenAI GPTBot — AI search crawler (2026-05-24)',
+			'format'  => 'json_prefixes',
+		),
+		// OpenAI publishes three separate bot feeds too: GPTBot (training
+		// data), ChatGPT-User (live browsing on a user's behalf), and
+		// OAI-SearchBot (their search product) — same section, since
+		// they're all OpenAI's own infrastructure.
+		'ChatGPT-User' => array(
+			'url'     => 'https://openai.com/chatgpt-user.json',
+			'heading' => '# OpenAI GPTBot — AI search crawler (2026-05-24)',
+			'format'  => 'json_prefixes',
+		),
+		'OAI-SearchBot' => array(
+			'url'     => 'https://openai.com/searchbot.json',
 			'heading' => '# OpenAI GPTBot — AI search crawler (2026-05-24)',
 			'format'  => 'json_prefixes',
 		),
