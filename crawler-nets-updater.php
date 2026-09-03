@@ -34,13 +34,30 @@ define( 'WPOPSEC_CNU_TARGET_FILE', '/var/www/wordpress/wp-content/uploads/wp-ops
 define(
 	'WPOPSEC_CNU_SOURCES',
 	array(
-		'Googlebot' => array(
+		'Googlebot'   => array(
 			'url'     => 'https://developers.google.com/static/search/apis/ipranges/googlebot.json',
 			'heading' => '# Googlebot / Google infrastructure',
+			'format'  => 'json_prefixes',
 		),
-		'Bingbot'   => array(
+		'Bingbot'     => array(
 			'url'     => 'https://www.bing.com/toolbox/bingbot.json',
 			'heading' => '# Bingbot / MSN (Microsoft)',
+			'format'  => 'json_prefixes',
+		),
+		'DuckDuckGo'  => array(
+			'url'     => 'https://duckduckgo.com/duckduckbot.json',
+			'heading' => '# DuckDuckGo (DuckDuckBot) — Azure-hosted crawler (2026-05-24)',
+			'format'  => 'json_prefixes',
+		),
+		'OpenAI GPTBot' => array(
+			'url'     => 'https://openai.com/gptbot.json',
+			'heading' => '# OpenAI GPTBot — AI search crawler (2026-05-24)',
+			'format'  => 'json_prefixes',
+		),
+		'Cloudflare'  => array(
+			'url'     => 'https://www.cloudflare.com/ips-v4',
+			'heading' => '# Cloudflare CDN proxy (AS13335) — legitimate CDN traffic',
+			'format'  => 'plain_cidr_list',
 		),
 	)
 );
@@ -91,7 +108,7 @@ function wpopsec_cnu_run() {
 	$added_total = 0;
 
 	foreach ( WPOPSEC_CNU_SOURCES as $label => $source ) {
-		$fetched = wpopsec_cnu_fetch_ipv4_prefixes( $source['url'] );
+		$fetched = wpopsec_cnu_fetch( $source['url'], $source['format'] );
 		if ( false === $fetched ) {
 			wpopsec_cnu_log( "{$label}: fetch failed, skipped" );
 			continue;
@@ -156,13 +173,26 @@ function wpopsec_cnu_range_covered( array $range, array $existing ) {
 }
 
 /** @return string[]|false CIDR strings (IPv4 only — this file has never carried IPv6), or false on fetch failure */
-function wpopsec_cnu_fetch_ipv4_prefixes( $url ) {
+function wpopsec_cnu_fetch( $url, $format ) {
 	$response = wp_remote_get( $url, array( 'timeout' => 20, 'user-agent' => 'wp-opsec-crawler-nets-updater/1.0' ) );
 	if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
 		return false;
 	}
+	$body = wp_remote_retrieve_body( $response );
 
-	$data = json_decode( wp_remote_retrieve_body( $response ), true );
+	switch ( $format ) {
+		case 'json_prefixes':
+			return wpopsec_cnu_parse_json_prefixes( $body );
+		case 'plain_cidr_list':
+			return wpopsec_cnu_parse_plain_cidr_list( $body );
+		default:
+			return false;
+	}
+}
+
+/** Google/Bing/DuckDuckGo/OpenAI all publish this same {"prefixes":[{"ipv4Prefix":"..."}]} shape. */
+function wpopsec_cnu_parse_json_prefixes( $body ) {
+	$data = json_decode( $body, true );
 	if ( empty( $data['prefixes'] ) || ! is_array( $data['prefixes'] ) ) {
 		return false;
 	}
@@ -174,6 +204,18 @@ function wpopsec_cnu_fetch_ipv4_prefixes( $url ) {
 		}
 	}
 	return $out;
+}
+
+/** Cloudflare's ips-v4 endpoint: bare CIDR, one per line, no wrapper. */
+function wpopsec_cnu_parse_plain_cidr_list( $body ) {
+	$out = array();
+	foreach ( preg_split( '/\r\n|\r|\n/', $body ) as $line ) {
+		$line = trim( $line );
+		if ( '' !== $line && false !== strpos( $line, '/' ) ) {
+			$out[] = $line;
+		}
+	}
+	return $out ?: false;
 }
 
 /**
