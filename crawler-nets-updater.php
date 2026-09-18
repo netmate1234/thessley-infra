@@ -11,17 +11,18 @@
  *              separate iptables deployment script): this file lives
  *              entirely inside a normal WordPress install, so the
  *              www-data user that WP-Cron runs as can write it directly
- *              with no privilege boundary to cross. Every Opsec
- *              install's Whitelist tab points at this URL by default
+ *              with no privilege boundary to cross. Every ShieldCore
+ *              Security install's Whitelist tab points at this URL by default
  *              (see whitelist/module.php's DEFAULT_URL) and re-fetches
  *              it daily, so a change here reaches the whole fleet
  *              through the mechanism that already exists — no
  *              per-install action needed.
  *
- * Not part of the Opsec plugin itself: this is single-host infrastructure
- * automation for eagleeye's own crawler-nets.conf, not something every
- * Opsec install should run. Kept in the wp_opsec repo (infra/, sibling to
- * the plugin's own opsec/ directory) purely for version control — it is
+ * Not part of the ShieldCore Security plugin itself: this is single-host
+ * infrastructure automation for eagleeye's own crawler-nets.conf, not
+ * something every ShieldCore Security install should run. Kept in the
+ * wp_opsec repo (infra/, sibling to the plugin's own opsec/ directory)
+ * purely for version control — it is
  * never bundled into the distributable plugin zip.
  *
  * Design: crawler-nets.conf is hand-curated (friend IPs, protected own
@@ -38,10 +39,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WPOPSEC_CNU_TARGET_FILE', WP_CONTENT_DIR . '/uploads/wp-opsec/crawler-nets.conf' );
+define( 'SHIELDCORE_CNU_TARGET_FILE', WP_CONTENT_DIR . '/uploads/wp-opsec/crawler-nets.conf' );
 
 define(
-	'WPOPSEC_CNU_SOURCES',
+	'SHIELDCORE_CNU_SOURCES',
 	array(
 		'Googlebot'   => array(
 			'url'     => 'https://developers.google.com/static/search/apis/ipranges/googlebot.json',
@@ -100,27 +101,27 @@ define(
 	)
 );
 
-define( 'WPOPSEC_CNU_CRON_HOOK', 'wpopsec_cnu_refresh' );
+define( 'SHIELDCORE_CNU_CRON_HOOK', 'shieldcore_cnu_refresh' );
 
 // mu-plugins bypass the standard activation lifecycle entirely — there is
 // no activation hook to bind to, this file just runs on every request —
 // so this direct check is the real (idempotent) bootstrap for a fresh
 // deploy: schedules once, then no-ops on every subsequent request.
-if ( ! wp_next_scheduled( WPOPSEC_CNU_CRON_HOOK ) ) {
-	wp_schedule_event( time() + ( 5 * MINUTE_IN_SECONDS ), 'weekly', WPOPSEC_CNU_CRON_HOOK );
+if ( ! wp_next_scheduled( SHIELDCORE_CNU_CRON_HOOK ) ) {
+	wp_schedule_event( time() + ( 5 * MINUTE_IN_SECONDS ), 'weekly', SHIELDCORE_CNU_CRON_HOOK );
 }
 
-add_action( WPOPSEC_CNU_CRON_HOOK, 'wpopsec_cnu_run' );
+add_action( SHIELDCORE_CNU_CRON_HOOK, 'shieldcore_cnu_run' );
 
-function wpopsec_cnu_run() {
-	if ( ! is_readable( WPOPSEC_CNU_TARGET_FILE ) || ! is_writable( WPOPSEC_CNU_TARGET_FILE ) ) {
-		wpopsec_cnu_log( 'target file missing or not writable: ' . WPOPSEC_CNU_TARGET_FILE );
+function shieldcore_cnu_run() {
+	if ( ! is_readable( SHIELDCORE_CNU_TARGET_FILE ) || ! is_writable( SHIELDCORE_CNU_TARGET_FILE ) ) {
+		shieldcore_cnu_log( 'target file missing or not writable: ' . SHIELDCORE_CNU_TARGET_FILE );
 		return;
 	}
 
-	$content = file_get_contents( WPOPSEC_CNU_TARGET_FILE );
+	$content = file_get_contents( SHIELDCORE_CNU_TARGET_FILE );
 	if ( false === $content ) {
-		wpopsec_cnu_log( 'failed to read target file' );
+		shieldcore_cnu_log( 'failed to read target file' );
 		return;
 	}
 
@@ -136,7 +137,7 @@ function wpopsec_cnu_run() {
 	foreach ( preg_split( '/\r\n|\r|\n/', $content ) as $line ) {
 		$line = trim( $line );
 		if ( '' !== $line && '#' !== $line[0] && false !== strpos( $line, '/' ) ) {
-			$range = wpopsec_cnu_cidr_to_range( $line );
+			$range = shieldcore_cnu_cidr_to_range( $line );
 			if ( null !== $range ) {
 				$existing[] = $range;
 			}
@@ -145,17 +146,17 @@ function wpopsec_cnu_run() {
 
 	$added_total = 0;
 
-	foreach ( WPOPSEC_CNU_SOURCES as $label => $source ) {
-		$fetched = wpopsec_cnu_fetch( $source['url'], $source['format'] );
+	foreach ( SHIELDCORE_CNU_SOURCES as $label => $source ) {
+		$fetched = shieldcore_cnu_fetch( $source['url'], $source['format'] );
 		if ( false === $fetched ) {
-			wpopsec_cnu_log( "{$label}: fetch failed, skipped" );
+			shieldcore_cnu_log( "{$label}: fetch failed, skipped" );
 			continue;
 		}
 
 		$new = array();
 		foreach ( $fetched as $cidr ) {
-			$range = wpopsec_cnu_cidr_to_range( $cidr );
-			if ( null === $range || wpopsec_cnu_range_covered( $range, $existing ) ) {
+			$range = shieldcore_cnu_cidr_to_range( $cidr );
+			if ( null === $range || shieldcore_cnu_range_covered( $range, $existing ) ) {
 				continue;
 			}
 			$new[]      = $cidr;
@@ -163,26 +164,26 @@ function wpopsec_cnu_run() {
 		}
 
 		if ( empty( $new ) ) {
-			wpopsec_cnu_log( "{$label}: {$source ['url']} — nothing new (" . count( $fetched ) . ' ranges checked)' );
+			shieldcore_cnu_log( "{$label}: {$source ['url']} — nothing new (" . count( $fetched ) . ' ranges checked)' );
 			continue;
 		}
 
 		sort( $new );
-		$content = wpopsec_cnu_insert_into_section( $content, $source['heading'], $label, $new );
+		$content = shieldcore_cnu_insert_into_section( $content, $source['heading'], $label, $new );
 		$added_total += count( $new );
-		wpopsec_cnu_log( "{$label}: added " . count( $new ) . ' new range(s)' );
+		shieldcore_cnu_log( "{$label}: added " . count( $new ) . ' new range(s)' );
 	}
 
 	if ( $added_total > 0 ) {
-		$tmp = WPOPSEC_CNU_TARGET_FILE . '.tmp-' . bin2hex( random_bytes( 4 ) );
+		$tmp = SHIELDCORE_CNU_TARGET_FILE . '.tmp-' . bin2hex( random_bytes( 4 ) );
 		file_put_contents( $tmp, $content, LOCK_EX );
-		rename( $tmp, WPOPSEC_CNU_TARGET_FILE );
-		wpopsec_cnu_log( "wrote {$added_total} new range(s) total" );
+		rename( $tmp, SHIELDCORE_CNU_TARGET_FILE );
+		shieldcore_cnu_log( "wrote {$added_total} new range(s) total" );
 	}
 }
 
 /** @return array{0:int,1:int}|null [start, end] as unsigned 32-bit integers, or null if unparseable */
-function wpopsec_cnu_cidr_to_range( $cidr ) {
+function shieldcore_cnu_cidr_to_range( $cidr ) {
 	if ( false === strpos( $cidr, '/' ) ) {
 		return null;
 	}
@@ -201,7 +202,7 @@ function wpopsec_cnu_cidr_to_range( $cidr ) {
 }
 
 /** @param array{0:int,1:int} $range @param array<int,array{0:int,1:int}> $existing */
-function wpopsec_cnu_range_covered( array $range, array $existing ) {
+function shieldcore_cnu_range_covered( array $range, array $existing ) {
 	foreach ( $existing as $e ) {
 		if ( $e[0] <= $range[0] && $range[1] <= $e[1] ) {
 			return true;
@@ -211,8 +212,8 @@ function wpopsec_cnu_range_covered( array $range, array $existing ) {
 }
 
 /** @return string[]|false CIDR strings (IPv4 only — this file has never carried IPv6), or false on fetch failure */
-function wpopsec_cnu_fetch( $url, $format ) {
-	$response = wp_remote_get( $url, array( 'timeout' => 20, 'user-agent' => 'wp-opsec-crawler-nets-updater/1.0' ) );
+function shieldcore_cnu_fetch( $url, $format ) {
+	$response = wp_remote_get( $url, array( 'timeout' => 20, 'user-agent' => 'shieldcore-security-crawler-nets-updater/1.0' ) );
 	if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
 		return false;
 	}
@@ -220,16 +221,16 @@ function wpopsec_cnu_fetch( $url, $format ) {
 
 	switch ( $format ) {
 		case 'json_prefixes':
-			return wpopsec_cnu_parse_json_prefixes( $body );
+			return shieldcore_cnu_parse_json_prefixes( $body );
 		case 'plain_cidr_list':
-			return wpopsec_cnu_parse_plain_cidr_list( $body );
+			return shieldcore_cnu_parse_plain_cidr_list( $body );
 		default:
 			return false;
 	}
 }
 
 /** Google/Bing/DuckDuckGo/OpenAI all publish this same {"prefixes":[{"ipv4Prefix":"..."}]} shape. */
-function wpopsec_cnu_parse_json_prefixes( $body ) {
+function shieldcore_cnu_parse_json_prefixes( $body ) {
 	$data = json_decode( $body, true );
 	if ( empty( $data['prefixes'] ) || ! is_array( $data['prefixes'] ) ) {
 		return false;
@@ -245,7 +246,7 @@ function wpopsec_cnu_parse_json_prefixes( $body ) {
 }
 
 /** Cloudflare's ips-v4 endpoint: bare CIDR, one per line, no wrapper. */
-function wpopsec_cnu_parse_plain_cidr_list( $body ) {
+function shieldcore_cnu_parse_plain_cidr_list( $body ) {
 	$out = array();
 	foreach ( preg_split( '/\r\n|\r|\n/', $body ) as $line ) {
 		$line = trim( $line );
@@ -263,7 +264,7 @@ function wpopsec_cnu_parse_plain_cidr_list( $body ) {
  * first. If the heading isn't found at all, appends a brand-new section
  * at the end of the file instead, so a source is never silently dropped.
  */
-function wpopsec_cnu_insert_into_section( $content, $heading, $label, array $new_cidrs ) {
+function shieldcore_cnu_insert_into_section( $content, $heading, $label, array $new_cidrs ) {
 	$lines = preg_split( '/\r\n|\r|\n/', $content );
 	// The original file ends with a single trailing newline, which
 	// preg_split turns into a trailing "" element — drop it so
@@ -314,6 +315,6 @@ function wpopsec_cnu_insert_into_section( $content, $heading, $label, array $new
 	return implode( "\n", $lines ) . "\n";
 }
 
-function wpopsec_cnu_log( $message ) {
+function shieldcore_cnu_log( $message ) {
 	error_log( '[crawler-nets-updater] ' . $message );
 }
