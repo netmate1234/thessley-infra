@@ -93,11 +93,12 @@ define(
 			'heading' => '# OpenAI GPTBot — AI search crawler (2026-05-24)',
 			'format'  => 'json_prefixes',
 		),
-		'Cloudflare'  => array(
-			'url'     => 'https://www.cloudflare.com/ips-v4',
-			'heading' => '# Cloudflare CDN proxy (AS13335) — legitimate CDN traffic',
-			'format'  => 'plain_cidr_list',
-		),
+		// Cloudflare is deliberately NOT listed. Cloudflare's edge ranges send
+		// requests to an origin only when the site sits behind Cloudflare, and
+		// none of these sites do; the only traffic that arrives from those
+		// ranges is Workers/WARP-based scanners, and trusting the range hands
+		// them an exemption from every blocking module (seen sweeping .env,
+		// .git/config and wp-config backups with zero events logged).
 	)
 );
 
