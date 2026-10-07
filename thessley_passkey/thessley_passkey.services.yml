@@ -1,0 +1,40 @@
+services:
+  thessley_passkey.store:
+    class: Drupal\thessley_passkey\PasskeyStore
+    arguments: ['@database', '@datetime.time']
+
+  thessley_passkey.manager:
+    class: Drupal\thessley_passkey\PasskeyManager
+    arguments:
+      - '@config.factory'
+      - '@thessley_passkey.store'
+      - '@keyvalue.expirable'
+      - '@flood'
+      - '@request_stack'
+      - '@datetime.time'
+      - '@logger.channel.thessley_passkey'
+      - '@entity_type.manager'
+      - '@plugin.manager.mail'
+      - '@language_manager'
+
+  logger.channel.thessley_passkey:
+    parent: logger.channel_base
+    arguments: ['thessley_passkey']
+
+  # Lets the Android app keep calling ?rest_route=/thessley/v1/passkey/...
+  # (WordPress's always-available REST fallback form) unchanged.
+  thessley_passkey.path_processor.rest_route:
+    class: Drupal\thessley_passkey\PathProcessor\RestRoutePathProcessor
+    tags:
+      - { name: path_processor_inbound, priority: 300 }
+
+  thessley_passkey.route_subscriber:
+    class: Drupal\thessley_passkey\Routing\RouteSubscriber
+    tags:
+      - { name: event_subscriber }
+
+  thessley_passkey.access.json_login:
+    class: Drupal\thessley_passkey\Access\JsonLoginAccessCheck
+    arguments: ['@config.factory']
+    tags:
+      - { name: access_check, applies_to: _thessley_passkey_json_login }

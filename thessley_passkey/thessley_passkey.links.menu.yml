@@ -1,0 +1,5 @@
+thessley_passkey.settings:
+  title: 'Thessley Passkey Login'
+  description: 'Choose how people sign in with the Thessley Passkey app.'
+  route_name: thessley_passkey.settings
+  parent: system.admin_config_people

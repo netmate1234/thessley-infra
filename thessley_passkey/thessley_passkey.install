@@ -1,0 +1,55 @@
+<?php
+
+/**
+ * @file
+ * Install, schema and uninstall hooks for Thessley Passkey Login.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function thessley_passkey_schema(): array {
+  $schema['thessley_passkeys'] = [
+    'description' => 'Enrolled phones (one row per device key).',
+    'fields' => [
+      'id' => ['type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE],
+      'uid' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
+      'credential_id' => ['type' => 'varchar', 'length' => 64, 'not null' => TRUE, 'binary' => TRUE],
+      'public_key' => ['type' => 'varchar', 'length' => 255, 'not null' => TRUE],
+      'algorithm' => ['type' => 'varchar', 'length' => 16, 'not null' => TRUE, 'default' => 'ES256'],
+      'counter' => ['type' => 'int', 'size' => 'big', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0],
+      'label' => ['type' => 'varchar', 'length' => 100, 'not null' => TRUE, 'default' => ''],
+      'attestation_level' => ['type' => 'varchar', 'length' => 16, 'not null' => FALSE],
+      'created' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
+      'last_used' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => FALSE],
+      'revoked' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => FALSE],
+    ],
+    'primary key' => ['id'],
+    'unique keys' => ['credential_id' => ['credential_id']],
+    'indexes' => ['uid' => ['uid']],
+  ];
+
+  $schema['thessley_passkey_requests'] = [
+    'description' => 'Short-lived login / enroll handshakes.',
+    'fields' => [
+      'request_id' => ['type' => 'varchar', 'length' => 43, 'not null' => TRUE, 'binary' => TRUE],
+      'type' => ['type' => 'varchar', 'length' => 10, 'not null' => TRUE],
+      'nonce' => ['type' => 'varchar', 'length' => 43, 'not null' => TRUE],
+      'status' => ['type' => 'varchar', 'length' => 10, 'not null' => TRUE, 'default' => 'pending'],
+      'requester_uid' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => FALSE],
+      'approver_uid' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => FALSE],
+      'credential_row' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => FALSE],
+      'ip' => ['type' => 'varchar', 'length' => 45, 'not null' => TRUE, 'default' => ''],
+      'created' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
+      'expires' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE],
+      'approved' => ['type' => 'int', 'unsigned' => TRUE, 'not null' => FALSE],
+    ],
+    'primary key' => ['request_id'],
+    'indexes' => [
+      'status_expires' => ['status', 'expires'],
+      'requester_uid' => ['requester_uid'],
+    ],
+  ];
+
+  return $schema;
+}

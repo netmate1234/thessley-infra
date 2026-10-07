@@ -1,0 +1,31 @@
+{#
+/**
+ * @file
+ * The QR / username box shown beneath the password form on /user/login.
+ * Markup only: js/login.js drives it.
+ *
+ * Available variables:
+ * - identify: TRUE when a username is asked for first.
+ * - optional: TRUE when the password form stays available ("Password or the app").
+ */
+#}
+<div id="thessley-passkey-box" class="thessley-pk-box">
+  {% if identify %}
+    <noscript><style>#thessley-passkey-box{display:none}</style></noscript>
+    <div id="thessley-passkey-id" class="thessley-pk-id">
+      <p class="thessley-pk-desc">{% if optional %}{{ 'Enter your username to sign in with a password or the Thessley Passkey app.'|t }}{% else %}{{ 'Enter your username to sign in with the Thessley Passkey app.'|t }}{% endif %}</p>
+      <label for="thessley-passkey-username" class="visually-hidden">{{ 'Username or email address'|t }}</label>
+      <input type="text" id="thessley-passkey-username" class="form-text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="100" placeholder="{{ 'Username or email address'|t }}">
+      <button type="button" id="thessley-passkey-continue" class="button button--primary">{{ 'Continue'|t }}</button>
+    </div>
+  {% endif %}
+  <div id="thessley-passkey-qrwrap"{% if identify %} style="display:none"{% endif %}>
+    <p class="thessley-pk-desc">{{ 'Scan this code with the Thessley Passkey app, or open it on this device.'|t }}</p>
+    <div id="thessley-passkey-qr" class="thessley-pk-qr"></div>
+    <p><a id="thessley-passkey-link" class="button thessley-pk-open" href="#">{{ 'Open on this device'|t }}</a></p>
+    {% if identify %}
+      <p><a id="thessley-passkey-change" href="#">{{ 'Use a different username'|t }}</a></p>
+    {% endif %}
+  </div>
+  <p id="thessley-passkey-msg" role="status"></p>
+</div>

@@ -1,0 +1,128 @@
+# --- JSON API (same paths as the WordPress plugin's thessley/v1/passkey) ---
+# Also reachable as /?rest_route=/thessley/v1/passkey/... (see
+# RestRoutePathProcessor) because that is how the Android app calls it.
+
+thessley_passkey.login_start:
+  path: '/thessley/v1/passkey/login/start'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::loginStart'
+  methods: [POST]
+  requirements:
+    _access: 'TRUE'
+  options:
+    no_cache: TRUE
+
+thessley_passkey.login_status:
+  path: '/thessley/v1/passkey/login/{id}/status'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::loginStatus'
+  methods: [GET]
+  requirements:
+    _access: 'TRUE'
+    id: '[A-Za-z0-9_-]{1,64}'
+  options:
+    no_cache: TRUE
+
+thessley_passkey.login_respond:
+  path: '/thessley/v1/passkey/login/{id}/respond'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::loginRespond'
+  methods: [POST]
+  requirements:
+    _access: 'TRUE'
+    id: '[A-Za-z0-9_-]{1,64}'
+  options:
+    no_cache: TRUE
+
+thessley_passkey.enroll_start:
+  path: '/thessley/v1/passkey/enroll/start'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::enrollStart'
+  methods: [POST]
+  requirements:
+    _permission: 'use thessley passkey'
+    _csrf_request_header_token: 'TRUE'
+  options:
+    no_cache: TRUE
+
+thessley_passkey.enroll_status:
+  path: '/thessley/v1/passkey/enroll/{id}/status'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::enrollStatus'
+  methods: [GET]
+  requirements:
+    _permission: 'use thessley passkey'
+    id: '[A-Za-z0-9_-]{1,64}'
+  options:
+    no_cache: TRUE
+
+# Open on purpose: proof of possession of the new private key is the auth.
+thessley_passkey.enroll_respond:
+  path: '/thessley/v1/passkey/enroll/{id}/respond'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::enrollRespond'
+  methods: [POST]
+  requirements:
+    _access: 'TRUE'
+    id: '[A-Za-z0-9_-]{1,64}'
+  options:
+    no_cache: TRUE
+
+thessley_passkey.devices:
+  path: '/thessley/v1/passkey/devices'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::devices'
+  methods: [GET]
+  requirements:
+    _permission: 'use thessley passkey'
+  options:
+    no_cache: TRUE
+
+thessley_passkey.revoke:
+  path: '/thessley/v1/passkey/devices/{device}/revoke'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::revoke'
+  methods: [POST]
+  requirements:
+    _user_is_logged_in: 'TRUE'
+    _csrf_request_header_token: 'TRUE'
+    device: '\d+'
+  options:
+    no_cache: TRUE
+
+# --- Human pages ---
+
+thessley_passkey.auth_page:
+  path: '/thessley-auth/{type}/{id}'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\PageController::authPage'
+    _title: 'Confirm login'
+  methods: [GET]
+  requirements:
+    _access: 'TRUE'
+    type: 'login|enroll|2fa'
+    id: '[A-Za-z0-9_-]{1,64}'
+  options:
+    no_cache: TRUE
+
+thessley_passkey.user_devices:
+  path: '/user/{user}/passkey'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\PageController::userDevices'
+    _title: 'Passkey devices'
+  requirements:
+    _custom_access: '\Drupal\thessley_passkey\Controller\PageController::userDevicesAccess'
+    user: '\d+'
+  options:
+    no_cache: TRUE
+    parameters:
+      user:
+        type: entity:user
+
+thessley_passkey.settings:
+  path: '/admin/config/people/thessley-passkey'
+  defaults:
+    _form: '\Drupal\thessley_passkey\Form\SettingsForm'
+    _title: 'Thessley Passkey Login'
+  requirements:
+    _permission: 'administer thessley passkey'

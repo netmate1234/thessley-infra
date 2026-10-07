@@ -1,0 +1,35 @@
+qr:
+  version: 1.0
+  js:
+    js/vendor/qrcode-generator.js: {}
+    js/thessley-qr.js: {}
+
+login:
+  version: 1.0
+  css:
+    theme:
+      css/thessley-passkey.css: {}
+  js:
+    js/login.js: {}
+  dependencies:
+    - thessley_passkey/qr
+
+confirm:
+  version: 1.0
+  css:
+    theme:
+      css/thessley-passkey.css: {}
+  js:
+    js/confirm.js: {}
+  dependencies:
+    - thessley_passkey/qr
+
+devices:
+  version: 1.0
+  css:
+    theme:
+      css/thessley-passkey.css: {}
+  js:
+    js/devices.js: {}
+  dependencies:
+    - thessley_passkey/qr

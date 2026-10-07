@@ -1,0 +1,23 @@
+{#
+/**
+ * @file
+ * Containers for an account's passkey devices. js/devices.js fills them in
+ * from drupalSettings.thessleyPasskey (text only, never HTML).
+ *
+ * Available variables:
+ * - can_enroll: TRUE on the account's own page.
+ * - hint: sentence shown above the "Add a device" button.
+ */
+#}
+<div class="thessley-pk-devices">
+  <noscript><p>{{ 'JavaScript is needed to manage passkey devices.'|t }}</p></noscript>
+  <div id="thessley-pk-devices-wrap"></div>
+  {% if can_enroll %}
+    <div id="thessley-pk-enroll-box" class="thessley-pk-box">
+      <p id="thessley-pk-enroll-hint" class="thessley-pk-desc">{{ hint }}</p>
+      <button type="button" class="button button--primary" id="thessley-pk-enroll-start">{{ 'Add a device'|t }}</button>
+      <div id="thessley-pk-enroll-qr" class="thessley-pk-qr" style="display:none"></div>
+      <p id="thessley-pk-enroll-status" class="thessley-pk-desc"></p>
+    </div>
+  {% endif %}
+</div>

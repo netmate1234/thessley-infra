@@ -1,0 +1,13 @@
+thessley_passkey.settings:
+  type: config_object
+  label: 'Thessley Passkey Login settings'
+  mapping:
+    mode:
+      type: string
+      label: 'Login method'
+    identify:
+      type: boolean
+      label: 'Ask for the username first'
+    origin:
+      type: string
+      label: 'Public site URL (override)'

@@ -1,0 +1,19 @@
+.thessley-pk-box { max-width: 320px; margin: 12px auto; padding: 12px; box-sizing: border-box; border: 1px solid #dcdcde; border-radius: 4px; text-align: center; }
+.thessley-pk-qr { display: inline-block; line-height: 0; background: #fff; padding: 12px; border-radius: 4px; }
+.thessley-pk-box .thessley-pk-qr { margin: 4px 0; }
+.thessley-pk-confirm { max-width: 360px; margin: 24px auto; text-align: center; }
+.thessley-pk-desc { margin: 0 0 8px; }
+.thessley-pk-open { display: block; box-sizing: border-box; width: 100%; text-align: center; }
+.thessley-pk-id input[type=text] { width: 100%; box-sizing: border-box; margin: 0 0 8px; min-height: 40px; font-size: 16px; }
+.thessley-pk-id button { width: 100%; }
+/* Username-first login: the password form waits for step 1. Only with JS (the class is added by a script), so a browser without JS keeps the normal form. */
+html.thessley-pk-step1 form.user-login-form { display: none; }
+/* "App only": no password form (the ?thessley_password=1 hatch drops the class). */
+form.user-login-form.thessley-pk-hidden { display: none; }
+.thessley-pk-table { border-collapse: collapse; max-width: 680px; width: 100%; }
+.thessley-pk-table th, .thessley-pk-table td { padding: 6px 8px; border-bottom: 1px solid #dcdcde; text-align: left; }
+.thessley-pk-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: .85em; background: #eee; }
+.thessley-pk-good { background: #e3f4e5; color: #17612a; }
+.thessley-pk-warn { background: #fdf0d5; color: #7a4b00; }
+.thessley-pk-bad { background: #fbe3e3; color: #8a1f1f; }
+.thessley-pk-quiet { background: #eee; color: #555; }

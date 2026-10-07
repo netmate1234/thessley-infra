@@ -1,0 +1,81 @@
+<?php
+
+/**
+ * @file
+ * Thessley Passkey Login: sign in to Drupal with the Thessley Passkey Android
+ * app (scan a QR code or tap a link), the server half of the protocol the
+ * Thessley Security Hardening WordPress plugin speaks.
+ */
+
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Url;
+use Drupal\user\UserInterface;
+
+/**
+ * Implements hook_help().
+ */
+function thessley_passkey_help($route_name, RouteMatchInterface $route_match) {
+  if ($route_name === 'help.page.thessley_passkey') {
+    return '<p>' . t('Adds sign-in with the Thessley Passkey Android app to the login page. Choose the method under <a href=":url">Configuration → People → Thessley Passkey Login</a>; each person adds a phone from the "Passkey devices" tab of their account.', [':url' => Url::fromRoute('thessley_passkey.settings')->toString()]) . '</p>';
+  }
+}
+
+/**
+ * Implements hook_theme().
+ */
+function thessley_passkey_theme() {
+  return [
+    'thessley_passkey_login_box' => [
+      'variables' => ['identify' => FALSE, 'optional' => TRUE],
+      'template' => 'thessley-passkey-login-box',
+    ],
+    'thessley_passkey_confirm' => [
+      'variables' => ['app_link' => ''],
+      'template' => 'thessley-passkey-confirm',
+    ],
+    'thessley_passkey_devices' => [
+      'variables' => ['can_enroll' => FALSE, 'hint' => ''],
+      'template' => 'thessley-passkey-devices',
+    ],
+  ];
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for the user login form.
+ */
+function thessley_passkey_form_user_login_form_alter(array &$form, FormStateInterface $form_state) {
+  \Drupal\thessley_passkey\LoginFormAlter::alter($form, $form_state);
+}
+
+/**
+ * Implements hook_mail().
+ */
+function thessley_passkey_mail($key, &$message, $params) {
+  if ($key === 'device_enrolled') {
+    $account = $params['account'];
+    $message['subject'] = t('[@site] New passkey device added to your account', ['@site' => \Drupal::config('system.site')->get('name')]);
+    $message['body'][] = t('A new device ("@label") was just added to your account (@name) on @origin, from IP @ip.', [
+      '@label' => $params['label'],
+      '@name' => $account->getAccountName(),
+      '@origin' => $params['origin'],
+      '@ip' => $params['ip'],
+    ]);
+    $message['body'][] = t('If this was you, no action is needed.');
+    $message['body'][] = t('If this was not you, log in and remove it immediately from your account\'s "Passkey devices" tab, then change your password.');
+  }
+}
+
+/**
+ * Implements hook_user_delete().
+ */
+function thessley_passkey_user_delete(UserInterface $account) {
+  \Drupal::service('thessley_passkey.store')->deleteForUser((int) $account->id());
+}
+
+/**
+ * Implements hook_cron().
+ */
+function thessley_passkey_cron() {
+  \Drupal::service('thessley_passkey.store')->pruneExpiredRequests();
+}

@@ -1,0 +1,5 @@
+thessley_passkey.user_devices:
+  title: 'Passkey devices'
+  route_name: thessley_passkey.user_devices
+  base_route: entity.user.canonical
+  weight: 30

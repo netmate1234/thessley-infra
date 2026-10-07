@@ -1,0 +1,13 @@
+# optional: password form and QR shown together.
+# 2fa:      password first, then the app confirms it.
+# required: the app only; the password form is not offered and password
+#           logins are refused for accounts that have a device enrolled.
+mode: optional
+# Ask for the username in a first step before showing the QR. Used by
+# 'optional' and 'required'; ignored by '2fa'.
+identify: false
+# The site's own public URL as signed into every approval and shown to the
+# app (no trailing slash). Empty = taken from the request (needs
+# trusted_host_patterns to be set in settings.php so the Host header can't be
+# forged). Set it if the site sits behind a proxy that hides the real scheme.
+origin: ''

@@ -1,0 +1,15 @@
+{#
+/**
+ * @file
+ * The "confirm with the app" step after a correct password.
+ *
+ * Available variables:
+ * - app_link: thessleypasskey:// link for the QR and the same-device button.
+ */
+#}
+<div class="thessley-pk-confirm">
+  <p>{{ 'Your password was correct. Confirm with the app to finish logging in.'|t }}</p>
+  <div id="thessley-pk-confirm-qr" class="thessley-pk-qr"></div>
+  <p><a id="thessley-pk-confirm-open" class="button button--primary thessley-pk-open" href="{{ app_link }}">{{ 'Open on this device'|t }}</a></p>
+  <p id="thessley-pk-confirm-status" role="status"></p>
+</div>
