@@ -37,20 +37,29 @@
       function render(devices) {
         wrap.textContent = '';
         if (!devices.length) { wrap.appendChild(el('p', 'thessley-pk-desc', Drupal.t('No devices enrolled yet.'))); return; }
+        // One table on wide screens; the stylesheet turns each row into a card
+        // on narrow ones, using each cell's data-label as its caption.
         var table = el('table', 'thessley-pk-table');
         var head = el('tr');
         [Drupal.t('Label'), Drupal.t('Added'), Drupal.t('Last used'), Drupal.t('Status'), Drupal.t('Security'), ''].forEach(function (h) { head.appendChild(el('th', null, h)); });
         table.appendChild(el('thead')).appendChild(head);
         var body = el('tbody');
+        function cell(label, content) {
+          var td = el('td');
+          td.setAttribute('data-label', label);
+          if (typeof content === 'string') { td.textContent = content; } else if (content) { td.appendChild(content); }
+          return td;
+        }
         devices.forEach(function (d) {
-          var tr = el('tr');
-          tr.appendChild(el('td', null, d.label || Drupal.t('Unnamed device')));
-          tr.appendChild(el('td', null, when(d.created, false)));
-          tr.appendChild(el('td', null, when(d.last_used, true)));
-          var st = el('td'); st.appendChild(el('span', 'thessley-pk-badge thessley-pk-' + (d.revoked ? 'bad' : 'good'), d.revoked ? Drupal.t('Revoked') : Drupal.t('Active'))); tr.appendChild(st);
+          var tr = el('tr', d.revoked ? 'thessley-pk-revoked' : '');
+          tr.appendChild(cell(Drupal.t('Label'), d.label || Drupal.t('Unnamed device')));
+          tr.appendChild(cell(Drupal.t('Added'), when(d.created, false)));
+          tr.appendChild(cell(Drupal.t('Last used'), when(d.last_used, true)));
+          tr.appendChild(cell(Drupal.t('Status'), el('span', 'thessley-pk-badge thessley-pk-' + (d.revoked ? 'bad' : 'good'), d.revoked ? Drupal.t('Revoked') : Drupal.t('Active'))));
           var sec = SECURITY[d.security] || SECURITY.unverified;
-          var sc = el('td'); sc.appendChild(el('span', 'thessley-pk-badge thessley-pk-' + sec[0], sec[1])); tr.appendChild(sc);
-          var act = el('td');
+          tr.appendChild(cell(Drupal.t('Security'), el('span', 'thessley-pk-badge thessley-pk-' + sec[0], sec[1])));
+          var act = cell('', null);
+          act.className = 'thessley-pk-actions';
           if (!d.revoked) {
             var b = el('button', 'button button--small', Drupal.t('Revoke'));
             b.type = 'button';

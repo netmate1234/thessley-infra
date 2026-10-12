@@ -17,3 +17,21 @@ form.user-login-form.thessley-pk-hidden { display: none; }
 .thessley-pk-warn { background: #fdf0d5; color: #7a4b00; }
 .thessley-pk-bad { background: #fbe3e3; color: #8a1f1f; }
 .thessley-pk-quiet { background: #eee; color: #555; }
+
+/* Narrow screens: each device becomes a card (label on the left, value on the right). */
+@media (max-width: 640px) {
+  .thessley-pk-table, .thessley-pk-table tbody, .thessley-pk-table tr, .thessley-pk-table td { display: block; width: 100%; box-sizing: border-box; }
+  .thessley-pk-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .thessley-pk-table tr { margin: 0 0 12px; padding: 4px 14px; border: 1px solid #dcdcde; border-radius: 8px; background: #fff; }
+  .thessley-pk-table tr.thessley-pk-revoked { opacity: .65; }
+  .thessley-pk-table td { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid #eee; text-align: right; word-break: break-word; }
+  .thessley-pk-table td::before { content: attr(data-label); flex: 0 0 auto; font-weight: 600; text-align: left; color: #555; }
+  .thessley-pk-table td:first-child { display: block; padding-top: 12px; font-size: 1.1em; font-weight: 600; text-align: left; }
+  .thessley-pk-table td:first-child::before { content: none; }
+  .thessley-pk-table td:last-child { border-bottom: 0; }
+  .thessley-pk-table td.thessley-pk-actions::before { content: none; }
+  .thessley-pk-table td.thessley-pk-actions { padding-top: 12px; }
+  .thessley-pk-table td.thessley-pk-actions .button { width: 100%; margin: 0; box-sizing: border-box; }
+  .thessley-pk-table td.thessley-pk-actions:empty { display: none; }
+  .thessley-pk-table tr.thessley-pk-revoked td:nth-last-child(2) { border-bottom: 0; }
+}
