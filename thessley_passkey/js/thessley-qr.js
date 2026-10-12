@@ -40,13 +40,24 @@
 			var dim     = modules * px;
 
 			// cellSize 1 + scalable: the viewBox is exactly the module grid, so
-			// width/height = modules * px puts every module on whole pixels.
+			// the code scales cleanly to any width (crispEdges keeps the squares sharp).
+			// The padded white holder spans the available width; the code inside
+			// scales to it (see below).
+			el.style.display = 'block';
+			el.style.width = '100%';
+			el.style.boxSizing = 'border-box';
 			el.innerHTML = qr.createSvgTag( { cellSize: 1, margin: 0, scalable: true } );
 
 			var svg = el.querySelector( 'svg' );
 			if ( svg ) {
 				svg.setAttribute( 'width', dim );
 				svg.setAttribute( 'height', dim );
+				// The code fills the width of its holder (100%) and stays square
+				// through the viewBox, so it can never run past a narrow screen.
+				// The width/height attributes above are only the fallback size.
+				svg.style.width = '100%';
+				svg.style.height = 'auto';
+				svg.style.display = 'block';
 				svg.setAttribute( 'shape-rendering', 'crispEdges' );
 				svg.setAttribute( 'role', 'img' );
 				svg.setAttribute( 'aria-label', 'QR code' );

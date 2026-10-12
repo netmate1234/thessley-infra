@@ -1,7 +1,7 @@
 .thessley-pk-box { max-width: 320px; margin: 12px auto; padding: 12px; box-sizing: border-box; border: 1px solid #dcdcde; border-radius: 4px; text-align: center; }
-.thessley-pk-qr { display: inline-block; line-height: 0; background: #fff; padding: 12px; border-radius: 4px; }
+.thessley-pk-qr { display: block; width: 100%; box-sizing: border-box; line-height: 0; background: #fff; padding: 12px; border-radius: 4px; }
 .thessley-pk-box .thessley-pk-qr { margin: 4px 0; }
-.thessley-pk-confirm { max-width: 360px; margin: 24px auto; text-align: center; }
+.thessley-pk-confirm { box-sizing: border-box; max-width: 360px; margin: 24px auto; text-align: center; }
 .thessley-pk-desc { margin: 0 0 8px; }
 .thessley-pk-open { display: block; box-sizing: border-box; width: 100%; text-align: center; }
 .thessley-pk-id input[type=text] { width: 100%; box-sizing: border-box; margin: 0 0 8px; min-height: 40px; font-size: 16px; }
