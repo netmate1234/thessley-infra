@@ -4,6 +4,7 @@
 
   // [tone, label, icon] — same icons as the WordPress plugin's device list.
   var SECURITY = {
+    tpm: ['good', Drupal.t('TPM 2.0 hardware'), 'chip'],
     strongbox: ['good', Drupal.t('StrongBox hardware'), 'shield-check'],
     tee: ['good', Drupal.t('TEE hardware'), 'lock'],
     software: ['warn', Drupal.t('Software only'), 'shield-alert'],
@@ -19,6 +20,7 @@
     'lock': [['rect', { x: 3.5, y: 7, width: 9, height: 6.5, rx: 1.2 }], ['path', { d: 'M5.5 7V5.2a2.5 2.5 0 015 0V7' }]],
     'shield-check': [['path', { d: 'M8 1.8l5 1.8v4c0 3-2.1 5-5 6.4C5.1 12.6 3 10.6 3 7.6v-4z' }], ['path', { d: 'M5.8 8l1.6 1.6L10.4 6.4' }]],
     'shield-alert': [['path', { d: 'M8 1.8l5 1.8v4c0 3-2.1 5-5 6.4C5.1 12.6 3 10.6 3 7.6v-4z' }], ['path', { d: 'M8 5.6v3M8 10.4v.2' }]],
+    'chip': [['rect', { x: 4, y: 4, width: 8, height: 8, rx: 1 }], ['path', { d: 'M6.5 1.8v2.2M9.5 1.8v2.2M6.5 12v2.2M9.5 12v2.2M1.8 6.5H4M1.8 9.5H4M12 6.5h2.2M12 9.5h2.2' }]],
     'help': [['circle', { cx: 8, cy: 8, r: 6.5 }], ['path', { d: 'M6.2 6.3a1.9 1.9 0 013.6.7c0 1.2-1.8 1.4-1.8 2.5M8 11.4v.2' }]]
   };
   function icon(name) {

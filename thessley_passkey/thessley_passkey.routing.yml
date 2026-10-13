@@ -68,6 +68,18 @@ thessley_passkey.enroll_respond:
   options:
     no_cache: TRUE
 
+# Optional: a device whose key lives in a TPM proves the chip is genuine before it enrols.
+thessley_passkey.enroll_tpm_challenge:
+  path: '/thessley/v1/passkey/enroll/{id}/tpm-challenge'
+  defaults:
+    _controller: '\Drupal\thessley_passkey\Controller\ApiController::enrollTpmChallenge'
+  methods: [POST]
+  requirements:
+    _access: 'TRUE'
+    id: '[A-Za-z0-9_-]{1,64}'
+  options:
+    no_cache: TRUE
+
 thessley_passkey.devices:
   path: '/thessley/v1/passkey/devices'
   defaults:

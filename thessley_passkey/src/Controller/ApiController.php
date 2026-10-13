@@ -244,6 +244,32 @@ class ApiController extends ControllerBase {
     return $this->json($response);
   }
 
+  /**
+   * Optional first step for a device whose key lives in a TPM: prove the chip is genuine.
+   * Open like enroll/respond (the pending enrolment request is the capability), rate limited.
+   */
+  public function enrollTpmChallenge(Request $request, string $id): JsonResponse {
+    $m = $this->manager;
+    if ($m->rateLimited('enroll_tpm')) {
+      return $this->error('thessley_rate_limited', 'Too many requests.', 429);
+    }
+    $row = $m->store()->getRequest($id);
+    if (!$row || $row->type !== 'enroll' || $row->status !== 'pending' || $this->expired($row)) {
+      return $this->error('thessley_expired', 'This request is no longer valid.', 409);
+    }
+    $certs = $this->param($request, 'ek_certs');
+    $ak = $this->param($request, 'ak_public');
+    if (!is_array($certs) || !is_string($ak) || strlen($ak) > 1024) {
+      return $this->error('thessley_bad_request', 'Missing TPM details.', 400);
+    }
+    $out = $m->tpmChallenge($id, $certs, $ak);
+    if (is_string($out)) {
+      $m->audit('tpm_challenge_refused', $out, TRUE);
+      return $this->error('thessley_tpm_unverified', 'The TPM could not be verified: ' . $out . '.', 400);
+    }
+    return $this->json($out);
+  }
+
   public function enrollRespond(Request $request, string $id): JsonResponse {
     $m = $this->manager;
     $store = $m->store();
@@ -296,12 +322,29 @@ class ApiController extends ControllerBase {
 
     $m->audit('enroll_approved', 'user #' . $uid . ' added device "' . $label . '"');
     $m->notifyDeviceEnrolled($uid, $label);
-    $m->recordAttestation($row_id, $chain, $row->nonce, $public_key);
+    $level = '';
+    $tpm = $this->param($request, 'tpm');
+    if (is_array($tpm)) {
+      $result = $m->verifyTpm($id, $row->nonce, $public_key, $tpm);
+      if ($result['ok']) {
+        $store->setAttestationLevel($row_id, 'tpm');
+        $m->audit('attestation_verified', 'device #' . $row_id . ': tpm (' . trim($result['maker'] . ' ' . $result['model']) . ')');
+        $level = 'tpm';
+      }
+      else {
+        $store->setAttestationLevel($row_id, NULL);
+        $m->audit('attestation_unverified', 'device #' . $row_id . ': tpm: ' . $result['reason'], TRUE);
+      }
+    }
+    else {
+      $m->recordAttestation($row_id, $chain, $row->nonce, $public_key);
+    }
 
     return $this->json([
       'result' => 'ok',
       'credential_id' => $credential_id,
       'username' => $account->getAccountName(),
+      'attestation' => $level,
     ]);
   }
 

@@ -199,6 +199,103 @@ class PasskeyManager {
     $this->audit('attestation_verified', 'device #' . $row_id . ': ' . $result['security_level_name']);
   }
 
+  // ---- TPM hardware attestation ---------------------------------------------------------
+
+  const TPM_CHALLENGE_TTL = 300;
+
+  /** PEM bundle of the TPM manufacturer roots we trust: every tpm-roots/*.pem shipped with the module. */
+  public function tpmRootsFile(): string {
+    $dir = DRUPAL_ROOT . '/' . \Drupal::service('extension.list.module')->getPath('thessley_passkey') . '/tpm-roots';
+    $bundle = '';
+    foreach (glob($dir . '/*.pem') ?: [] as $file) {
+      $bundle .= file_get_contents($file) . "\n";
+    }
+    $path = sys_get_temp_dir() . '/thessley_tpm_roots_' . sha1($bundle) . '.pem';
+    if (!is_file($path)) {
+      file_put_contents($path, $bundle);
+    }
+    return $path;
+  }
+
+  /**
+   * Step 1 of a TPM-backed enrolment: check the chip's certificate chain and issue the activation challenge.
+   *
+   * @return array{credential_blob:string,secret:string}|string
+   *   The challenge to send back (base64), or a short reason it was refused.
+   */
+  public function tpmChallenge(string $request_id, array $ek_certs_b64, string $ak_public_b64) {
+    $certs = [];
+    foreach ($ek_certs_b64 as $c) {
+      $der = is_string($c) ? base64_decode($c, TRUE) : FALSE;
+      if ($der === FALSE) {
+        return 'bad certificate';
+      }
+      $certs[] = $der;
+    }
+    $ak = base64_decode($ak_public_b64, TRUE);
+    if ($ak === FALSE || $ak === '') {
+      return 'bad attestation key';
+    }
+    $ek = Tpm::verifyEkChain($certs, $this->tpmRootsFile());
+    if ($ek === NULL) {
+      return 'the TPM certificate chain is not one we trust';
+    }
+    try {
+      $akInfo = Tpm::parsePublic($ak);
+      $need = Tpm::ATTR_FIXEDTPM | Tpm::ATTR_FIXEDPARENT | Tpm::ATTR_RESTRICTED | Tpm::ATTR_SIGN;
+      if (($akInfo['attributes'] & $need) !== $need) {
+        return 'attestation key is not a restricted signing key';
+      }
+      $secret = random_bytes(32);
+      $cred = Tpm::makeCredential($ek['x'], $ek['y'], Tpm::name($ak), $secret);
+    }
+    catch (\Throwable $e) {
+      return 'could not build the challenge';
+    }
+    $this->keyValue->get('thessley_passkey_tpm')->setWithExpire($request_id, [
+      'ak' => hash('sha256', $ak),
+      'secret' => hash('sha256', $secret),
+      'maker' => $ek['manufacturer'],
+      'model' => $ek['model'],
+    ], self::TPM_CHALLENGE_TTL);
+    return ['credential_blob' => base64_encode($cred['credential_blob']), 'secret' => base64_encode($cred['secret'])];
+  }
+
+  /**
+   * Step 2: check the device's proof that its signing key lives in that TPM.
+   *
+   * @return array{ok:bool,reason?:string,maker?:string,model?:string}
+   */
+  public function verifyTpm(string $request_id, string $nonce, string $public_key_b64, array $t): array {
+    $store = $this->keyValue->get('thessley_passkey_tpm');
+    $state = $store->get($request_id);
+    $store->delete($request_id);  // one challenge, one attempt
+    if (!is_array($state)) {
+      return ['ok' => FALSE, 'reason' => 'no challenge was issued'];
+    }
+    $f = static fn($k) => isset($t[$k]) && is_string($t[$k]) ? base64_decode($t[$k], TRUE) : FALSE;
+    $ak = $f('ak_public');
+    $activated = $f('activated_secret');
+    $attest = $f('certify_info');
+    $sig = $f('certify_signature');
+    $keyPublic = $f('key_public');
+    $spki = base64_decode($public_key_b64, TRUE);
+    if (in_array(FALSE, [$ak, $activated, $attest, $sig, $keyPublic, $spki], TRUE)) {
+      return ['ok' => FALSE, 'reason' => 'incomplete proof'];
+    }
+    if (!hash_equals($state['ak'], hash('sha256', $ak))) {
+      return ['ok' => FALSE, 'reason' => 'a different attestation key than the one challenged'];
+    }
+    if (!hash_equals($state['secret'], hash('sha256', $activated))) {
+      return ['ok' => FALSE, 'reason' => 'activation secret does not match (the key and the TPM certificate are not in the same chip)'];
+    }
+    $reason = Tpm::verifyCertification($ak, $attest, $sig, $keyPublic, $nonce, $spki);
+    if ($reason !== NULL) {
+      return ['ok' => FALSE, 'reason' => $reason];
+    }
+    return ['ok' => TRUE, 'maker' => $state['maker'], 'model' => $state['model']];
+  }
+
   /** Event line in the Drupal log (admin/reports/dblog), type thessley_passkey. */
   public function audit(string $event, string $detail = '', bool $warning = FALSE): void {
     $message = '@event @detail (ip @ip)';
