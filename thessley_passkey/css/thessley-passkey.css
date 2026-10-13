@@ -3,7 +3,8 @@
 .thessley-pk-box .thessley-pk-qr { margin: 4px 0; }
 .thessley-pk-confirm { box-sizing: border-box; max-width: 360px; margin: 24px auto; text-align: center; }
 .thessley-pk-desc { margin: 0 0 8px; }
-.thessley-pk-open { display: block; box-sizing: border-box; width: 100%; text-align: center; }
+/* Olivero buttons are flex containers, so a full-width one needs the label centred explicitly. */
+.thessley-pk-open { display: flex; justify-content: center; align-items: center; box-sizing: border-box; width: 100%; text-align: center; }
 .thessley-pk-id input[type=text] { width: 100%; box-sizing: border-box; margin: 0 0 8px; min-height: 40px; font-size: 16px; }
 .thessley-pk-id button { width: 100%; }
 /* Username-first login: the password form waits for step 1. Only with JS (the class is added by a script), so a browser without JS keeps the normal form. */
@@ -31,7 +32,7 @@ form.user-login-form.thessley-pk-hidden { display: none; }
   .thessley-pk-table td:last-child { border-bottom: 0; }
   .thessley-pk-table td.thessley-pk-actions::before { content: none; }
   .thessley-pk-table td.thessley-pk-actions { padding-top: 12px; }
-  .thessley-pk-table td.thessley-pk-actions .button { width: 100%; margin: 0; box-sizing: border-box; }
+  .thessley-pk-table td.thessley-pk-actions .button { display: flex; justify-content: center; align-items: center; width: 100%; margin: 0; box-sizing: border-box; text-align: center; }
   .thessley-pk-table td.thessley-pk-actions:empty { display: none; }
   .thessley-pk-table tr.thessley-pk-revoked td:nth-last-child(2) { border-bottom: 0; }
 }
