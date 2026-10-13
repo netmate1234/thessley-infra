@@ -29,7 +29,7 @@ class PageController extends ControllerBase {
     $row = $m->store()->getRequest($id);
 
     if (!$row || $row->type !== $type || $m->store()->isExpired($row) || !in_array($row->status, ['pending', 'approved'], TRUE)) {
-      throw new GoneHttpException('This login/enrollment request has expired. Go back and try again.');
+      throw new GoneHttpException('This Thessley Passkey login/enrollment request has expired. Go back and try again.');
     }
 
     if ($type !== '2fa') {
@@ -74,8 +74,8 @@ class PageController extends ControllerBase {
       '#theme' => 'thessley_passkey_devices',
       '#can_enroll' => $own && $me->hasPermission('use thessley passkey'),
       '#hint' => [
-        'optional' => $this->t('Add a new device to sign in without a password.'),
-        '2fa' => $this->t('Add a new device to confirm logins with, after your password.'),
+        'optional' => $this->t('Add a new device to sign in with the Thessley Passkey app, without a password.'),
+        '2fa' => $this->t('Add a new device to confirm logins with the Thessley Passkey app, after your password.'),
         'required' => $this->t('Add a new device — the Thessley Passkey app is the only way to sign in.'),
       ][$this->manager->mode()],
       '#attached' => [

@@ -109,7 +109,7 @@ thessley_passkey.user_devices:
   path: '/user/{user}/passkey'
   defaults:
     _controller: '\Drupal\thessley_passkey\Controller\PageController::userDevices'
-    _title: 'Passkey devices'
+    _title: 'Thessley Passkey devices'
   requirements:
     _custom_access: '\Drupal\thessley_passkey\Controller\PageController::userDevicesAccess'
     user: '\d+'

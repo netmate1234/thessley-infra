@@ -23,7 +23,7 @@ Then:
    default; `administer thessley passkey` is for administrators.
 2. Open **Configuration → People → Thessley Passkey Login**
    (`/admin/config/people/thessley-passkey`) and pick a method.
-3. Each person adds a phone from the **Passkey devices** tab of their account
+3. Each person adds a phone from the **Thessley Passkey devices** tab of their account
    (`/user/{uid}/passkey`).
 4. Behind a proxy / with `$base_url` set, put the public address in the
    *Public site URL* field (or leave it empty if `trusted_host_patterns` is set

@@ -17,7 +17,7 @@ use Drupal\user\UserInterface;
  */
 function thessley_passkey_help($route_name, RouteMatchInterface $route_match) {
   if ($route_name === 'help.page.thessley_passkey') {
-    return '<p>' . t('Adds sign-in with the Thessley Passkey Android app to the login page. Choose the method under <a href=":url">Configuration → People → Thessley Passkey Login</a>; each person adds a phone from the "Passkey devices" tab of their account.', [':url' => Url::fromRoute('thessley_passkey.settings')->toString()]) . '</p>';
+    return '<p>' . t('Adds sign-in with the Thessley Passkey Android app to the login page. Choose the method under <a href=":url">Configuration → People → Thessley Passkey Login</a>; each person adds a phone from the "Thessley Passkey devices" tab of their account.', [':url' => Url::fromRoute('thessley_passkey.settings')->toString()]) . '</p>';
   }
 }
 
@@ -62,7 +62,7 @@ function thessley_passkey_mail($key, &$message, $params) {
       '@ip' => $params['ip'],
     ]);
     $message['body'][] = t('If this was you, no action is needed.');
-    $message['body'][] = t('If this was not you, log in and remove it immediately from your account\'s "Passkey devices" tab, then change your password.');
+    $message['body'][] = t('If this was not you, log in and remove it immediately from your account\'s "Thessley Passkey devices" tab, then change your password.');
   }
 }
 

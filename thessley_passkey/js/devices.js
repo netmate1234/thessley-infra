@@ -106,7 +106,7 @@
             return;
           }
           start.style.display = 'none';
-          hint.textContent = Drupal.t("Scan this with the device you're enrolling, or tap the link below on that same device.");
+          hint.textContent = Drupal.t("Scan this with the Thessley Passkey app on the device you're enrolling, or tap the link below on that same device.");
           qrBox.style.display = 'inline-block';
           qrBox.textContent = '';
           ThessleyQR.render(qrBox, data.app_link, 236);
