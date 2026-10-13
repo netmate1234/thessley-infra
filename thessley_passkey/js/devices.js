@@ -2,12 +2,50 @@
 (function (Drupal, drupalSettings) {
   'use strict';
 
+  // [tone, label, icon] — same icons as the WordPress plugin's device list.
   var SECURITY = {
-    strongbox: ['good', Drupal.t('StrongBox hardware')],
-    tee: ['good', Drupal.t('TEE hardware')],
-    software: ['warn', Drupal.t('Software only')],
-    unverified: ['quiet', Drupal.t('Unverified')]
+    strongbox: ['good', Drupal.t('StrongBox hardware'), 'shield-check'],
+    tee: ['good', Drupal.t('TEE hardware'), 'lock'],
+    software: ['warn', Drupal.t('Software only'), 'shield-alert'],
+    unverified: ['quiet', Drupal.t('Unverified'), 'help']
   };
+
+  // Small outline icons drawn with SVG DOM calls (no innerHTML, no icon font),
+  // inheriting the badge's colour.
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var ICONS = {
+    'check-circle': [['circle', { cx: 8, cy: 8, r: 6.5 }], ['path', { d: 'M5 8.3l2.2 2.2L11 6' }]],
+    'x-circle': [['circle', { cx: 8, cy: 8, r: 6.5 }], ['path', { d: 'M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4' }]],
+    'lock': [['rect', { x: 3.5, y: 7, width: 9, height: 6.5, rx: 1.2 }], ['path', { d: 'M5.5 7V5.2a2.5 2.5 0 015 0V7' }]],
+    'shield-check': [['path', { d: 'M8 1.8l5 1.8v4c0 3-2.1 5-5 6.4C5.1 12.6 3 10.6 3 7.6v-4z' }], ['path', { d: 'M5.8 8l1.6 1.6L10.4 6.4' }]],
+    'shield-alert': [['path', { d: 'M8 1.8l5 1.8v4c0 3-2.1 5-5 6.4C5.1 12.6 3 10.6 3 7.6v-4z' }], ['path', { d: 'M8 5.6v3M8 10.4v.2' }]],
+    'help': [['circle', { cx: 8, cy: 8, r: 6.5 }], ['path', { d: 'M6.2 6.3a1.9 1.9 0 013.6.7c0 1.2-1.8 1.4-1.8 2.5M8 11.4v.2' }]]
+  };
+  function icon(name) {
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.6');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    (ICONS[name] || []).forEach(function (part) {
+      var n = document.createElementNS(SVG_NS, part[0]);
+      Object.keys(part[1]).forEach(function (k) { n.setAttribute(k, part[1][k]); });
+      svg.appendChild(n);
+    });
+    return svg;
+  }
+  function badge(tone, label, iconName) {
+    var b = document.createElement('span');
+    b.className = 'thessley-pk-badge thessley-pk-' + tone;
+    b.appendChild(icon(iconName));
+    b.appendChild(document.createTextNode(label));
+    return b;
+  }
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -55,9 +93,9 @@
           tr.appendChild(cell(Drupal.t('Label'), d.label || Drupal.t('Unnamed device')));
           tr.appendChild(cell(Drupal.t('Added'), when(d.created, false)));
           tr.appendChild(cell(Drupal.t('Last used'), when(d.last_used, true)));
-          tr.appendChild(cell(Drupal.t('Status'), el('span', 'thessley-pk-badge thessley-pk-' + (d.revoked ? 'bad' : 'good'), d.revoked ? Drupal.t('Revoked') : Drupal.t('Active'))));
+          tr.appendChild(cell(Drupal.t('Status'), d.revoked ? badge('bad', Drupal.t('Revoked'), 'x-circle') : badge('good', Drupal.t('Active'), 'check-circle')));
           var sec = SECURITY[d.security] || SECURITY.unverified;
-          tr.appendChild(cell(Drupal.t('Security'), el('span', 'thessley-pk-badge thessley-pk-' + sec[0], sec[1])));
+          tr.appendChild(cell(Drupal.t('Security'), badge(sec[0], sec[1], sec[2])));
           var act = cell('', null);
           act.className = 'thessley-pk-actions';
           if (!d.revoked) {

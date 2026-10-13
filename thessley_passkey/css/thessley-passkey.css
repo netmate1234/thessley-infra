@@ -13,7 +13,8 @@ html.thessley-pk-step1 form.user-login-form { display: none; }
 form.user-login-form.thessley-pk-hidden { display: none; }
 .thessley-pk-table { border-collapse: collapse; max-width: 680px; width: 100%; }
 .thessley-pk-table th, .thessley-pk-table td { padding: 6px 8px; border-bottom: 1px solid #dcdcde; text-align: left; }
-.thessley-pk-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: .85em; background: #eee; }
+.thessley-pk-badge { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px 1px 7px; border-radius: 10px; font-size: .85em; line-height: 1.6; background: #eee; white-space: nowrap; }
+.thessley-pk-badge svg { flex: 0 0 auto; }
 .thessley-pk-good { background: #e3f4e5; color: #17612a; }
 .thessley-pk-warn { background: #fdf0d5; color: #7a4b00; }
 .thessley-pk-bad { background: #fbe3e3; color: #8a1f1f; }
