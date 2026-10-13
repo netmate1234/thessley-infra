@@ -17,7 +17,7 @@ class JsonLoginAccessCheck implements AccessInterface {
     $config = $this->configFactory->get('thessley_passkey.settings');
     $mode = $config->get('mode');
     return $mode === '2fa' || $mode === 'required'
-      ? AccessResult::forbidden('Password-only JSON login is disabled while Passkey Login requires the app.')->addCacheableDependency($config)
+      ? AccessResult::forbidden('Password-only JSON login is disabled while Passkey Login requires the Thessley Passkey app.')->addCacheableDependency($config)
       : AccessResult::allowed()->addCacheableDependency($config);
   }
 

@@ -86,7 +86,7 @@
         fetch(cfg.start, opts).then(function (r) { return r.json(); }).then(function (data) {
           if (my !== gen) { return; }
           if (!data || !data.app_link) {
-            var why = data && data.message ? data.message : Drupal.t('Could not start the app login. Try again.');
+            var why = data && data.message ? data.message : Drupal.t('Could not start the Thessley Passkey app login. Try again.');
             if (cfg.identify) { stepOne(); }
             say(why);
             return;

@@ -192,7 +192,7 @@ class ApiController extends ControllerBase {
     // stops clicking; this stops anyone calling the endpoint directly.
     if ($row->type === 'login' && $action === 'approve' && $m->effectiveModeForUser((int) $passkey->uid) === '2fa') {
       $m->audit('anonymous_login_blocked', 'credential ' . $cred_id . ' - account requires password first', TRUE);
-      return $this->error('thessley_2fa_required', 'This account requires your password first — log in with it, then confirm with the app.', 403);
+      return $this->error('thessley_2fa_required', 'This account requires your password first — log in with it, then confirm with the Thessley Passkey app.', 403);
     }
 
     $message = Crypto::canonical_string($row->type, $id, $m->origin(), $row->nonce, $timestamp, $action);

@@ -1,8 +1,8 @@
 administer thessley passkey:
   title: 'Administer Thessley Passkey Login'
-  description: 'Change the login method (password or app, password then app, app only) and the username prompt.'
+  description: 'Change the login method (password or the Thessley Passkey app, password then the app, app only) and the username prompt.'
   restrict access: true
 
 use thessley passkey:
   title: 'Use Passkey Login'
-  description: 'Enroll a phone and sign in with it. Not granted to anyone by default; give it to the roles that should be able to use the app.'
+  description: 'Enroll a phone and sign in with it. Not granted to anyone by default; give it to the roles that should be able to use the Thessley Passkey app.'

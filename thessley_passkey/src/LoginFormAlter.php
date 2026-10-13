@@ -97,7 +97,7 @@ class LoginFormAlter {
     $m = \Drupal::service('thessley_passkey.manager');
     $uid = (int) $form_state->get('thessley_passkey_2fa_uid');
     $result = $m->store()->createRequest('2fa', $uid, PasskeyManager::LOGIN_TTL, $m->clientIp());
-    $m->audit('password_step_ok', 'user #' . $uid . ' - awaiting app confirmation');
+    $m->audit('password_step_ok', 'user #' . $uid . ' - awaiting Thessley Passkey app confirmation');
 
     $response = new RedirectResponse(Url::fromRoute('thessley_passkey.auth_page', ['type' => '2fa', 'id' => $result['request_id']])->toString());
     $response->headers->setCookie($m->bindBrowser($result['request_id']));

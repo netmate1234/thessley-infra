@@ -76,7 +76,7 @@ class PageController extends ControllerBase {
       '#hint' => [
         'optional' => $this->t('Add a new device to sign in without a password.'),
         '2fa' => $this->t('Add a new device to confirm logins with, after your password.'),
-        'required' => $this->t('Add a new device — the app is the only way to sign in.'),
+        'required' => $this->t('Add a new device — the Thessley Passkey app is the only way to sign in.'),
       ][$this->manager->mode()],
       '#attached' => [
         'library' => ['thessley_passkey/devices'],
