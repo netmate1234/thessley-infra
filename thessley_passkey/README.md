@@ -71,6 +71,24 @@ they are: the emailed one-time password-reset link, `drush uli`, and any
 contributed authentication provider (basic_auth, OAuth, SSO…). Disable those
 if "app only" must mean app only.
 
+## TPM hardware attestation (optional)
+
+A device whose signing key lives in a **TPM 2.0 chip** (the Thessley Passkey desktop app for Linux) can
+prove it, and the device list then shows **TPM 2.0 hardware** instead of "Unverified". The site checks
+three things, with OpenSSL only (`src/Tpm.php`):
+
+1. The chip's endorsement-key certificate chains to a manufacturer root listed in `tpm-roots/*.pem`
+   (Intel's On-Die CA root ships with the module; add a maker's root there to trust that maker's chips).
+2. Credential activation: the site encrypts a random secret to that endorsement key, bound to a fresh
+   attestation key; only the chip holding both can return it.
+3. That attestation key certifies the signing key, bound to the enrolment nonce, and the certified
+   attributes say the key is generated inside the chip and cannot leave it.
+
+Endpoint: `POST /thessley/v1/passkey/enroll/{id}/tpm-challenge`; the proof then travels in an optional
+`tpm` object of `enroll/{id}/respond`. A failed proof never rejects enrolment. Not checked: revocation lists
+and firmware security; only ECC P-256 endorsement keys are supported. Sandbox-only tests:
+`tests/tpm_interop.py` in the desktop app's repository.
+
 ## Wire format
 
 Same as the WordPress plugin. The app calls
@@ -84,6 +102,7 @@ which also work directly.
 | `GET login/{id}/status`, `POST login/{id}/respond` | browser / app |
 | `POST enroll/start`, `GET enroll/{id}/status` | logged in, CSRF token header |
 | `POST enroll/{id}/respond` | open: proof of possession of the new key is the auth |
+| `POST enroll/{id}/tpm-challenge` | open, rate limited (optional TPM proof, see below) |
 | `GET devices`, `POST devices/{id}/revoke` | owner (or administrator) |
 
 Signed string: `thessley_passkey_v1|type|request_id|origin|nonce|timestamp|action`

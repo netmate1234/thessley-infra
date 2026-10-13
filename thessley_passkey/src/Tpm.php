@@ -144,14 +144,15 @@ class Tpm {
    *
    * @param string[] $derCerts
    *   Leaf (the EK certificate) first, then any intermediates, as DER.
-   * @param string $rootsPemFile
-   *   Path to a PEM bundle of trusted TPM manufacturer roots.
+   * @param string[]|string $rootFiles
+   *   Path(s) of PEM files holding the trusted TPM manufacturer roots.
    *
    * @return array{x:string,y:string,manufacturer:string,model:string}|null
    *   The EK's P-256 point and the maker named in the certificate; NULL if it does not verify.
    */
-  public static function verifyEkChain(array $derCerts, string $rootsPemFile): ?array {
-    if (!$derCerts || count($derCerts) > 8 || !is_file($rootsPemFile)) {
+  public static function verifyEkChain(array $derCerts, $rootFiles): ?array {
+    $rootFiles = array_values(array_filter((array) $rootFiles, 'is_file'));
+    if (!$derCerts || count($derCerts) > 8 || !$rootFiles) {
       return NULL;
     }
     $pems = [];
@@ -168,8 +169,8 @@ class Tpm {
         file_put_contents($untrusted, implode('', array_slice($pems, 1)));
       }
       $ok = $untrusted === NULL
-        ? @openssl_x509_checkpurpose($pems[0], X509_PURPOSE_ANY, [$rootsPemFile])
-        : @openssl_x509_checkpurpose($pems[0], X509_PURPOSE_ANY, [$rootsPemFile], $untrusted);
+        ? @openssl_x509_checkpurpose($pems[0], X509_PURPOSE_ANY, $rootFiles)
+        : @openssl_x509_checkpurpose($pems[0], X509_PURPOSE_ANY, $rootFiles, $untrusted);
     }
     finally {
       if ($untrusted !== NULL) {

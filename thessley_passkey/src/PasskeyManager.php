@@ -203,18 +203,10 @@ class PasskeyManager {
 
   const TPM_CHALLENGE_TTL = 300;
 
-  /** PEM bundle of the TPM manufacturer roots we trust: every tpm-roots/*.pem shipped with the module. */
-  public function tpmRootsFile(): string {
+  /** The TPM manufacturer roots we trust: every tpm-roots/*.pem shipped with the module. */
+  public function tpmRootFiles(): array {
     $dir = DRUPAL_ROOT . '/' . \Drupal::service('extension.list.module')->getPath('thessley_passkey') . '/tpm-roots';
-    $bundle = '';
-    foreach (glob($dir . '/*.pem') ?: [] as $file) {
-      $bundle .= file_get_contents($file) . "\n";
-    }
-    $path = sys_get_temp_dir() . '/thessley_tpm_roots_' . sha1($bundle) . '.pem';
-    if (!is_file($path)) {
-      file_put_contents($path, $bundle);
-    }
-    return $path;
+    return glob($dir . '/*.pem') ?: [];
   }
 
   /**
@@ -236,7 +228,7 @@ class PasskeyManager {
     if ($ak === FALSE || $ak === '') {
       return 'bad attestation key';
     }
-    $ek = Tpm::verifyEkChain($certs, $this->tpmRootsFile());
+    $ek = Tpm::verifyEkChain($certs, $this->tpmRootFiles());
     if ($ek === NULL) {
       return 'the TPM certificate chain is not one we trust';
     }
