@@ -527,7 +527,8 @@ class Tpm {
     if ($magic !== self::MAGIC || $type !== self::ST_CERTIFY) {
       return 'not a TPM certification';
     }
-    if (!hash_equals($nonce, $extra)) {
+    // Some chips (AMD) take at most a SHA-256 digest of qualifying data, so a longer nonce comes back hashed.
+    if (!hash_equals($nonce, $extra) && !(strlen($nonce) > 32 && hash_equals(hash('sha256', $nonce, TRUE), $extra))) {
       return 'certification is not bound to this enrolment';
     }
     if (!hash_equals(self::name($keyPublic), $certified)) {
