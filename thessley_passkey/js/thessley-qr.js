@@ -46,6 +46,7 @@
 			el.style.display = 'block';
 			el.style.width = '100%';
 			el.style.boxSizing = 'border-box';
+			el.style.border = '1px solid #c3c4c7';
 			el.innerHTML = qr.createSvgTag( { cellSize: 1, margin: 0, scalable: true } );
 
 			var svg = el.querySelector( 'svg' );
