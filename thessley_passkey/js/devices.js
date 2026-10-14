@@ -3,6 +3,11 @@
   'use strict';
 
   // [tone, label, icon] — same icons as the WordPress plugin's device list.
+  // Security score (0-100) from what the site could verify about the device's key
+  // at enrolment; the same values as the WordPress module. It does not know how
+  // the app protects the key (PIN, security key), only where the key lives.
+  var SCORE = { strongbox: 100, tpm: 95, tee: 85, software: 40, unverified: 20 };
+
   var SECURITY = {
     tpm: ['good', Drupal.t('TPM 2.0 hardware'), 'chip'],
     strongbox: ['good', Drupal.t('StrongBox hardware'), 'shield-check'],
@@ -81,7 +86,7 @@
         // on narrow ones, using each cell's data-label as its caption.
         var table = el('table', 'thessley-pk-table');
         var head = el('tr');
-        [Drupal.t('Label'), Drupal.t('Added'), Drupal.t('Last used'), Drupal.t('Status'), Drupal.t('Security'), ''].forEach(function (h) { head.appendChild(el('th', null, h)); });
+        [Drupal.t('Label'), Drupal.t('Added'), Drupal.t('Last used'), Drupal.t('Status'), Drupal.t('Security'), Drupal.t('Score'), ''].forEach(function (h) { head.appendChild(el('th', null, h)); });
         table.appendChild(el('thead')).appendChild(head);
         var body = el('tbody');
         function cell(label, content) {
@@ -98,6 +103,8 @@
           tr.appendChild(cell(Drupal.t('Status'), d.revoked ? badge('bad', Drupal.t('Revoked'), 'x-circle') : badge('good', Drupal.t('Active'), 'check-circle')));
           var sec = SECURITY[d.security] || SECURITY.unverified;
           tr.appendChild(cell(Drupal.t('Security'), badge(sec[0], sec[1], sec[2])));
+          var score = SCORE[SECURITY[d.security] ? d.security : 'unverified'];
+          tr.appendChild(cell(Drupal.t('Score'), d.revoked ? '\u2014' : score + ' / 100'));
           var act = cell('', null);
           act.className = 'thessley-pk-actions';
           if (!d.revoked) {
