@@ -103,7 +103,11 @@
           if (!d.revoked) {
             var b = el('button', 'button button--small', Drupal.t('Revoke'));
             b.type = 'button';
-            b.addEventListener('click', function () { revoke(d.id, b); });
+            b.addEventListener('click', function () {
+              if (window.confirm(Drupal.t('Are you sure you want to revoke "@label"? It will no longer be able to approve logins.', { '@label': d.label || Drupal.t('this device') }))) {
+                revoke(d.id, b);
+              }
+            });
             act.appendChild(b);
           }
           tr.appendChild(act);
