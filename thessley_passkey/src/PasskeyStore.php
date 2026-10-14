@@ -200,10 +200,15 @@ class PasskeyStore {
     return $value !== FALSE ? (string) $value : NULL;
   }
 
-  /** @return object[] */
+  /**
+   * A user's devices, most recently used first; devices never used come last,
+   * newest first.
+   *
+   * @return object[]
+   */
   public function devicesForUser(int $uid): array {
     return $this->db->query(
-      'SELECT id, credential_id, label, attestation_level, created, last_used, revoked FROM {thessley_passkeys} WHERE uid = :uid ORDER BY created DESC, id DESC',
+      'SELECT id, credential_id, label, attestation_level, created, last_used, revoked FROM {thessley_passkeys} WHERE uid = :uid ORDER BY (last_used IS NULL), last_used DESC, created DESC, id DESC',
       [':uid' => $uid]
     )->fetchAll();
   }
