@@ -360,43 +360,13 @@ class ApiController extends ControllerBase {
     return $this->json(['devices' => $this->deviceRows($uid)]);
   }
 
-  /** Wrong passwords allowed before revoking is paused, per window (seconds). */
-  const REAUTH_MAX = 5;
-  const REAUTH_WINDOW = 900;
-
-  /**
-   * Second step of revoking a device: the person at the keyboard proves it is them with their own password
-   * (an administrator revoking someone else's device uses the administrator's own). Revoking is what you do when
-   * a phone is lost, so the app cannot be the proof; and a session left open must not be enough to wipe the
-   * devices. Returns an error response, or NULL when the password was right.
-   */
-  protected function reauthenticate(\Drupal\Core\Session\AccountInterface $me, string $password): ?JsonResponse {
-    $flood = \Drupal::flood();
-    $name = 'thessley_passkey.revoke_reauth';
-    $who = (string) $me->id();
-    if (!$flood->isAllowed($name, self::REAUTH_MAX, self::REAUTH_WINDOW, $who)) {
-      return $this->error('thessley_reauth_throttled', 'Too many wrong passwords. Try again in a few minutes.', 429);
-    }
-    $uid = $password === '' ? FALSE : \Drupal::service('user.auth')->authenticate($me->getAccountName(), $password);
-    if ((int) $uid !== (int) $me->id()) {
-      $flood->register($name, self::REAUTH_WINDOW, $who);
-      $this->manager->audit('device_revoke_wrong_password', 'user #' . $me->id());
-      return $this->error('thessley_reauth', 'Wrong password.', 403);
-    }
-    $flood->clear($name, $who);
-    return NULL;
-  }
-
-  /** Revoke one device. Owner only, or an administrator, after re-entering their password. */
+  /** Revoke one device. Owner only, or an administrator. */
   public function revoke(Request $request, int $device): JsonResponse {
     $store = $this->manager->store();
     $row = $store->getDevice($device);
     $me = $this->currentUser();
     if (!$row || ((int) $row->uid !== (int) $me->id() && !$me->hasPermission('administer thessley passkey'))) {
       return $this->error('thessley_not_found', 'Not found.', 404);
-    }
-    if ($denied = $this->reauthenticate($me, (string) ($this->param($request, 'password') ?? ''))) {
-      return $denied;
     }
     $store->revoke($device, (int) $row->uid);
     $this->manager->audit('device_revoked', 'device #' . $device . ' for user #' . $row->uid . ' by user #' . $me->id());

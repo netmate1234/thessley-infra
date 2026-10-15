@@ -111,9 +111,9 @@
             var b = el('button', 'button button--small', Drupal.t('Revoke'));
             b.type = 'button';
             b.addEventListener('click', function () {
-              // Step 1: "are you sure?". Step 2: the person re-enters their password.
-              if (!window.confirm(Drupal.t('Are you sure you want to revoke "@label"? It will no longer be able to approve logins.', { '@label': d.label || Drupal.t('this device') }))) { return; }
-              askPassword(d, function (password, fail, done) { revoke(d.id, password, fail, done); });
+              if (window.confirm(Drupal.t('Are you sure you want to revoke "@label"? It will no longer be able to approve logins.', { '@label': d.label || Drupal.t('this device') }))) {
+                revoke(d.id, b);
+              }
             });
             act.appendChild(b);
           }
@@ -130,59 +130,11 @@
           .then(function (data) { if (data && data.devices) { render(data.devices); } });
       }
 
-      // Step 2 of revoking: a small modal asking for the account password. Text nodes only, never innerHTML.
-      function askPassword(device, submit) {
-        var dlg = document.createElement('dialog');
-        dlg.className = 'thessley-pk-dialog';
-        var form = el('form');
-        form.setAttribute('method', 'dialog');
-        form.appendChild(el('h3', null, Drupal.t('Confirm it is you')));
-        form.appendChild(el('p', null, Drupal.t('Enter your password to revoke "@label".', { '@label': device.label || Drupal.t('this device') })));
-        var input = el('input');
-        input.type = 'password';
-        input.name = 'password';
-        input.required = true;
-        input.autocomplete = 'current-password';
-        input.setAttribute('aria-label', Drupal.t('Password'));
-        form.appendChild(input);
-        var err = el('p', 'thessley-pk-dialog-error');
-        err.setAttribute('role', 'alert');
-        form.appendChild(err);
-        var row = el('div', 'thessley-pk-dialog-buttons');
-        var cancel = el('button', 'button', Drupal.t('Cancel'));
-        cancel.type = 'button';
-        cancel.addEventListener('click', function () { dlg.close(); });
-        var ok = el('button', 'button button--primary', Drupal.t('Revoke device'));
-        ok.type = 'submit';
-        row.appendChild(cancel);
-        row.appendChild(ok);
-        form.appendChild(row);
-        form.addEventListener('submit', function (e) {
-          e.preventDefault();
-          ok.disabled = true;
-          err.textContent = '';
-          submit(input.value, function (message) { err.textContent = message; ok.disabled = false; input.select(); }, function () { dlg.close(); });
-        });
-        dlg.addEventListener('close', function () { dlg.remove(); });
-        dlg.appendChild(form);
-        document.body.appendChild(dlg);
-        if (dlg.showModal) { dlg.showModal(); } else { dlg.setAttribute('open', ''); }
-        input.focus();
-      }
-
-      function revoke(id, password, fail, done) {
+      function revoke(id, btn) {
+        btn.disabled = true;
         csrf().then(function (t) {
-          return fetch(cfg.urls.revoke.replace('/0/revoke', '/' + id + '/revoke'), {
-            method: 'POST', credentials: 'same-origin',
-            headers: { 'X-CSRF-Token': t, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: password })
-          });
-        }).then(function (r) {
-          if (r.ok) { done(); return refresh(); }
-          return r.json().catch(function () { return {}; }).then(function (data) {
-            fail((data && data.message) || Drupal.t('Could not revoke the device.'));
-          });
-        }).catch(function () { fail(Drupal.t('Could not reach the site.')); });
+          return fetch(cfg.urls.revoke.replace('/0/revoke', '/' + id + '/revoke'), { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': t } });
+        }).then(refresh).catch(function () { btn.disabled = false; });
       }
 
       render(cfg.devices || []);
