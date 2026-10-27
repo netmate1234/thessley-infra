@@ -2,7 +2,9 @@
 # Address reachable by the Windows machines and enrolled phones.
 public_host = "192.168.1.200"
 # Use immutable AD security group SIDs. Never use group names from clients.
-allowed_group_sids = ["S-1-5-21-111111111-222222222-333333333-512"]
+# Lab default: only members of the dedicated Thessley AD Sign-in
+# Administrators group may use the prototype. Do not use Domain Admins here.
+allowed_group_sids = ["S-1-5-21-1719900462-4250469598-2954734011-1105"]
 
 [directory]
 # Must resolve to the Global Catalog and match its LDAPS certificate SAN.

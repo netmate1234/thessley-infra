@@ -41,11 +41,15 @@ ordinary domain sign-in tests.
 ## Current lab state
 
 - Forest and DNS: `lab.thessley.test` / `THESSLEYLAB`; AD DS, DNS, KDC, Netlogon, ADWS, and Certificate Services are running.
+- The two active Windows VMs are `MARTIN-WM` (`192.168.122.66`, Windows 11 Pro client) and `THESSLEY-DC1` (`192.168.122.98` management address; `192.168.1.79` LAN address). The client has 8 GiB assigned; the DC has 4 GiB. Both were running during the 2026-10-27 session. The client SSH service is running and `Test-ComputerSecureChannel` succeeds against `lab.thessley.test`.
 - DC time: timezone `Romance Standard Time` (Paris); Windows Time uses `time.windows.com` and advertises the DC as reliable. The DC had been eight hours ahead on its local CMOS clock; correct and verify time before any future domain join.
 - Enterprise root CA: `THESSLEY-LAB-CA`.
 - CA templates enabled: `KerberosAuthentication` and `SmartcardLogon`.
 - A machine certificate with the KDC Authentication EKU has been issued to the DC.
-- Test user: `martin` (`martin@lab.thessley.test`), ordinary domain user. The local-only credential file records the lab passwords and current SID.
+- Test user: `martin` (`martin@lab.thessley.test`), not a Domain Admin. The local-only credential file records lab passwords and the user's SID.
+- `martin` belongs to `Domain Users` and the dedicated global security group `Thessley AD Sign-in Administrators` (`THESSLEYLAB\ThessleyADSignInAdmins`, SID `S-1-5-21-1719900462-4250469598-2954734011-1105`). The group was created by `create-test-admin-group.ps1`; it does not grant domain-wide administrative rights.
+- On `MARTIN-WM` only, that Thessley group is also a member of the local Administrators group, alongside `THESSLEYLAB\Domain Admins`. This lets the domain test account retain machine administrator rights on this disposable client. Other domain-joined PCs need their own approved local group mapping or policy; AD group membership alone does not make a user a local administrator everywhere.
+- The standalone AD service example allowlists only the Thessley group SID. It must not be widened to Domain Users or Domain Admins for this test.
 - The CA's `SmartcardLogon` Enroll right is granted only to `THESSLEYLAB\martin` for this lab.
 - Windows client `MARTIN-WM` is joined to the forest. DNS discovery, DC ports 53/88/389/445, machine secure channel, and time source all pass the read-only verifier.
 - Four SmartcardLogon certificates were issued during enrollment troubleshooting. They are now in the interactive domain user's `CurrentUser\My` store; all pass checks for the Smart Card Logon and Client Authentication EKUs, UPN, matching strong SID extension, private key, and validity. The private keys are non-exportable software keys. The VSC baseline sign-in has now succeeded; leave these certificates in place until the VSC test is repeated after a reboot, then revoke unused certificates.
@@ -68,6 +72,16 @@ ordinary domain sign-in tests.
 4. Run `verify-domain-client.ps1` from PowerShell to check domain membership, LAN DNS, DC ports, secure channel, time, account SID, and any enrolled SmartcardLogon certificate. It is read-only and exits with a nonzero status if a required check fails.
 5. From a `THESSLEYLAB\martin` interactive session, run `enroll-smartcard-certificate.ps1`. It requests the certificate explicitly into `Cert:\CurrentUser\My`, then runs `verify-smartcard-certificate.ps1` to check the EKUs, UPN, private key, expiry, and SID mapping. This lab certificate does not implement phone-backed private-key signing.
 6. For the TPM virtual smart-card experiment, run `enable-vsc-logon-template.ps1` on the DC, then run `create-vsc-system-task.ps1` elevated on the client. In the signed-in domain user's interactive session, use `start-vsc-enrollment-task.ps1` with `request-vsc-certificate.cmd`. Use `verify-vsc-certificate.cmd` to inspect the issued certificate and provider; `inspect-vsc-reader.cmd` runs `certutil -scinfo` without changing the card. These scripts do not modify Windows sign-in providers. Keep the password recovery path available.
+
+## Thessley AD sign-in group mapping
+
+The lab user's AD group membership and the client-local administrator grant are
+separate steps. On the DC, run `create-test-admin-group.ps1` elevated; it is
+idempotent and creates the dedicated group and adds `martin`. On the disposable
+client, run `map-test-admin-group.ps1` elevated; it maps only that group to the
+client's local Administrators group. New group membership is reflected in a
+domain user's logon token after signing in again. Do not add `martin` to Domain
+Admins. The service's allowed group SID must match the dedicated group's SID.
 
 The script prompts for the DSRM and test-user passwords. Local-only credentials are recorded in the ignored `LOCAL-CREDENTIALS.txt`; never commit or distribute that file. The local/domain Administrator password is managed separately.
 
