@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .machine_auth import ReplayGuard
     from .directory import ActiveDirectory
     from .challenges import ChallengeStore
+    from .phone_registry import PhoneRegistry
 
 
 MACHINE_ENROLL_PATH = "/thessley-ad/v1/machines/enroll"
@@ -20,6 +21,11 @@ PRINCIPAL_RESOLVE_PATH = "/thessley-ad/v1/principals/resolve"
 LOGIN_START_PATH = "/thessley-ad/v1/requests"
 PHONE_RESPONSE_PATH = "/thessley-ad/v1/requests/respond"
 LOGIN_RESULT_PATH = "/thessley-ad/v1/requests/result"
+PHONE_ENROLL_START_PATH = "/thessley-ad/v1/enrollments"
+PHONE_ENROLL_RESPONSE_PATH = "/thessley-ad/v1/enrollments/respond"
+PHONE_ENROLL_STATUS_PATH = "/thessley-ad/v1/enrollments/status"
+PHONE_ENROLL_CONFIRM_PATH = "/thessley-ad/v1/enrollments/confirm"
+PHONE_ENROLL_CANCEL_PATH = "/thessley-ad/v1/enrollments/cancel"
 
 
 def _authenticated_machine(machine_id: str, timestamp_text: str, nonce: str, signature: str,
@@ -261,10 +267,177 @@ def login_result_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
     return RawBodyRoute(handle)
 
 
+def phone_enrollment_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                                 directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
+                                 phones: "PhoneRegistry", server_host: str,
+                                 server_fingerprint: str | Callable[[], str]):
+    """Start first-phone enrollment for an AD-authorized domain SID."""
+    from thessley_pam.listener import RawBodyRoute
+    from .directory import DirectoryUnavailable, PrincipalNotFound, validate_group_sid_allowlist
+
+    allowed_group_sids = validate_group_sid_allowlist(allowed_group_sids)
+    if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", server_host):
+        raise ValueError("Invalid AD service host")
+    fingerprint_provider = server_fingerprint if callable(server_fingerprint) else lambda: server_fingerprint
+
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        if set(auth_headers) != expected or set(body) != {"sid"} or not isinstance(body.get("sid"), str):
+            return 400, {"result": "error", "message": "Invalid phone enrollment request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(
+            machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
+            auth_headers["x-thessley-signature"], PHONE_ENROLL_START_PATH, raw_body, registry, replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        machine_name = registry.machine_name(machine_id)
+        fingerprint = fingerprint_provider()
+        if not machine_name or not isinstance(fingerprint, str) or not re.fullmatch(r"[a-f0-9]{64}", fingerprint):
+            return 503, {"result": "error", "message": "The AD service is not ready for enrollment."}
+        try:
+            principal = directory.resolve_user_sid(body["sid"])
+        except PrincipalNotFound:
+            return 404, {"result": "error", "message": "Domain user was not found or is disabled."}
+        except DirectoryUnavailable:
+            return 503, {"result": "error", "message": "Domain authorization is temporarily unavailable."}
+        if not principal.group_sids.intersection(allowed_group_sids):
+            return 403, {"result": "error", "message": "This account is not authorized to enroll a phone."}
+        enrollment = phones.create_enrollment(
+            machine_id=machine_id, sid=principal.sid, username=principal.username, authority=principal.authority,
+        )
+        if enrollment is None:
+            return 503, {"result": "error", "message": "Could not create a phone enrollment request."}
+        link = "thessleypam://enroll?" + urlencode({
+            "h": server_host, "p": "47810", "fp": fingerprint, "id": enrollment["request_id"],
+            "n": enrollment["nonce"], "m": machine_id, "hn": machine_name, "u": principal.username,
+            "pv": "2", "sid": enrollment["principal_id"], "scope": "domain",
+            "auth": principal.authority, "ctx": "enrollment", "api": "ad",
+        })
+        return 201, {"result": "created", "request": enrollment, "app_link": link}
+
+    return RawBodyRoute(handle)
+
+
+def phone_enrollment_response_route(phones: "PhoneRegistry"):
+    """Verify the new Android key and wait for its pairing code to be confirmed on Windows."""
+    from thessley_pam.listener import RawBodyRoute
+
+    def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {"request_id", "public_key", "algorithm", "label", "timestamp", "proof_signature", "attestation_chain"}
+        if (auth_headers or set(body) != expected
+                or not isinstance(body.get("request_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", body["request_id"])):
+            return 400, {"result": "error", "message": "Invalid phone enrollment response."}
+        chain = body.get("attestation_chain")
+        if (body.get("algorithm") != "ES256" or not isinstance(chain, list) or len(chain) > 10
+                or any(not isinstance(cert, str) or len(cert) > 16384 for cert in chain)):
+            return 400, {"result": "error", "message": "Invalid phone enrollment response."}
+        timestamp = body.get("timestamp")
+        if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+            return 400, {"result": "error", "message": "Invalid phone enrollment response."}
+        if not phones.submit_enrollment(
+            request_id=body.get("request_id"), public_key_spki_b64=body.get("public_key"),
+            label=body.get("label"), timestamp=timestamp, signature_b64=body.get("proof_signature"),
+        ):
+            return 409, {"result": "error", "message": "Phone proof was invalid, expired, or already used."}
+        result = phones.wait_enrollment(body["request_id"], timeout=110)
+        if result and result.get("status") == "denied":
+            return 403, {"result": "denied", "message": "Phone enrollment was cancelled on the Windows computer."}
+        if not result or result.get("status") != "confirmed":
+            return 409, {"result": "error", "message": "Pairing was not confirmed on the Windows computer."}
+        return 200, {"result": "ok", "credential_id": result["credential_id"],
+                     "username": result["username"]}
+
+    return RawBodyRoute(handle, response_wait=115)
+
+
+def phone_enrollment_status_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                                  phones: "PhoneRegistry"):
+    """Expose only the pairing state to the machine that began that enrollment."""
+    from thessley_pam.listener import RawBodyRoute
+
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        if (set(auth_headers) != expected or set(body) != {"request_id"}
+                or not isinstance(body.get("request_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", body["request_id"])):
+            return 400, {"result": "error", "message": "Invalid enrollment status request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(
+            machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
+            auth_headers["x-thessley-signature"], PHONE_ENROLL_STATUS_PATH, raw_body, registry, replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        state = phones.enrollment_status(machine_id=machine_id, request_id=body["request_id"])
+        if state is None:
+            return 404, {"result": "error", "message": "Phone enrollment was not found."}
+        return 200, state
+
+    return RawBodyRoute(handle)
+
+
+def phone_enrollment_confirm_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                                   phones: "PhoneRegistry"):
+    """Activate a staged phone key only after the Windows screen's pairing code matches."""
+    from thessley_pam.listener import RawBodyRoute
+
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        if (set(auth_headers) != expected or set(body) != {"request_id", "pairing_code"}
+                or not isinstance(body.get("request_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", body["request_id"])):
+            return 400, {"result": "error", "message": "Invalid enrollment confirmation."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(
+            machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
+            auth_headers["x-thessley-signature"], PHONE_ENROLL_CONFIRM_PATH, raw_body, registry, replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        if not phones.confirm_enrollment(
+            machine_id=machine_id, request_id=body.get("request_id"), pairing_code=body.get("pairing_code"),
+        ):
+            return 409, {"result": "error", "message": "The pairing code did not match or the request expired."}
+        return 200, {"result": "confirmed"}
+
+    return RawBodyRoute(handle)
+
+
+def phone_enrollment_cancel_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                                  phones: "PhoneRegistry"):
+    """Cancel a pending enrollment from its originating authenticated machine."""
+    from thessley_pam.listener import RawBodyRoute
+
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        if (set(auth_headers) != expected or set(body) != {"request_id"}
+                or not isinstance(body.get("request_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", body["request_id"])):
+            return 400, {"result": "error", "message": "Invalid enrollment cancellation."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(
+            machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
+            auth_headers["x-thessley-signature"], PHONE_ENROLL_CANCEL_PATH, raw_body, registry, replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        if not phones.cancel_enrollment(machine_id=machine_id, request_id=body["request_id"]):
+            return 409, {"result": "error", "message": "Phone enrollment is no longer pending."}
+        return 200, {"result": "cancelled"}
+
+    return RawBodyRoute(handle)
+
+
 def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                   directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                   challenges: "ChallengeStore", server_host: str,
-                  server_fingerprint: str | Callable[[], str]) -> dict:
+                  server_fingerprint: str | Callable[[], str], phones: "PhoneRegistry") -> dict:
     """Build the routes to register on the existing pinned listener."""
     return {
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
@@ -275,4 +448,11 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         ),
         PHONE_RESPONSE_PATH: phone_response_route(challenges),
         LOGIN_RESULT_PATH: login_result_route(registry, replay_guard, challenges),
+        PHONE_ENROLL_START_PATH: phone_enrollment_start_route(
+            registry, replay_guard, directory, allowed_group_sids, phones, server_host, server_fingerprint
+        ),
+        PHONE_ENROLL_RESPONSE_PATH: phone_enrollment_response_route(phones),
+        PHONE_ENROLL_STATUS_PATH: phone_enrollment_status_route(registry, replay_guard, phones),
+        PHONE_ENROLL_CONFIRM_PATH: phone_enrollment_confirm_route(registry, replay_guard, phones),
+        PHONE_ENROLL_CANCEL_PATH: phone_enrollment_cancel_route(registry, replay_guard, phones),
     }

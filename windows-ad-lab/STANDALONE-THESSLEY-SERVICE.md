@@ -87,7 +87,7 @@ listener exposes temporary routes to local privileged components. Keep the AD
 registry and policy logic separate from the generic PAM database, registering
 only `/thessley-ad/v1/...` routes over the root-only Unix socket.
 
-## API boundary to implement
+## API boundary implemented in source
 
 Use a versioned API on the standalone Thessley host, with TLS certificate
 pinning and a unique machine credential for every Windows computer:
@@ -98,14 +98,20 @@ pinning and a unique machine credential for every Windows computer:
 - `POST /thessley-ad/v1/principals/resolve` — submit the Windows SID; return
   canonical identity and current group authorization from protected LDAP/AD
   queries.
-- Phone-key enrollment routes — **not implemented yet**. The Android key must
-  be enrolled only after a signed proof and matching six-digit code are
-  confirmed on the Windows client.
 - `POST /thessley-ad/v1/requests` — create a one-use interactive-login or
   unlock challenge, returning the standard Thessley PAM v2 link fields.
 - `POST /thessley-ad/v1/requests/respond` — accept the Android-signed response.
 - `POST /thessley-ad/v1/requests/result` — machine-authenticated poll; approval
   is returned only once to the machine that created the request.
+- `POST /thessley-ad/v1/enrollments` — start a machine- and domain-SID-bound
+  phone enrollment after the service verifies current AD group membership.
+- `POST /thessley-ad/v1/enrollments/respond` — accept a fresh proof-of-possession
+  signature from the phone, then hold the response until Windows confirms that
+  its pairing code matches.
+- `POST /thessley-ad/v1/enrollments/status` and `/confirm` — let only the
+  originating authenticated machine inspect and confirm the pairing code.
+- `POST /thessley-ad/v1/enrollments/cancel` — cancel a pending pairing from that
+  machine; the provisional phone key is discarded.
 - Local root-only admin CLI — issue machine codes and revoke machine or phone
   keys. No remote deletion endpoint is implemented.
 
@@ -157,22 +163,33 @@ the service. The local admin CLI can issue one-use machine codes and revoke
 machine/phone credentials. Code issuance is root-only; there is no remote
 machine-code endpoint.
 
-The API currently exposes machine enrollment, signed machine authentication,
+The source API exposes machine enrollment, signed machine authentication,
 SID/group resolution over LDAPS, login challenge creation, Android response
-verification, and one-use result polling. SQLite stores the machine registry,
-phone registry, replay claims, and challenge state in a root-only service
-directory. The optional raw-body listener route preserves exact HTTPS request
-bytes and forwards only the four whitelisted machine-auth headers through its
-root-only Unix socket. Existing Linux PAM routes retain their existing
-behavior; this adapter is service plumbing and is not the Windows sign-in
-implementation.
+verification, one-use result polling, and staged phone-key enrollment.
+SQLite stores the machine registry, phone registry, replay claims, and
+challenge state in a root-only service directory. The optional raw-body
+listener route preserves exact HTTPS request bytes and forwards only the four
+whitelisted machine-auth headers through its root-only Unix socket. Existing
+Linux PAM routes retain their existing behavior. This is service plumbing,
+not the Windows sign-in implementation.
 
-The Windows repository now contains `thessley_pam_win/ad_agent.py` plus
-`ad-enroll`, `ad-status`, and `ad-check` commands. The client pins the service
-certificate, stores its machine signing key with machine-scope DPAPI, verifies
-signed machine connectivity, and can create and poll SID-bound requests. It is
-not yet connected to the Windows credential provider.
-Phone-key enrollment still needs its signed QR/pairing flow and audit trail.
+The Windows client has an isolated `thessley-ad-test.cmd` prototype under
+`C:\ProgramData\ThessleyPamWin\ad-prototype`; it pairs the machine, enrolls a
+phone, and tests phone approval without changing the installed local-account
+tile or Windows credential providers. The client pins the service
+certificate, stores its machine signing key with machine-scope DPAPI, and uses
+signed machine requests. Android handles `api=ad` enrollment and approval
+links; the server stages new keys until the Windows-side pairing code is
+confirmed. Android attestation chains are not yet verified by this AD
+service, so no hardware-security level is asserted.
+
+The Windows client prototype is installed and verified on the domain-joined
+test client. The AD API source is implemented separately, but an AD API host
+has not yet been configured for this Windows lab. Until that service is
+available, the client can show its commands and preserve the local-account
+tile, but machine pairing, phone enrollment, and approval cannot complete.
+Keep these Windows tests separate from the existing local-account sign-in
+path.
 The passwordless credential provider/PKINIT bridge is also still absent, so
 the project does not yet provide Windows AD sign-in.
 

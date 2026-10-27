@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import os
 import re
 import secrets
@@ -11,6 +12,7 @@ import sqlite3
 import stat
 import time
 from pathlib import Path
+from .protocol import canonical_phone_message, principal_id_from_sid, timestamp_is_fresh, verify_phone_signature
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -77,9 +79,252 @@ class PhoneRegistry:
                 "CREATE INDEX IF NOT EXISTS phone_credentials_binding "
                 "ON phone_credentials(machine_id, principal_id, revoked_at)"
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS phone_enrollments (
+                       request_id TEXT PRIMARY KEY,
+                       machine_id TEXT NOT NULL,
+                       principal_id TEXT NOT NULL,
+                       username TEXT NOT NULL,
+                       authority TEXT NOT NULL,
+                       nonce TEXT NOT NULL UNIQUE,
+                       expires_at REAL NOT NULL,
+                       status TEXT NOT NULL,
+                       public_key_spki_b64 TEXT,
+                       label TEXT,
+                       credential_id TEXT UNIQUE,
+                       pairing_code TEXT,
+                       confirm_attempts INTEGER NOT NULL DEFAULT 0
+                   ) WITHOUT ROWID"""
+            )
         finally:
             connection.close()
         os.chmod(self.path, 0o600)
+
+    def create_enrollment(self, *, machine_id: str, sid: str, username: str, authority: str,
+                          lifetime_seconds: int = 120, now: float | None = None) -> dict | None:
+        """Create a short-lived phone-key enrollment bound to one machine and AD SID."""
+        if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
+            return None
+        try:
+            principal_id = principal_id_from_sid(sid)
+            canonical_phone_message(
+                type_="enroll", request_id="A" * 32, machine_id=machine_id,
+                principal_id=principal_id, principal_type="domain", authority=authority,
+                username=username, context="enrollment", nonce="B" * 32,
+                timestamp=int(time.time() if now is None else now), action="register",
+            )
+        except (TypeError, ValueError):
+            return None
+        if isinstance(lifetime_seconds, bool) or not isinstance(lifetime_seconds, int) or not 60 <= lifetime_seconds <= 300:
+            return None
+        current = time.time() if now is None else now
+        request_id = secrets.token_urlsafe(24)
+        nonce = secrets.token_urlsafe(24)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("DELETE FROM phone_enrollments WHERE expires_at <= ?", (current,))
+            machine = connection.execute(
+                "SELECT 1 FROM machines WHERE machine_id = ? AND revoked_at IS NULL", (machine_id,)
+            ).fetchone()
+            if machine is None:
+                connection.execute("ROLLBACK")
+                return None
+            connection.execute(
+                """INSERT INTO phone_enrollments
+                   (request_id, machine_id, principal_id, username, authority, nonce, expires_at, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                (request_id, machine_id, principal_id, username, authority, nonce, current + lifetime_seconds),
+            )
+            connection.execute("COMMIT")
+            return {"request_id": request_id, "machine_id": machine_id, "principal_id": principal_id,
+                    "principal_type": "domain", "username": username, "authority": authority,
+                    "context": "enrollment", "nonce": nonce, "expires_at": current + lifetime_seconds}
+        except sqlite3.Error:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            return None
+        finally:
+            connection.close()
+
+    def submit_enrollment(self, *, request_id: str, public_key_spki_b64: str, label: str,
+                          timestamp: int, signature_b64: str, now: float | None = None) -> bool:
+        """Verify proof of possession and stage a key until the Windows user confirms the pairing code."""
+        if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
+                or not self._valid_key(public_key_spki_b64) or not isinstance(label, str)
+                or not _LABEL.fullmatch(label) or not timestamp_is_fresh(timestamp, now)):
+            return False
+        current = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT machine_id, principal_id, username, authority, nonce, expires_at, status "
+                "FROM phone_enrollments WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            machine_id, principal_id, username, authority, nonce, expires_at, status = row
+            if status != "pending" or expires_at <= current:
+                return False
+            message = canonical_phone_message(
+                type_="enroll", request_id=request_id, machine_id=machine_id,
+                principal_id=principal_id, principal_type="domain", authority=authority,
+                username=username, context="enrollment", nonce=nonce,
+                timestamp=timestamp, action="register",
+            )
+            if not verify_phone_signature(public_key_spki_b64, signature_b64, message):
+                return False
+            digest = hashlib.sha256(base64.b64decode(public_key_spki_b64, validate=True)).digest()
+            code_number = int.from_bytes(digest[:4], "big") % 1_000_000
+            pairing_code = f"{code_number:06d}"[:3] + " " + f"{code_number:06d}"[3:]
+            credential_id = secrets.token_urlsafe(24)
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "UPDATE phone_enrollments SET status = 'ready', public_key_spki_b64 = ?, label = ?, "
+                "credential_id = ?, pairing_code = ? WHERE request_id = ? AND status = 'pending' AND expires_at > ?",
+                (public_key_spki_b64, label, credential_id, pairing_code, request_id, current),
+            )
+            connection.execute("COMMIT")
+            return cursor.rowcount == 1
+        except (sqlite3.Error, TypeError, ValueError):
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            return False
+        finally:
+            connection.close()
+
+    def enrollment_status(self, *, machine_id: str, request_id: str, now: float | None = None) -> dict | None:
+        if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
+                or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)):
+            return None
+        current = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status, expires_at, pairing_code, username FROM phone_enrollments "
+                "WHERE request_id = ? AND machine_id = ?", (request_id, machine_id)
+            ).fetchone()
+            if row is None:
+                connection.execute("COMMIT")
+                return None
+            status, expires_at, pairing_code, username = row
+            if status in ("pending", "ready") and expires_at <= current:
+                connection.execute("UPDATE phone_enrollments SET status = 'expired' WHERE request_id = ?", (request_id,))
+                status = "expired"
+            connection.execute("COMMIT")
+            result = {"status": status, "username": username}
+            if status == "ready":
+                result["pairing_code"] = pairing_code
+            return result
+        except sqlite3.Error:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            return None
+        finally:
+            connection.close()
+
+    def confirm_enrollment(self, *, machine_id: str, request_id: str, pairing_code: str,
+                           now: float | None = None) -> bool:
+        if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
+                or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
+                or not isinstance(pairing_code, str) or not re.fullmatch(r"[0-9]{3} [0-9]{3}", pairing_code)):
+            return False
+        current = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT principal_id, public_key_spki_b64, label, credential_id, pairing_code, expires_at, confirm_attempts "
+                "FROM phone_enrollments WHERE request_id = ? AND machine_id = ? AND status = 'ready'",
+                (request_id, machine_id),
+            ).fetchone()
+            if row is None:
+                connection.execute("ROLLBACK")
+                return False
+            principal_id, public_key, label, credential_id, expected_code, expires_at, attempts = row
+            if expires_at <= current:
+                connection.execute(
+                    "UPDATE phone_enrollments SET status = 'expired' WHERE request_id = ?", (request_id,)
+                )
+                connection.execute("COMMIT")
+                return False
+            if not secrets.compare_digest(pairing_code, expected_code):
+                attempts += 1
+                connection.execute(
+                    "UPDATE phone_enrollments SET confirm_attempts = ?, status = ? WHERE request_id = ?",
+                    (attempts, "denied" if attempts >= 5 else "ready", request_id),
+                )
+                connection.execute("COMMIT")
+                return False
+            connection.execute(
+                "INSERT INTO phone_credentials "
+                "(credential_id, machine_id, principal_id, public_key_spki_b64, label, enrolled_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (credential_id, machine_id, principal_id, public_key, label, current),
+            )
+            connection.execute(
+                "UPDATE phone_enrollments SET status = 'confirmed' WHERE request_id = ? AND status = 'ready'",
+                (request_id,),
+            )
+            connection.execute("COMMIT")
+            return True
+        except sqlite3.Error:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            return False
+        finally:
+            connection.close()
+
+    def cancel_enrollment(self, *, machine_id: str, request_id: str) -> bool:
+        if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
+                or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)):
+            return False
+        connection = self._connect()
+        try:
+            cursor = connection.execute(
+                "UPDATE phone_enrollments SET status = 'denied', public_key_spki_b64 = NULL, label = NULL, "
+                "credential_id = NULL, pairing_code = NULL "
+                "WHERE request_id = ? AND machine_id = ? AND status IN ('pending', 'ready')",
+                (request_id, machine_id),
+            )
+            return cursor.rowcount == 1
+        finally:
+            connection.close()
+
+    def wait_enrollment(self, request_id: str, timeout: int = 115) -> dict | None:
+        """Wait briefly for the paired Windows console to confirm the displayed code."""
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+            return None
+        deadline = time.monotonic() + max(1, min(timeout, 120))
+        while time.monotonic() < deadline:
+            connection = self._connect()
+            try:
+                row = connection.execute(
+                    "SELECT status, expires_at, credential_id, username FROM phone_enrollments WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()
+            finally:
+                connection.close()
+            if row is None:
+                return None
+            status, expires_at, credential_id, username = row
+            if status == "confirmed":
+                return {"status": "confirmed", "credential_id": credential_id, "username": username}
+            if status == "denied":
+                return {"status": "denied"}
+            if status == "expired" or expires_at <= time.time():
+                return {"status": "expired"}
+            time.sleep(0.5)
+        return {"status": "pending"}
 
     @staticmethod
     def _valid_key(public_key_spki_b64: str) -> bool:

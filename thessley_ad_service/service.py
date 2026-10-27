@@ -81,6 +81,7 @@ def main() -> int:
         challenges,
         service["public_host"],
         lambda: certificate_pin["value"],
+        phones,
     )
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda _signal, _frame: stop.set())

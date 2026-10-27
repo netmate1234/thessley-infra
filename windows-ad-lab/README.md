@@ -83,6 +83,15 @@ client's local Administrators group. New group membership is reflected in a
 domain user's logon token after signing in again. Do not add `martin` to Domain
 Admins. The service's allowed group SID must match the dedicated group's SID.
 
+There are two distinct Windows sign-in paths. The existing Thessley QR tile
+gates a **local Windows account** and remains the supported path for Windows
+Home. The AD prototype is a separate domain-account path for domain-joined
+Windows Pro or higher; it must not replace or alter the local tile. Microsoft
+lists Active Directory domain join for Pro and higher editions, not Home. Keep
+the normal PIN/password providers available for recovery. See Microsoft's
+[Credential Providers guidance](https://learn.microsoft.com/en-us/windows/win32/secauthn/credential-providers-in-windows)
+and [Windows edition requirements](https://learn.microsoft.com/en-us/windows/security/licensing-and-edition-requirements).
+
 The script prompts for the DSRM and test-user passwords. Local-only credentials are recorded in the ignored `LOCAL-CREDENTIALS.txt`; never commit or distribute that file. The local/domain Administrator password is managed separately.
 
 The DC setup script binds DNS to the LAN IPv4 address and removes the controller's NAT and IPv6 addresses from its host, zone-apex, and Global Catalog A/AAAA records. Before changing DNS, it saves the previous listener, client resolver settings, and affected records under `C:\ProgramData\Thessley\ADLab\DnsBackup`. Reserve the LAN address on the router so this binding remains valid.
