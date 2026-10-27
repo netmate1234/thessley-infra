@@ -83,11 +83,9 @@ key verification. Reuse those protocol and listener pieces where they fit.
 The existing Windows Drupal agent (`drupal_agent.py`) and its `/thessley-windows`
 API are not the backend for this project. Replace that integration with a
 Windows agent that speaks to the standalone Thessley service. The Linux
-listener currently exposes temporary PAM approval routes to local privileged
-components; it does not yet provide the persistent, machine-authenticated AD
-account registry or AD policy lookup required here. Add those as a separate
-service/package and storage boundary rather than putting AD logic in Drupal or
-silently expanding the generic PAM database.
+listener exposes temporary routes to local privileged components. Keep the AD
+registry and policy logic separate from the generic PAM database, registering
+only `/thessley-ad/v1/...` routes over the root-only Unix socket.
 
 ## API boundary to implement
 
@@ -111,11 +109,11 @@ pinning and a unique machine credential for every Windows computer:
   requests.
 
 The phone callback can use the existing pinned PAM listener and its compatible
-v2 signature format. The machine API must use mutual TLS or equivalent
-machine-key proof, authorize every request against AD, enforce strict body and
-rate limits, and never accept a client-supplied group list as authority. Keep
-the service identity read-only in AD unless a narrowly scoped certificate
-enrollment operation is separately required.
+v2 signature format. The machine API uses the per-machine P-256 request
+signatures specified below, authorizes every request against AD, enforces
+strict body and rate limits, and never accepts a client-supplied group list as
+authority. Keep the service identity read-only in AD unless a narrowly scoped
+certificate enrollment operation is separately required.
 
 `infra/thessley_ad_service/protocol.py` validates SID-derived principal IDs
 and reproduces the Android `thessley_win_pam_v2` canonical message and P-256
@@ -137,15 +135,18 @@ base64url_nonce
 lowercase_sha256_of_raw_body
 ```
 
+The signature fields are carried in `X-Thessley-Machine-ID`,
+`X-Thessley-Timestamp`, `X-Thessley-Nonce`, and `X-Thessley-Signature`
+headers. The shared listener forwards only these bounded headers to an
+opt-in raw-body route.
+
 The HTTP adapter must capture raw body bytes before JSON parsing, resolve the
 public key from the trusted machine registry (never from client input), check
 the one-minute timestamp window, and then atomically claim the nonce. The
 `ReplayGuard` deliberately requires a persistent transactional nonce-claim
-callback; it has no process-local production fallback. The machine key registry
-and atomic nonce store are still unimplemented, so this verifier is not yet a
-deployable machine-authentication service. Machine key generation and storage
-should use the Windows TPM/CNG provider where available, with a separately
-approved enrollment flow and rotation/revocation semantics.
+callback; it has no process-local production fallback. Machine key generation
+and storage should use the Windows TPM/CNG provider where available, with a
+separately approved enrollment flow and rotation/revocation semantics.
 
 `infra/thessley_ad_service/replay_store.py` now supplies the durable nonce
 claim primitive. It serializes claims in SQLite transactions, rejects a
@@ -156,8 +157,15 @@ keep the database in a root-owned, non-group/world-writable service directory.
 key registry and hashed, single-use enrollment codes. Its code-minting method
 does not authenticate administrators; only an admin-authorized caller may
 invoke it. The endpoint, rate limit, and audit record around code creation are
-not implemented yet. Together, these modules still do not provide the HTTP
-routes, AD identity/group lookup, or Windows provider needed for logon.
+not implemented yet. `infra/thessley_ad_service/http_api.py` exposes the first
+endpoint, which consumes the code and stores the enrolled P-256 key.
+`thessley-pam-linux-edit/thessley_pam/listener.py` now
+allows `/thessley-ad/v1/...` routes to register over the same root-only Unix
+socket. Its opt-in `RawBodyRoute` preserves exact HTTPS body bytes and forwards
+only the four whitelisted machine-auth headers. Existing PAM callbacks retain
+their original two-argument form. Machine-authenticated request routes, AD
+identity/group lookup, and the Windows provider needed for logon are still
+absent.
 
 ## Technical gate before passwordless claims
 
