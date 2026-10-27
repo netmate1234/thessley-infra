@@ -36,7 +36,8 @@ The DC VM uses fixed virtual MACs and DHCP. The router-assigned LAN address was 
 1. Confirm the DC is running and still has its reserved LAN address (`192.168.1.79` at last check). Do not start the client if host memory is low; shut down unrelated VMs first.
 2. Log in to the client with its existing local administrator account, open elevated PowerShell, and run `join-domain-client.ps1` from the `THESSLEYJOIN` CD. It sets active adapter DNS resolvers to the DC's LAN address, disables DNS registration on non-LAN adapters, checks the AD SRV record, synchronizes time from the DC, and prompts for the domain Administrator password in the console before joining. If setup fails, it restores prior DNS resolver and registration settings.
 3. After the restart, sign in as `THESSLEYLAB\martin` with the lab test-account password.
-4. From Martin's session, request the test certificate with `certreq.exe -enroll -user -q SmartcardLogon`. This is a lab certificate to validate AD CS and strong mapping; it does not yet implement phone-backed private-key signing.
+4. Run `verify-domain-client.ps1` from PowerShell to check domain membership, LAN DNS, DC ports, secure channel, time, account SID, and any enrolled SmartcardLogon certificate. It is read-only and exits with a nonzero status if a required check fails.
+5. From Martin's session, request the test certificate with `certreq.exe -enroll -user -q SmartcardLogon`. This is a lab certificate to validate AD CS and strong mapping; it does not yet implement phone-backed private-key signing. Rerun the verification script afterward to inspect the certificate's SID mapping extension.
 
 The script prompts for the DSRM and test-user passwords. Local-only credentials are recorded in the ignored `LOCAL-CREDENTIALS.txt`; never commit or distribute that file. The local/domain Administrator password is managed separately.
 
