@@ -52,7 +52,9 @@ try {
     w32tm.exe /resync /rediscover | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Windows time sync failed. Correct the client clock before joining the domain.' }
 
-    $credential = Get-Credential -UserName "$NetbiosName\Administrator" -Message 'Enter the lab domain Administrator password.'
+    $domainAdmin = "$NetbiosName\Administrator"
+    $domainPassword = Read-Host "Enter the lab domain Administrator password for $domainAdmin" -AsSecureString
+    $credential = New-Object System.Management.Automation.PSCredential($domainAdmin, $domainPassword)
     Add-Computer -DomainName $DomainName -Server $DomainController -Credential $credential -PassThru | Out-Host
 } catch {
     foreach ($adapter in $adapters) {
