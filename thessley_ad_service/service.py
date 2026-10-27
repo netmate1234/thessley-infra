@@ -55,7 +55,7 @@ def main() -> int:
         raise RuntimeError("Invalid [directory] options")
 
     from thessley_pam import machine
-    from thessley_pam.listener import SHARED_PORT, listening
+    from thessley_pam.listener import RawBodyRoute as ListenerRawBodyRoute, SHARED_PORT, listening
 
     from .challenges import ChallengeStore
     from .directory import ActiveDirectory, DirectoryConfig, validate_group_sid_allowlist
@@ -83,10 +83,14 @@ def main() -> int:
         lambda: certificate_pin["value"],
         phones,
     )
+    listener_routes = {
+        path: ListenerRawBodyRoute(route.handler, response_wait=route.response_wait)
+        for path, route in routes.items()
+    }
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda _signal, _frame: stop.set())
     signal.signal(signal.SIGINT, lambda _signal, _frame: stop.set())
-    with listening(machine.lan_ip(), routes, SHARED_PORT) as listener:
+    with listening(machine.lan_ip(), listener_routes, SHARED_PORT) as listener:
         certificate_pin["value"] = listener.fingerprint.lower()
         print(f"Thessley AD API registered at https://{service['public_host']}:{listener.port}/", flush=True)
         stop.wait()

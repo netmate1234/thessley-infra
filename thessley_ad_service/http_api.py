@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from collections.abc import Callable
 from urllib.parse import urlencode
 from typing import TYPE_CHECKING
@@ -26,6 +27,19 @@ PHONE_ENROLL_RESPONSE_PATH = "/thessley-ad/v1/enrollments/respond"
 PHONE_ENROLL_STATUS_PATH = "/thessley-ad/v1/enrollments/status"
 PHONE_ENROLL_CONFIRM_PATH = "/thessley-ad/v1/enrollments/confirm"
 PHONE_ENROLL_CANCEL_PATH = "/thessley-ad/v1/enrollments/cancel"
+
+
+@dataclass(frozen=True)
+class RawBodyRoute:
+    """Transport-neutral route that verifies signatures over exact HTTP bytes."""
+
+    handler: Callable[[str, dict, bytes, dict[str, str]], tuple[int, dict]]
+    response_wait: int = 15
+
+    def __post_init__(self) -> None:
+        if (isinstance(self.response_wait, bool) or not isinstance(self.response_wait, int)
+                or not 1 <= self.response_wait <= 125):
+            raise ValueError("Raw route response wait must be between 1 and 125 seconds.")
 
 
 def _authenticated_machine(machine_id: str, timestamp_text: str, nonce: str, signature: str,
@@ -58,8 +72,6 @@ def machine_enrollment_route(registry: "MachineRegistry"):
     itself must have been created by an admin-authorized local caller. The
     machine display name is metadata only and grants no AD rights.
     """
-    from thessley_pam.listener import RawBodyRoute
-
     def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
         if auth_headers:
             return 400, {"result": "error", "message": "Do not send machine-auth headers to enrollment."}
@@ -82,8 +94,6 @@ def machine_enrollment_route(registry: "MachineRegistry"):
 
 def machine_authentication_route(registry: "MachineRegistry", replay_guard: "ReplayGuard"):
     """Return an authenticated machine liveness endpoint for protocol bring-up."""
-    from thessley_pam.listener import RawBodyRoute
-
     def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
         expected = {
             "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
@@ -104,8 +114,6 @@ def machine_authentication_route(registry: "MachineRegistry", replay_guard: "Rep
 def principal_resolve_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                             directory: "ActiveDirectory", allowed_group_sids: frozenset[str]):
     """Resolve a signed SID request using AD as the sole group authority."""
-    from thessley_pam.listener import RawBodyRoute
-
     from .directory import DirectoryUnavailable, PrincipalNotFound, validate_group_sid_allowlist
 
     allowed_group_sids = validate_group_sid_allowlist(allowed_group_sids)
@@ -149,8 +157,6 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                       challenges: "ChallengeStore", server_host: str,
                       server_fingerprint: str | Callable[[], str]):
     """Create a QR link only after the machine, SID, and AD group are verified."""
-    from thessley_pam.listener import RawBodyRoute
-
     from .directory import DirectoryUnavailable, PrincipalNotFound
     from .directory import validate_group_sid_allowlist
 
@@ -220,8 +226,6 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
 
 def phone_response_route(challenges: "ChallengeStore"):
     """Accept one signed approval or a nonce-bound refusal from Android."""
-    from thessley_pam.listener import RawBodyRoute
-
     def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
         if auth_headers or set(body) != {"request_id", "credential_id", "action", "timestamp", "signature", "nonce"}:
             return 400, {"result": "error", "message": "Invalid phone response."}
@@ -246,8 +250,6 @@ def phone_response_route(challenges: "ChallengeStore"):
 def login_result_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                        challenges: "ChallengeStore"):
     """Deliver one result only to the machine that created the request."""
-    from thessley_pam.listener import RawBodyRoute
-
     def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
         expected = {
             "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
@@ -273,7 +275,6 @@ def phone_enrollment_start_route(registry: "MachineRegistry", replay_guard: "Rep
                                  phones: "PhoneRegistry", server_host: str,
                                  server_fingerprint: str | Callable[[], str]):
     """Start first-phone enrollment for an AD-authorized domain SID."""
-    from thessley_pam.listener import RawBodyRoute
     from .directory import DirectoryUnavailable, PrincipalNotFound, validate_group_sid_allowlist
 
     allowed_group_sids = validate_group_sid_allowlist(allowed_group_sids)
@@ -323,8 +324,6 @@ def phone_enrollment_start_route(registry: "MachineRegistry", replay_guard: "Rep
 
 def phone_enrollment_response_route(phones: "PhoneRegistry"):
     """Verify the new Android key and wait for its pairing code to be confirmed on Windows."""
-    from thessley_pam.listener import RawBodyRoute
-
     def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
         expected = {"request_id", "public_key", "algorithm", "label", "timestamp", "proof_signature", "attestation_chain"}
         if (auth_headers or set(body) != expected
@@ -357,8 +356,6 @@ def phone_enrollment_response_route(phones: "PhoneRegistry"):
 def phone_enrollment_status_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                                   phones: "PhoneRegistry"):
     """Expose only the pairing state to the machine that began that enrollment."""
-    from thessley_pam.listener import RawBodyRoute
-
     def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
         expected = {
             "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
@@ -384,8 +381,6 @@ def phone_enrollment_status_route(registry: "MachineRegistry", replay_guard: "Re
 def phone_enrollment_confirm_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                                    phones: "PhoneRegistry"):
     """Activate a staged phone key only after the Windows screen's pairing code matches."""
-    from thessley_pam.listener import RawBodyRoute
-
     def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
         expected = {
             "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
@@ -412,8 +407,6 @@ def phone_enrollment_confirm_route(registry: "MachineRegistry", replay_guard: "R
 def phone_enrollment_cancel_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                                   phones: "PhoneRegistry"):
     """Cancel a pending enrollment from its originating authenticated machine."""
-    from thessley_pam.listener import RawBodyRoute
-
     def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
         expected = {
             "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
@@ -439,7 +432,7 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                   directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                   challenges: "ChallengeStore", server_host: str,
                   server_fingerprint: str | Callable[[], str], phones: "PhoneRegistry") -> dict:
-    """Build the routes to register on the existing pinned listener."""
+    """Build routes without binding them to a particular HTTPS listener."""
     return {
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
         MACHINE_AUTH_PATH: machine_authentication_route(registry, replay_guard),

@@ -15,6 +15,29 @@ Windows login feature.
 | Android link parsing/signing | `thessley-passkey-android/.../PamRequest.kt`, `PamCanonicalString.kt`, `PasskeyViewModel.kt`, and `PinnedClient.kt` | Version-2 PAM links already carry and sign the SID hash, principal type, authority, account name, context, nonce, and action. Retain certificate pinning and biometric key use. |
 | AD/DNS/CA lab | `infra/windows-ad-lab/configure-domain-controller.ps1`, `join-domain-client.ps1`, and `verify-domain-client.ps1` | Use for AD account, DNS, certificate, and connectivity experiments only. |
 
+## Current Windows VM verification (2026-10-27)
+
+- The client is Windows 11 Pro, domain joined, and `Test-ComputerSecureChannel`
+  succeeds. Its active console session is `THESSLEYLAB\martin`; SSH
+  maintenance runs as the distinct local account `MARTIN-WM\martin`.
+- The AD controller is Windows Server 2025. AD DS and AD CS are running;
+  LDAPS on 636 and Global Catalog LDAPS on 3269 accept local connections.
+  The controller has DomainController and KerberosAuthentication certificates.
+- `martin` is in the dedicated `ThessleyADSignInAdmins` group, and the group is
+  mapped to the client's local Administrators group. It is not Domain Admins.
+- The isolated client helper now exposes `enroll-current-user`. It resolves the
+  current process SID, so run it from the signed-in domain account. An SSH
+  maintenance shell running as the similarly named local account has a
+  different SID. The explicit `enroll-phone --user THESSLEYLAB\\martin` path
+  resolves the domain SID from SSH without confusing the two identities.
+- Both enrollment paths were exercised on the client. They stop before creating
+  a phone request because this VM is not paired with an AD API host. The normal
+  Thessley local-account credential provider remains registered.
+- The service's route handlers are now transport-neutral, and the bounded
+  direct-TLS HTTP adapter passes loopback tests. A Windows-hosted service
+  runtime, its protected Windows configuration/state ACLs, and a reachable
+  phone-to-service route still need to be built before pairing can be tested.
+
 ## Safe implementation order
 
 1. (Complete for the TPM VSC baseline) The disposable Windows client is joined
