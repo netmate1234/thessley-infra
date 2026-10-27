@@ -41,7 +41,12 @@ try {
         }
     }
     $srv = Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.$DomainName" -Type SRV -Server $DomainControllerIp -ErrorAction Stop
-    if (-not ($srv | Where-Object { $_.NameTarget.TrimEnd('.') -ieq $DomainController })) {
+    # Resolve-DnsName includes the target's A record alongside the SRV record.
+    # Only SRV records have NameTarget; guard it before calling TrimEnd.
+    if (-not ($srv | Where-Object {
+        $_.Type -eq 'SRV' -and $_.NameTarget -and
+        $_.NameTarget.TrimEnd('.') -ieq $DomainController
+    })) {
         throw "AD DNS did not return $DomainController for $DomainName. Check the DC LAN address and DNS service."
     }
 

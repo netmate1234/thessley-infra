@@ -13,6 +13,31 @@ This is a disposable Windows Server 2025 evaluation lab for validating QR-mediat
 
 The DC VM uses fixed virtual MACs and DHCP. The router-assigned LAN address was `192.168.1.79` during setup; the libvirt management address is `192.168.122.98`. A router DHCP reservation is preferred so the LAN address remains stable across long shutdowns. SSH on the management NIC is allowed only from the hypervisor gateway `192.168.122.1`.
 
+## Access and credentials
+
+From the Ubuntu hypervisor, connect to the lab machines over their management
+addresses with the local debug key:
+
+```bash
+ssh -i ~/.ssh/thessley-vm-debug Administrator@192.168.122.98
+ssh -i ~/.ssh/thessley-vm-debug martin@192.168.122.66
+```
+
+The first command reaches the domain controller; the second reaches the Windows
+client. The client SSH session is the local Windows account `Martin` (the SSH
+username is lowercase `martin`), not the domain test account. The key is stored
+on the hypervisor and is not included in this repository. SSH may request a
+Thessley phone approval; approve that request before continuing.
+
+Lab passwords and account SIDs are kept only in the ignored local file
+`LOCAL-CREDENTIALS.txt` beside this README. It has mode `0600`; it is excluded
+from Git and must not be copied into commits, release packages, or public
+documentation. It records the DC's local/Domain Administrator and DSRM
+credentials, the ordinary domain user `martin`, and the Windows client's local
+administrator credential. Use the domain Administrator credential only for
+joining or administering this disposable lab; use `THESSLEYLAB\martin` for
+ordinary domain sign-in tests.
+
 ## Current lab state
 
 - Forest and DNS: `lab.thessley.test` / `THESSLEYLAB`; AD DS, DNS, KDC, Netlogon, ADWS, and Certificate Services are running.
