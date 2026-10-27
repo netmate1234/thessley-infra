@@ -50,6 +50,47 @@ The DC setup script binds DNS to the LAN IPv4 address and removes the controller
 
 The phone key must authorize a Windows credential that the domain controller can validate through Kerberos PKINIT. A QR approval by itself is not an AD credential. The next client-side work is a Windows credential-provider and remote signing bridge for the phone key, plus account/SID enrollment and revocation in Thessley.
 
+## Standalone Thessley AD sign-in direction
+
+The AD QR sign-in path must not depend on the Drupal server or Drupal user roles.
+Active Directory is the authority for account SIDs, domain groups, and computer
+authorization. AD CS issues the test logon certificates. Use a standalone
+Thessley approval service for phone enrollment and approval; it can run beside
+the existing Thessley PAM service, but it must read authorization directly from
+AD over a protected LDAP connection. Its AD identity should be read-only except
+for narrowly scoped certificate or enrollment operations that are explicitly
+required. Do not install this service on a domain controller for a production
+deployment.
+
+The Windows tile should identify the selected account by its SID and domain,
+request a fresh approval from the standalone Thessley service, and then allow
+Windows to authenticate to the KDC using that account's certificate. It must
+not cache or release the account password as a substitute for certificate
+authentication. Approval-only 2FA and passwordless certificate logon are
+separate milestones: the former gates an existing credential; the latter needs
+Windows to perform PKINIT with the phone-protected private key.
+
+### Next milestones
+
+1. Join the disposable Windows client and validate DNS, time, AD group lookup,
+   and ordinary domain logon.
+2. Issue Martin a SmartcardLogon certificate with a strong SID mapping and
+   validate certificate logon using a Windows-supported key provider. This
+   isolates AD CS/KDC configuration from Thessley phone integration.
+3. Define the standalone service API for pairing a Windows account SID, phone
+   key, and machine key; querying AD group membership; starting and polling a
+   signed phone approval; and revoking either key. Drupal is not in this flow.
+4. Connect the Windows credential provider to that service and prove the
+   phone-held key can complete the certificate signature needed for PKINIT.
+   A custom credential provider alone does not make an Android TEE key appear
+   as a Windows smart card. A supported smart-card/KSP bridge or equivalent
+   signing provider is needed.
+5. Use AD security groups and domain policy to grant logon rights and local
+   administrator membership. Keep PIN/password recovery available until the
+   phone-backed certificate flow is proven through reboot and lock/unlock.
+
+Microsoft references: [smart-card sign-in flow and certificate requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration), [certificate credential serialization](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_certificate_logon), [strong certificate mappings](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-pkca/95c6f0e3-3565-41d7-80ed-2333c4c5e107), and [smart-card minidriver architecture](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview).
+
 Microsoft’s current requirements and flows:
 
 - [Windows smart-card sign-in and certificate requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration)
