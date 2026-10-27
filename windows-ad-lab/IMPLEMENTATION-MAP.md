@@ -61,6 +61,24 @@ References: [Smart-card architecture](https://learn.microsoft.com/en-us/windows/
 [smart-card minidriver overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview),
 and [CNG provider development](https://learn.microsoft.com/en-us/windows/win32/seccng).
 
+### Existing virtual-reader project worth using as a lab harness
+
+The upstream [`vsmartcard`](https://github.com/frankmorgner/vsmartcard)
+project includes a Windows virtual PC/SC reader (`vpcd`) and a separate
+virtual-card endpoint (`vpicc`) that can connect across a network. This could
+help answer the narrow question “can Windows enumerate a remote card through
+PC/SC?” before we write our own reader plumbing. Its Android Remote Smart Card
+Reader is a different feature: it relays the phone's NFC reader to a physical
+contactless card, and does not expose Thessley's Android Keystore key.
+
+Use upstream binaries/source only in the disposable VM and only as a harness;
+do not copy GPL-licensed code into Thessley without a deliberate license
+review. During local tests, verify its listener and block non-loopback access
+with the host firewall. The documented raw TCP transport is not suitable for
+production signing traffic; production would need authenticated, encrypted
+transport, request binding, and the phone's existing biometric approval UI.
+The harness is not a passwordless-login implementation.
+
 ## Required trust checks
 
 - Identify the account by the SID selected by LogonUI, then resolve that SID
