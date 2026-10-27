@@ -168,6 +168,12 @@ class EnrollmentWindow:
             self.root.after(150, self.drain_events)
 
     def finish(self) -> None:
+        self.qr_canvas.delete("all")
+        self.qr_canvas.create_text(140, 140, text="QR code appears here", fill="#555", font=("Segoe UI", 10))
+        self.link.configure(state="normal")
+        self.link.delete(0, "end")
+        self.link.configure(state="readonly")
+        self.copy_button.configure(state="disabled")
         self.start_button.configure(state="normal")
         self.confirm_button.configure(state="disabled")
         self.cancel_button.configure(state="disabled")
