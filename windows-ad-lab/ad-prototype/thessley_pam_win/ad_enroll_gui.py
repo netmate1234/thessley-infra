@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import queue
-import tempfile
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -16,13 +15,12 @@ class EnrollmentWindow:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Thessley · Add phone for Windows sign-in")
-        self.root.geometry("600x560")
-        self.root.minsize(500, 520)
+        self.root.geometry("600x600")
+        self.root.minsize(500, 560)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.cancel = threading.Event()
         self.confirm = threading.Event()
         self.request_id: str | None = None
-        self.svg_path: str | None = None
         self.worker: threading.Thread | None = None
         self.closed = False
 
@@ -36,10 +34,10 @@ class EnrollmentWindow:
             justify="center", wraplength=540,
         ).pack(pady=(0, 4))
 
-        self.qr_canvas = tk.Canvas(root, width=240, height=240, background="white", highlightthickness=1,
+        self.qr_canvas = tk.Canvas(root, width=280, height=280, background="white", highlightthickness=1,
                                    highlightbackground="#888")
         self.qr_canvas.pack(pady=3)
-        self.qr_canvas.create_text(120, 120, text="QR code appears here", fill="#555", font=("Segoe UI", 10))
+        self.qr_canvas.create_text(140, 140, text="QR code appears here", fill="#555", font=("Segoe UI", 10))
 
         link_row = ttk.Frame(root)
         link_row.pack(fill="x", padx=14, pady=(3, 4))
@@ -47,8 +45,6 @@ class EnrollmentWindow:
         self.link.pack(side="left", fill="x", expand=True)
         self.copy_button = ttk.Button(link_row, text="Copy link", command=self.copy_link, state="disabled")
         self.copy_button.pack(side="left", padx=(8, 0))
-        self.svg_button = ttk.Button(link_row, text="Open SVG QR", command=self.open_svg, state="disabled")
-        self.svg_button.pack(side="left", padx=(8, 0))
 
         self.code_label = ttk.Label(root, text="", font=("Segoe UI", 20, "bold"))
         self.code_label.pack(pady=(0, 1))
@@ -93,10 +89,9 @@ class EnrollmentWindow:
             sid = ad_cli._current_user_sid()
             started = ad_agent.start_phone_enrollment(sid)
             self.request_id = started["request_id"]
-            rows = qr.bitmap_rows(started["link"], border=4)
+            rows = qr.bitmap_rows(started["link"], border=2)
             if not rows:
                 raise RuntimeError("The QR generator is unavailable. Use the displayed link instead.")
-            self.svg_path = self.write_svg(started["link"], started["request_id"])
             self.events.put(("started", (started["link"], rows, started["authority"], started["username"])))
 
             while not self.cancel.is_set():
@@ -126,32 +121,15 @@ class EnrollmentWindow:
         self.qr_canvas.delete("all")
         width = max(len(row) for row in rows)
         height = len(rows)
-        unit = max(1, min(4, 220 // max(width, height)))
+        unit = max(1, min(5, 260 // max(width, height)))
         size_x, size_y = width * unit, height * unit
-        left, top = (240 - size_x) // 2, (240 - size_y) // 2
+        left, top = (280 - size_x) // 2, (280 - size_y) // 2
         self.qr_canvas.create_rectangle(left, top, left + size_x, top + size_y, fill="white", outline="")
         for y, row in enumerate(rows):
             for x, pixel in enumerate(row):
                 if pixel == "1":
                     x0, y0 = left + x * unit, top + y * unit
                     self.qr_canvas.create_rectangle(x0, y0, x0 + unit, y0 + unit, fill="black", outline="")
-
-    @staticmethod
-    def write_svg(link: str, request_id: str) -> str:
-        library = qr.qrcode
-        if library is None:
-            raise RuntimeError("The QR generator is unavailable.")
-        try:
-            from qrcode.image.svg import SvgPathImage
-            code = library.QRCode(error_correction=library.constants.ERROR_CORRECT_M, border=4, box_size=8)
-            code.add_data(link)
-            code.make(fit=True)
-            image = code.make_image(image_factory=SvgPathImage)
-            path = os.path.join(tempfile.gettempdir(), f"thessley-ad-enroll-{request_id}.svg")
-            image.save(path)
-            return path
-        except (OSError, ImportError, ValueError) as exc:
-            raise RuntimeError(f"Could not create the SVG QR: {exc}") from exc
 
     def drain_events(self) -> None:
         try:
@@ -164,7 +142,6 @@ class EnrollmentWindow:
                     self.link.insert(0, link)
                     self.link.configure(state="readonly")
                     self.copy_button.configure(state="normal")
-                    self.svg_button.configure(state="normal")
                     self.status.configure(text=f"Scan for {authority}\\{username} with Thessley Passkey, then approve Add phone.")
                 elif name == "waiting":
                     self.status.configure(text="Waiting for the phone to approve enrollment…")
@@ -199,14 +176,6 @@ class EnrollmentWindow:
         self.root.clipboard_clear()
         self.root.clipboard_append(self.link.get())
         self.status.configure(text="Enrollment link copied. It expires when the request ends.")
-
-    def open_svg(self) -> None:
-        if not self.svg_path:
-            return
-        try:
-            os.startfile(self.svg_path)  # type: ignore[attr-defined]
-        except (AttributeError, OSError) as exc:
-            messagebox.showerror("Could not open SVG", str(exc))
 
     def confirm_match(self) -> None:
         if messagebox.askyesno("Confirm pairing", "Do the phone and this PC show the same pairing code?"):
