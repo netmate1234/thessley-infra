@@ -1,0 +1,31 @@
+[Unit]
+Description=Thessley standalone Active Directory sign-in API
+After=network-online.target thessley-pam-approvals.service
+Wants=network-online.target
+Requires=thessley-pam-approvals.service
+
+[Service]
+Type=simple
+ExecStart=/opt/thessley-ad/venv/bin/python -m thessley_ad_service.service
+WorkingDirectory=/opt/thessley-ad
+Environment=PYTHONPATH=/opt/thessley-ad:/usr/local/lib/thessley-pam
+User=root
+Group=root
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/thessley-ad
+
+[Install]
+WantedBy=multi-user.target

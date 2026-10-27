@@ -1,0 +1,15 @@
+[service]
+# Address reachable by the Windows machines and enrolled phones.
+public_host = "192.168.1.200"
+# Use immutable AD security group SIDs. Never use group names from clients.
+allowed_group_sids = ["S-1-5-21-111111111-222222222-333333333-512"]
+
+[directory]
+# Must resolve to the Global Catalog and match its LDAPS certificate SAN.
+host = "thessley-dc1.lab.thessley.test"
+base_dn = "DC=lab,DC=thessley,DC=test"
+bind_dn = "CN=Thessley Read Only,OU=Service Accounts,DC=lab,DC=thessley,DC=test"
+password_file = "/etc/thessley-ad/ldap-bind-password"
+ca_file = "/etc/thessley-ad/domain-ca.pem"
+# NetBIOS/domain authority shown in the Android approval dialog.
+authority = "THESSLEYLAB"

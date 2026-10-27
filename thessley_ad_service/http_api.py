@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from urllib.parse import urlencode
 from typing import TYPE_CHECKING
 
@@ -139,7 +140,8 @@ def principal_resolve_route(registry: "MachineRegistry", replay_guard: "ReplayGu
 
 def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                       directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
-                      challenges: "ChallengeStore", server_host: str, server_fingerprint: str):
+                      challenges: "ChallengeStore", server_host: str,
+                      server_fingerprint: str | Callable[[], str]):
     """Create a QR link only after the machine, SID, and AD group are verified."""
     from thessley_pam.listener import RawBodyRoute
 
@@ -149,8 +151,7 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
     allowed_group_sids = validate_group_sid_allowlist(allowed_group_sids)
     if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", server_host):
         raise ValueError("Invalid AD service host")
-    if not re.fullmatch(r"[a-f0-9]{64}", server_fingerprint):
-        raise ValueError("Invalid AD service certificate fingerprint")
+    fingerprint_provider = server_fingerprint if callable(server_fingerprint) else lambda: server_fingerprint
 
     def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
         expected = {
@@ -169,6 +170,9 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         machine_name = registry.machine_name(machine_id)
         if not machine_name:
             return 401, {"result": "error", "message": "Machine authentication failed."}
+        fingerprint = fingerprint_provider()
+        if not isinstance(fingerprint, str) or not re.fullmatch(r"[a-f0-9]{64}", fingerprint):
+            return 503, {"result": "error", "message": "The approval certificate is not ready."}
         try:
             principal = directory.resolve_user_sid(body["sid"])
         except PrincipalNotFound:
@@ -190,7 +194,7 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         link = "thessleypam://login?" + urlencode({
             "h": server_host,
             "p": "47810",
-            "fp": server_fingerprint,
+            "fp": fingerprint,
             "id": challenge["request_id"],
             "n": challenge["nonce"],
             "m": machine_id,
@@ -259,7 +263,8 @@ def login_result_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
 
 def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                   directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
-                  challenges: "ChallengeStore", server_host: str, server_fingerprint: str) -> dict:
+                  challenges: "ChallengeStore", server_host: str,
+                  server_fingerprint: str | Callable[[], str]) -> dict:
     """Build the routes to register on the existing pinned listener."""
     return {
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),

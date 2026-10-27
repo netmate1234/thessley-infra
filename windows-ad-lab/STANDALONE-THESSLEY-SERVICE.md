@@ -94,19 +94,20 @@ pinning and a unique machine credential for every Windows computer:
 
 - `POST /thessley-ad/v1/machines/enroll` — pair a machine key to a short-lived
   administrator-authorized enrollment code.
-- `POST /thessley-ad/v1/principals/resolve` — submit the domain and SID hash;
-  return canonical identity and current group/computer authorization from
-  protected LDAP/AD queries.
-- `POST /thessley-ad/v1/phones/pair` — bind an Android public key to a domain
-  SID and permitted group/computer scope after matching one-time codes.
+- `POST /thessley-ad/v1/machines/authenticate` — signed machine liveness check.
+- `POST /thessley-ad/v1/principals/resolve` — submit the Windows SID; return
+  canonical identity and current group authorization from protected LDAP/AD
+  queries.
+- Phone-key enrollment routes — **not implemented yet**. The Android key must
+  be enrolled only after a signed proof and matching six-digit code are
+  confirmed on the Windows client.
 - `POST /thessley-ad/v1/requests` — create a one-use interactive-login or
   unlock challenge, returning the standard Thessley PAM v2 link fields.
-- `POST /thessley-ad/v1/requests/{id}/result` — machine-authenticated poll or
-  response endpoint; approval is returned only to the machine that created
-  the request.
-- `DELETE /thessley-ad/v1/phones/{id}` and `DELETE
-  /thessley-ad/v1/machines/{id}` — revoke credentials and expire pending
-  requests.
+- `POST /thessley-ad/v1/requests/respond` — accept the Android-signed response.
+- `POST /thessley-ad/v1/requests/result` — machine-authenticated poll; approval
+  is returned only once to the machine that created the request.
+- Local root-only admin CLI — issue machine codes and revoke machine or phone
+  keys. No remote deletion endpoint is implemented.
 
 The phone callback can use the existing pinned PAM listener and its compatible
 v2 signature format. The machine API uses the per-machine P-256 request
@@ -148,33 +149,31 @@ callback; it has no process-local production fallback. Machine key generation
 and storage should use the Windows TPM/CNG provider where available, with a
 separately approved enrollment flow and rotation/revocation semantics.
 
-`infra/thessley_ad_service/replay_store.py` now supplies the durable nonce
-claim primitive. It serializes claims in SQLite transactions, rejects a
-duplicate `(machine_id, nonce)`, and refuses an unsafe database directory or
-file. A future service must construct `ReplayGuard(replay_store.claim)` and
-keep the database in a root-owned, non-group/world-writable service directory.
-`infra/thessley_ad_service/machine_registry.py` adds a separate SQLite machine
-key registry and hashed, single-use enrollment codes. Its code-minting method
-does not authenticate administrators; only an admin-authorized caller may
-invoke it. The endpoint, rate limit, and audit record around code creation are
-not implemented yet. `infra/thessley_ad_service/http_api.py` exposes the first
-endpoint, which consumes the code and stores the enrolled P-256 key. It also
-exposes `/machines/authenticate`, a signed, replay-protected liveness check to
-bring up machine authentication before adding login-sensitive endpoints.
-`thessley-pam-linux-edit/thessley_pam/listener.py` now
-allows `/thessley-ad/v1/...` routes to register over the same root-only Unix
-socket. Its opt-in `RawBodyRoute` preserves exact HTTPS body bytes and forwards
-only the four whitelisted machine-auth headers. Existing PAM callbacks retain
-their original two-argument form. `/principals/resolve` now verifies the
-machine signature, resolves the user SID over LDAPS, and returns an
-authorization boolean based on a server-side group-SID allowlist. It does not
-return client-supplied group claims. `/requests` creates an interactive or
-unlock challenge only for an allowed AD user; `/requests/respond` verifies the
-phone's SID-bound v2 signature; `/requests/result` gives the initiating
-machine one authenticated, one-use result. `challenges.py` stores request state
-and `phone_registry.py` binds phone keys to the exact machine and SID.
-Phone-key enrollment still needs its QR/pairing flow and audit trail. The
-Windows agent and passwordless credential provider are still absent.
+`infra/thessley_ad_service/replay_store.py` supplies durable nonce claims in
+SQLite; duplicate `(machine_id, nonce)` pairs are rejected. The service runtime
+and systemd unit are in `infra/thessley_ad_service/service.py` and
+`thessley-ad.service`; the installer stages them but does not enable or start
+the service. The local admin CLI can issue one-use machine codes and revoke
+machine/phone credentials. Code issuance is root-only; there is no remote
+machine-code endpoint.
+
+The API currently exposes machine enrollment, signed machine authentication,
+SID/group resolution over LDAPS, login challenge creation, Android response
+verification, and one-use result polling. SQLite stores the machine registry,
+phone registry, replay claims, and challenge state in a root-only service
+directory. The optional raw-body listener route preserves exact HTTPS request
+bytes and forwards only the four whitelisted machine-auth headers through its
+root-only Unix socket. Existing Linux PAM routes retain their existing
+behavior; this adapter is service plumbing and is not the Windows sign-in
+implementation.
+
+The Windows repository now contains `thessley_pam_win/ad_agent.py` plus
+`ad-enroll` and `ad-status` commands. The client pins the service certificate,
+stores its machine signing key with machine-scope DPAPI, and can create and poll
+SID-bound requests. It is not yet connected to the Windows credential provider.
+Phone-key enrollment still needs its signed QR/pairing flow and audit trail.
+The passwordless credential provider/PKINIT bridge is also still absent, so
+the project does not yet provide Windows AD sign-in.
 
 `infra/thessley_ad_service/directory.py` uses LDAPS to a Global Catalog on port
 3269 with certificate validation required and a root-only bind-password file.
