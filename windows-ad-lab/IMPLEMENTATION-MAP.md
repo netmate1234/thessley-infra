@@ -17,11 +17,12 @@ Windows login feature.
 
 ## Safe implementation order
 
-1. (AD foundation and certificate verified) The disposable Windows client is
-   joined and its secure channel, DNS, time, and interactive domain-user sign-in
-   are verified. SmartcardLogon certificates with matching SID extensions and
-   non-exportable private keys are present in the domain user's certificate
-   store. Next test certificate logon through a Windows-supported provider.
+1. (Complete for the TPM VSC baseline) The disposable Windows client is joined
+   and its secure channel, DNS, time, and interactive domain-user sign-in are
+   verified. A TPM virtual smart card has a SmartcardLogon certificate with the
+   correct account mapping and a non-exportable key. Windows sign-in succeeded;
+   the DC recorded PKINIT pre-authentication type 16 and the matching thumbprint.
+   This proves the AD CS/KDC path, not phone-held key signing.
 2. Add a new standalone Thessley AD service component, separate from
    `drupal_agent.py` and Drupal APIs. Put its persistent data in a dedicated
    store, not the generic per-Windows-user PAM device database.
