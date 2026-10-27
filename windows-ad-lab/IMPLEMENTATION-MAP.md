@@ -23,6 +23,10 @@ Windows login feature.
 - The AD controller is Windows Server 2025. AD DS and AD CS are running;
   LDAPS on 636 and Global Catalog LDAPS on 3269 accept local connections.
   The controller has DomainController and KerberosAuthentication certificates.
+- The DC currently has LAN address `192.168.1.79` and the client has
+  `192.168.1.103`. The phone's Wi-Fi can reach the DC's LDAPS ports and the
+  client's TCP SSH port; ping is filtered. These LAN addresses come from DHCP,
+  so reserve them on the router before relying on them across VM restarts.
 - `martin` is in the dedicated `ThessleyADSignInAdmins` group, and the group is
   mapped to the client's local Administrators group. It is not Domain Admins.
 - The isolated client helper now exposes `enroll-current-user`. It resolves the

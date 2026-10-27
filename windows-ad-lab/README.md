@@ -11,7 +11,14 @@ This is a disposable Windows Server 2025 evaluation lab for validating QR-mediat
 - Input layout: Swedish (`sv-SE`)
 - Evaluation media: Windows Server 2025 Standard Evaluation Core
 
-The DC VM uses fixed virtual MACs and DHCP. The router-assigned LAN address was `192.168.1.79` during setup; the libvirt management address is `192.168.122.98`. A router DHCP reservation is preferred so the LAN address remains stable across long shutdowns. SSH on the management NIC is allowed only from the hypervisor gateway `192.168.122.1`.
+The DC VM uses fixed virtual MACs and DHCP. Its direct LAN address is
+`192.168.1.79` (verified 2026-10-27); the libvirt management address is
+`192.168.122.98`. The Windows client is also directly on the LAN at
+`192.168.1.103`, as well as its management address `192.168.122.66`. The
+phone reached the DC's LDAPS ports from Wi-Fi and reached the client over TCP.
+A router DHCP reservation is preferred so the DC's LAN address remains stable
+across long shutdowns. SSH on the management NIC is allowed only from the
+hypervisor gateway `192.168.122.1`.
 
 ## Access and credentials
 
