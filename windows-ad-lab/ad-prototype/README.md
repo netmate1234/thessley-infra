@@ -20,9 +20,11 @@ Run from an elevated PowerShell window to pair the machine:
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' pair-machine --server 'https://AD-SERVICE-HOST:47810' --tls-sha256 'CERTIFICATE-SHA256'
 ```
 
-For ordinary self-enrollment, sign in to the domain account and start the GUI
-from its desktop. The GUI resolves the current Windows SID, displays a scannable
-QR and pairing code, and refuses a local-account session. To start it, run:
+For ordinary self-enrollment, sign in to the domain account and launch
+**Thessley → Add phone for Windows sign-in** from the Windows Start menu. The
+shortcut uses `pythonw.exe`, so it opens the GUI without a PowerShell or console
+window. It resolves the current Windows SID, displays a scannable QR and pairing
+code, and refuses a local-account session. To start it manually, run:
 
 ```powershell
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-enroll.cmd'
@@ -41,5 +43,6 @@ enrollment for another authorized domain account remains available.
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' approval-test --user 'THESSLEYLAB\martin'
 ```
 
-`activate.ps1` stages and validates a replacement before moving it into place;
-the current prototype remains available for local sign-in throughout.
+`activate.ps1` stages and validates a replacement before moving it into place,
+then installs the all-users Start menu shortcut and Thessley icon. The current
+local-account sign-in remains available throughout.
