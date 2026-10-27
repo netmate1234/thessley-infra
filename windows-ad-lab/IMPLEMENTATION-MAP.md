@@ -17,10 +17,11 @@ Windows login feature.
 
 ## Safe implementation order
 
-1. (AD foundation complete) The disposable Windows client is joined and its
-   secure channel, DNS, time, and test user SID are verified. A SmartcardLogon
-   certificate was issued with the matching SID security extension; verify its
-   private-key presence in the domain user's certificate store next.
+1. (AD foundation and certificate verified) The disposable Windows client is
+   joined and its secure channel, DNS, time, and interactive domain-user sign-in
+   are verified. SmartcardLogon certificates with matching SID extensions and
+   non-exportable private keys are present in the domain user's certificate
+   store. Next test certificate logon through a Windows-supported provider.
 2. Add a new standalone Thessley AD service component, separate from
    `drupal_agent.py` and Drupal APIs. Put its persistent data in a dedicated
    store, not the generic per-Windows-user PAM device database.

@@ -10,6 +10,16 @@ $smartCardOid = '1.3.6.1.4.1.311.20.2.2'
 $clientAuthOid = '1.3.6.1.5.5.7.3.2'
 $sidExtensionOid = '1.3.6.1.4.1.311.25.2'
 
+function Get-CertificateEkuOids {
+    param([System.Security.Cryptography.X509Certificates.X509Certificate2] $Certificate)
+    $extension = $Certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' } | Select-Object -First 1
+    if (-not $extension) { return @() }
+    $eku = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new(
+        $extension, $extension.Critical
+    )
+    return @($eku.EnhancedKeyUsages | ForEach-Object { $_.Value })
+}
+
 Write-Host 'Read-only SmartcardLogon certificate verification' -ForegroundColor Cyan
 Write-Host "Current account: $($identity.Name)"
 Write-Host "Current SID: $($identity.User.Value)"
@@ -20,7 +30,7 @@ if ($identity.Name -ine $expectedName) {
 }
 
 $certificates = @(Get-ChildItem Cert:\CurrentUser\My | Where-Object {
-    @($_.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId.Value }) -contains $smartCardOid
+    (Get-CertificateEkuOids -Certificate $_) -contains $smartCardOid
 })
 
 if (-not $certificates) {
@@ -31,7 +41,7 @@ if (-not $certificates) {
 $failed = $false
 foreach ($certificate in $certificates) {
     $upn = $certificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::UpnName, $false)
-    $ekuOids = @($certificate.EnhancedKeyUsageList | ForEach-Object { $_.ObjectId.Value })
+    $ekuOids = Get-CertificateEkuOids -Certificate $certificate
     $sidExtension = $certificate.Extensions | Where-Object { $_.Oid.Value -eq $sidExtensionOid } | Select-Object -First 1
     $embeddedSid = if ($sidExtension) {
         $raw = [Text.Encoding]::ASCII.GetString($sidExtension.RawData)
