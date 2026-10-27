@@ -41,6 +41,26 @@ Windows login feature.
    requests, network loss, phone revocation, machine revocation, and fallback.
    Keep this on the disposable VM until each path is repeatable.
 
+## Windows cryptographic bridge choice
+
+Prefer the Windows smart-card Base CSP/KSP plus a card minidriver if the
+prototype can expose the phone key through a supported PC/SC reader path. The
+minidriver is the card-specific interface Windows already uses for smart-card
+cryptographic operations, including ECC. This does **not** make a Windows
+Credential Provider alone sufficient: a usable reader/card interface and the
+exact smart-card logon serialization path still need to be demonstrated.
+
+A custom CNG KSP is an alternate route, not a small wrapper around the existing
+credential provider. It needs Microsoft's Cryptographic Provider Development
+Kit and must implement key discovery, properties, signing, error handling, and
+provider registration. Do not choose it just to avoid understanding the
+minidriver/PC/SC boundary. The existing `ThessleyCredential.cpp` remains an
+approval-gated password provider and must not be changed into a password cache.
+
+References: [Smart-card architecture](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-architecture),
+[smart-card minidriver overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview),
+and [CNG provider development](https://learn.microsoft.com/en-us/windows/win32/seccng).
+
 ## Required trust checks
 
 - Identify the account by the SID selected by LogonUI, then resolve that SID

@@ -50,6 +50,17 @@ account SID and must not serialize, cache, or release a domain password.
    sign in and which local groups it receives. Thessley does not replace AD
    policy with a separate role database.
 
+The preferred Windows crypto integration to investigate is the built-in
+smart-card Base CSP/KSP with a Thessley card minidriver. Windows documents the
+minidriver as the card-specific interface used by the Base CSP/KSP and as the
+normal route for smart-card ECC. This still requires a PC/SC reader/card path
+that can carry requests between the Windows logon environment and the phone;
+the Android app does not appear to Windows as a reader today. A custom CNG KSP
+is a separate, larger provider-development effort using Microsoft's CNG
+Provider Development Kit. Prototype the reader/minidriver boundary before
+committing to either implementation. Keep the current password-based tile
+separate throughout.
+
 Pairing must bind the phone public key to the exact domain SID and the
 authorized computer/group scope. A local account with the same spelling is a
 different identity. Enrollment, approval, and revocation are separate,
@@ -109,9 +120,10 @@ The current C credential provider submits a password credential after
 approval. That is approval-gated password sign-in, not passwordless AD
 authentication. Do not adapt it to release a cached password. First validate
 the phone-key certificate and strong SID mapping with AD CS, then implement a
-Windows-supported CNG KSP or smart-card minidriver bridge that can obtain a
-phone signature for a live PKINIT challenge. Test interactive sign-in,
-workstation unlock, revocation, offline behavior, and recovery separately.
+Windows-supported smart-card minidriver bridge (preferred) or a separate CNG
+KSP that can obtain a phone signature for a live PKINIT challenge. Test
+interactive sign-in, workstation unlock, revocation, offline behavior, and
+recovery separately.
 
 ### Android phone-key constraints
 
