@@ -113,3 +113,33 @@ Windows-supported CNG KSP or smart-card minidriver bridge that can obtain a
 phone signature for a live PKINIT challenge. Test interactive sign-in,
 workstation unlock, revocation, offline behavior, and recovery separately.
 
+### Android phone-key constraints
+
+The Android app's current computer key is a P-256 ECDSA Android Keystore key.
+It is non-exportable and each signing operation is gated by a fresh strong
+biometric. StrongBox is preferred; the app now falls back to the TEE path only
+when Android specifically reports that StrongBox is unavailable. Other key
+generation errors fail instead of silently lowering protection. The service
+must verify the attestation chain, nonce, public-key match, and security level
+itself; client-side assurance is not a server trust decision.
+
+The current Windows v2 signature is only an approval over the Thessley
+canonical request. It is not the PKINIT signature. The smart-card minidriver
+must pass the actual, fresh PKINIT signing operation to the phone, and the app
+must show the account, domain, machine, and sign-in/unlock context before
+biometric confirmation. The phone's PKINIT signature must cover the exact DER
+AuthPack that the KDC verifies. Separately bind the response envelope to its
+AuthPack hash, certificate key, request ID, SID hash, machine ID, and short
+expiry. Do not append Thessley metadata to the PKINIT AuthPack or accept a
+generic approval signature as a substitute for the KDC signature.
+
+The phone's EC certificate path needs its own Windows test before building the
+minidriver: Windows requires ECC smart-card logon to be enabled by policy, and
+cached/offline sign-in with an ECDSA key needs its associated ECDH key. First
+issue a test certificate for the P-256 public key and verify online PKINIT on
+the lab domain. If offline logon is required, design and test the paired ECDH
+key explicitly; do not export or copy the phone's private signing key to
+Windows. The current TPM-VSC test proves the AD/KDC baseline only.
+
+References: [Windows ECC smart-card policy](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-group-policy-and-registry-settings), [Windows smart-card sign-in certificate requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration), [Smart Card Minidriver overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview), and [RFC 4556 PKINIT](https://www.rfc-editor.org/rfc/rfc4556.html).
+
