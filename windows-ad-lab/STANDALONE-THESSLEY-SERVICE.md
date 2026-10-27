@@ -168,9 +168,10 @@ behavior; this adapter is service plumbing and is not the Windows sign-in
 implementation.
 
 The Windows repository now contains `thessley_pam_win/ad_agent.py` plus
-`ad-enroll` and `ad-status` commands. The client pins the service certificate,
-stores its machine signing key with machine-scope DPAPI, and can create and poll
-SID-bound requests. It is not yet connected to the Windows credential provider.
+`ad-enroll`, `ad-status`, and `ad-check` commands. The client pins the service
+certificate, stores its machine signing key with machine-scope DPAPI, verifies
+signed machine connectivity, and can create and poll SID-bound requests. It is
+not yet connected to the Windows credential provider.
 Phone-key enrollment still needs its signed QR/pairing flow and audit trail.
 The passwordless credential provider/PKINIT bridge is also still absent, so
 the project does not yet provide Windows AD sign-in.
