@@ -219,11 +219,11 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
 
 
 def phone_response_route(challenges: "ChallengeStore"):
-    """Accept the signed Android v2 response; a request can transition once."""
+    """Accept one signed approval or a nonce-bound refusal from Android."""
     from thessley_pam.listener import RawBodyRoute
 
     def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
-        if auth_headers or set(body) != {"request_id", "credential_id", "action", "timestamp", "signature"}:
+        if auth_headers or set(body) != {"request_id", "credential_id", "action", "timestamp", "signature", "nonce"}:
             return 400, {"result": "error", "message": "Invalid phone response."}
         timestamp = body.get("timestamp")
         if isinstance(timestamp, bool) or not isinstance(timestamp, int):
@@ -234,6 +234,7 @@ def phone_response_route(challenges: "ChallengeStore"):
             action=body.get("action"),
             timestamp=timestamp,
             signature_b64=body.get("signature"),
+            nonce=body.get("nonce"),
         )
         if not accepted:
             return 409, {"result": "error", "message": "The response was invalid, expired, or already used."}

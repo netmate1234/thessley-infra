@@ -136,12 +136,19 @@ class ChallengeStore:
             connection.close()
 
     def respond(self, *, request_id: str, credential_id: str, action: str, timestamp: int,
-                signature_b64: str, now: float | None = None) -> bool:
+                signature_b64: str | None, nonce: str | None = None, now: float | None = None) -> bool:
         if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
             return False
         if not isinstance(credential_id, str) or not _CREDENTIAL_ID.fullmatch(credential_id):
             return False
         if action not in ("approve", "deny") or not timestamp_is_fresh(timestamp, now):
+            return False
+        if action == "approve" and (not isinstance(signature_b64, str) or nonce is not None):
+            return False
+        if action == "deny" and not (
+            (isinstance(signature_b64, str) and nonce is None)
+            or (signature_b64 is None and isinstance(nonce, str))
+        ):
             return False
 
         connection = self._connect()
@@ -153,23 +160,28 @@ class ChallengeStore:
             ).fetchone()
             if row is None:
                 return False
-            machine_id, principal_id, principal_type, authority, username, context, nonce, expires_at, status = row
+            machine_id, principal_id, principal_type, authority, username, context, challenge_nonce, expires_at, status = row
             current = time.time() if now is None else now
             if status != "pending" or expires_at <= current:
                 return False
             public_key = self.public_key_lookup(credential_id, machine_id, principal_id)
             if not public_key:
                 return False
-            try:
-                message = canonical_phone_message(
-                    type_="login", request_id=request_id, machine_id=machine_id,
-                    principal_id=principal_id, principal_type=principal_type, authority=authority,
-                    username=username, context=context, nonce=nonce, timestamp=timestamp, action=action,
-                )
-            except ValueError:
-                return False
-            if not verify_phone_signature(public_key, signature_b64, message):
-                return False
+            if action == "deny" and signature_b64 is None:
+                if not isinstance(nonce, str) or not secrets.compare_digest(nonce, challenge_nonce):
+                    return False
+            else:
+                try:
+                    message = canonical_phone_message(
+                        type_="login", request_id=request_id, machine_id=machine_id,
+                        principal_id=principal_id, principal_type=principal_type, authority=authority,
+                        username=username, context=context, nonce=challenge_nonce,
+                        timestamp=timestamp, action=action,
+                    )
+                except ValueError:
+                    return False
+                if not verify_phone_signature(public_key, signature_b64, message):
+                    return False
 
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(

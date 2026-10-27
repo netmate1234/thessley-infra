@@ -20,9 +20,13 @@ Run from an elevated PowerShell window to pair the machine:
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' pair-machine --server 'https://AD-SERVICE-HOST:47810' --tls-sha256 'CERTIFICATE-SHA256'
 ```
 
-Then enroll a domain account's phone and test approval:
+For ordinary self-enrollment, run the command while signed in to the domain
+account. It resolves the current Windows SID automatically; the service checks
+the account's AD group membership. Admin-assisted enrollment for another
+authorized domain account remains available.
 
 ```powershell
+& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' enroll-current-user
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' enroll-phone --user 'THESSLEYLAB\martin'
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' approval-test --user 'THESSLEYLAB\martin'
 ```
