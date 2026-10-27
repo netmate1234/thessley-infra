@@ -165,8 +165,20 @@ bring up machine authentication before adding login-sensitive endpoints.
 allows `/thessley-ad/v1/...` routes to register over the same root-only Unix
 socket. Its opt-in `RawBodyRoute` preserves exact HTTPS body bytes and forwards
 only the four whitelisted machine-auth headers. Existing PAM callbacks retain
-their original two-argument form. Login challenge routes, AD identity/group
-lookup, and the Windows provider needed for logon are still absent.
+their original two-argument form. `/principals/resolve` now verifies the
+machine signature, resolves the user SID over LDAPS, and returns an
+authorization boolean based on a server-side group-SID allowlist. It does not
+return client-supplied group claims. The Windows provider and login challenge
+routes are still absent.
+
+`infra/thessley_ad_service/directory.py` uses LDAPS to a Global Catalog on port
+3269 with certificate validation required and a root-only bind-password file.
+It reads `tokenGroups` for the signed-in SID, so the allowlist decision includes
+nested and primary group membership. This AD attribute is a computed operation
+and should be queried when a login begins, not on each phone poll. The service
+account must be granted read-only directory access. See Microsoft's
+[`tokenGroups` documentation](https://learn.microsoft.com/en-us/windows/win32/ad/security-properties)
+and the [`ldap3` TLS configuration](https://ldap3.readthedocs.io/en/latest/ssltls.html).
 
 ## Technical gate before passwordless claims
 
