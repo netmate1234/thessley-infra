@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import re
 import sqlite3
 import stat
@@ -92,6 +93,8 @@ class SQLiteReplayStore:
         if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
             return False
         now = time.time()
+        if not math.isfinite(expires_at):
+            return False
         if expires_at <= now or expires_at > now + 120:
             return False
 

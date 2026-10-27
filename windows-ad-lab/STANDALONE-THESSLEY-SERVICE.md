@@ -117,11 +117,10 @@ rate limits, and never accept a client-supplied group list as authority. Keep
 the service identity read-only in AD unless a narrowly scoped certificate
 enrollment operation is separately required.
 
-The first standalone code component is `infra/thessley_ad_service/protocol.py`.
-It validates SID-derived principal IDs and reproduces the Android
-`thessley_win_pam_v2` canonical message and P-256 signature checks. It is only
-the cryptographic protocol layer: it does not yet provide network routes,
-machine authentication, persistent enrollment storage, or AD policy queries.
+`infra/thessley_ad_service/protocol.py` validates SID-derived principal IDs
+and reproduces the Android `thessley_win_pam_v2` canonical message and P-256
+signature checks. It remains a transport- and storage-free phone-signature
+layer; it does not provide network routes or AD policy queries.
 
 The next component, `infra/thessley_ad_service/machine_auth.py`, defines the
 machine-to-service request signature contract. Windows signs the exact
@@ -153,7 +152,12 @@ claim primitive. It serializes claims in SQLite transactions, rejects a
 duplicate `(machine_id, nonce)`, and refuses an unsafe database directory or
 file. A future service must construct `ReplayGuard(replay_store.claim)` and
 keep the database in a root-owned, non-group/world-writable service directory.
-This still does not provide the trusted machine-key registry or any HTTP route.
+`infra/thessley_ad_service/machine_registry.py` adds a separate SQLite machine
+key registry and hashed, single-use enrollment codes. Its code-minting method
+does not authenticate administrators; only an admin-authorized caller may
+invoke it. The endpoint, rate limit, and audit record around code creation are
+not implemented yet. Together, these modules still do not provide the HTTP
+routes, AD identity/group lookup, or Windows provider needed for logon.
 
 ## Technical gate before passwordless claims
 
