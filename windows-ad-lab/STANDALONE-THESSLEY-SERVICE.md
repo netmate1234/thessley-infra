@@ -1,0 +1,107 @@
+# Standalone Thessley service for AD QR sign-in
+
+This prototype has no Drupal dependency. Drupal URLs, Drupal accounts, Drupal
+roles, and the Drupal Windows Access module must not be used by the AD sign-in
+path.
+
+## Responsibilities
+
+- **Active Directory** is authoritative for domain users, SIDs, security groups,
+  computer accounts, and Windows logon rights.
+- **AD CS** issues the lab logon certificate after the user identity and SID
+  mapping are verified.
+- **Thessley service on the existing Linux host** handles phone enrollment,
+  signed approval requests, revocation, and audit. It is a separate service
+  from Drupal, even if both happen to run on the same physical Orange Pi.
+- **Windows client agent and credential provider** identify the selected
+  principal by SID, consult the Thessley service, and invoke a Windows
+  certificate provider for the KDC logon. They do not send or cache the
+  account password.
+- **Android app** remains the phone authenticator. The app signs an
+  origin-pinned Thessley PAM request; the private phone key stays in Android
+  Keystore/TEE.
+
+## Request and enrollment flow
+
+1. The Windows agent resolves the selected account to its SID and domain,
+   creates a short-lived, one-use request, and authenticates its machine
+   connection to the standalone Thessley service with a per-machine key.
+2. The service verifies the machine, account enrollment, request freshness,
+   and current AD authorization. It returns a Thessley Passkey link pinned to
+   the service TLS certificate. The link contains the machine ID, SID hash,
+   authority, account name, logon context, request ID, and nonce.
+3. The phone displays the Windows sign-in or unlock context. After biometric
+   approval, it signs the versioned Windows PAM challenge. The service checks
+   the enrolled phone public key, signature, timestamp, nonce, and one-use
+   request state, then returns the result to the Windows agent.
+4. For actual passwordless logon, Windows obtains a certificate credential
+   whose public key matches the phone-held signing key, and the Windows key
+   provider asks the phone to sign the KDC's PKINIT challenge. Approval of a
+   QR request alone is not a Windows credential.
+5. AD group membership and computer policy decide whether the account may
+   sign in and which local groups it receives. Thessley does not replace AD
+   policy with a separate role database.
+
+Pairing must bind the phone public key to the exact domain SID and the
+authorized computer/group scope. A local account with the same spelling is a
+different identity. Enrollment, approval, and revocation are separate,
+audited operations. A host must fail closed if the service is unreachable or
+the identity, signature, or policy cannot be checked; PIN/password recovery
+remains a Windows-managed fallback until passwordless login is validated.
+
+## Reuse versus new work
+
+The Thessley Passkey Android app already parses version-2 Windows PAM links
+and signs a challenge covering SID hash, principal type, authority, username,
+logon context, nonce, and action (`thessley_win_pam_v2`). The Linux Thessley
+PAM service already has a certificate-pinned HTTPS listener on port 47810,
+temporary request routes, a Unix-socket registration mechanism, and phone
+key verification. Reuse those protocol and listener pieces where they fit.
+
+The existing Windows Drupal agent (`drupal_agent.py`) and its `/thessley-windows`
+API are not the backend for this project. Replace that integration with a
+Windows agent that speaks to the standalone Thessley service. The Linux
+listener currently exposes temporary PAM approval routes to local privileged
+components; it does not yet provide the persistent, machine-authenticated AD
+account registry or AD policy lookup required here. Add those as a separate
+service/package and storage boundary rather than putting AD logic in Drupal or
+silently expanding the generic PAM database.
+
+## API boundary to implement
+
+Use a versioned API on the standalone Thessley host, with TLS certificate
+pinning and a unique machine credential for every Windows computer:
+
+- `POST /thessley-ad/v1/machines/enroll` — pair a machine key to a short-lived
+  administrator-authorized enrollment code.
+- `POST /thessley-ad/v1/principals/resolve` — submit the domain and SID hash;
+  return canonical identity and current group/computer authorization from
+  protected LDAP/AD queries.
+- `POST /thessley-ad/v1/phones/pair` — bind an Android public key to a domain
+  SID and permitted group/computer scope after matching one-time codes.
+- `POST /thessley-ad/v1/requests` — create a one-use interactive-login or
+  unlock challenge, returning the standard Thessley PAM v2 link fields.
+- `POST /thessley-ad/v1/requests/{id}/result` — machine-authenticated poll or
+  response endpoint; approval is returned only to the machine that created
+  the request.
+- `DELETE /thessley-ad/v1/phones/{id}` and `DELETE
+  /thessley-ad/v1/machines/{id}` — revoke credentials and expire pending
+  requests.
+
+The phone callback can use the existing pinned PAM listener and its compatible
+v2 signature format. The machine API must use mutual TLS or equivalent
+machine-key proof, authorize every request against AD, enforce strict body and
+rate limits, and never accept a client-supplied group list as authority. Keep
+the service identity read-only in AD unless a narrowly scoped certificate
+enrollment operation is separately required.
+
+## Technical gate before passwordless claims
+
+The current C credential provider submits a password credential after
+approval. That is approval-gated password sign-in, not passwordless AD
+authentication. Do not adapt it to release a cached password. First validate
+the phone-key certificate and strong SID mapping with AD CS, then implement a
+Windows-supported CNG KSP or smart-card minidriver bridge that can obtain a
+phone signature for a live PKINIT challenge. Test interactive sign-in,
+workstation unlock, revocation, offline behavior, and recovery separately.
+
