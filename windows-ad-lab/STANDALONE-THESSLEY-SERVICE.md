@@ -182,5 +182,40 @@ also needs an associated ECDH key. Do not enable a broad domain policy or claim
 offline support until both keys and the actual credential-provider path have
 been tested. The VSC success remains the recovery baseline.
 
+### ECC provider gate (read-only, 2026-10-27)
+
+Microsoft documents ECDSA P-256/P-384/P-521 support in the **Microsoft Smart
+Card Key Storage Provider**, and separately documents the policy needed for
+ECC smart-card logon. This establishes Windows API support; it does not
+establish that the current TPM virtual smart card and its legacy Base CSP
+template can create and use an ECC key. The `Tpmvscmgr` overview does not
+specify its supported key algorithms.
+
+Read-only inspection of the joined client found:
+
+- The only smart-card reader remains `ThessleyADTest` (the Microsoft TPM
+  virtual reader).
+- `certutil -csplist` lists the legacy Microsoft Base Smart Card Crypto
+  Provider and the Microsoft Smart Card KSP, but returns `E_NOTIMPL` while
+  enumerating KSP details. Provider presence alone is not a capability test.
+- The `EnumerateECCCerts` policy value is absent. Do not set it domain-wide
+  merely to test whether the TPM virtual card can enroll ECC.
+- The current-user software `My` certificate store is empty. The previously
+  verified RSA VSC/PKINIT baseline remains recorded by the KDC audit; this
+  store query did not inspect the card's private-key operations.
+
+The next ECC gate therefore remains an isolated capability test: use a
+separately named ECC template and a disposable virtual smart card, enroll an
+ECDSA P-256 certificate, and prove online PKINIT against the lab KDC. Keep the
+existing RSA card, its certificate, the current template, and all sign-in
+providers unchanged. Do not enable ECC logon policy until the certificate is
+actually issued and its key can complete a KDC-backed logon. If the TPM virtual
+card rejects ECC, stop this branch and use a separately isolated PC/SC bridge
+prototype; do not change the joined client's driver-signing state.
+
+Microsoft references: [Smart Card KSP algorithm support](https://learn.microsoft.com/en-us/windows/win32/seccertenroll/cng-key-storage-providers),
+[TPM virtual smart-card requirements and tool](https://learn.microsoft.com/en-us/windows/security/identity-protection/virtual-smart-cards/virtual-smart-card-use-virtual-smart-cards),
+and [ECC smart-card logon policy](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-group-policy-and-registry-settings).
+
 References: [Windows ECC smart-card policy](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-group-policy-and-registry-settings), [Windows smart-card sign-in certificate requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration), [Smart Card Minidriver overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview), and [RFC 4556 PKINIT](https://www.rfc-editor.org/rfc/rfc4556.html).
 
