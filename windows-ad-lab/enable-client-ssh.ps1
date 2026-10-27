@@ -31,6 +31,11 @@ if ($capability.State -ne 'Installed') {
 
 $sshd = Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'
 if (-not (Test-Path -LiteralPath $sshd)) { throw "OpenSSH is reported installed, but sshd.exe is missing at $sshd." }
+$keygen = Join-Path $env:WINDIR 'System32\OpenSSH\ssh-keygen.exe'
+if (-not (Test-Path -LiteralPath $keygen)) { throw "OpenSSH is reported installed, but ssh-keygen.exe is missing at $keygen." }
+& $keygen -A
+if ($LASTEXITCODE -ne 0) { throw 'Could not generate missing OpenSSH host keys.' }
+if (-not (Get-Service -Name sshd -ErrorAction SilentlyContinue)) { throw 'OpenSSH Server is installed but the sshd service is missing.' }
 
 # Use the built-in administrator key file for elevated accounts and also the
 # target user's profile key file. Firewall and authorized_keys both restrict
