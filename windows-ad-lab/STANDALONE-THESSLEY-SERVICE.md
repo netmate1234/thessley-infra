@@ -148,6 +148,13 @@ deployable machine-authentication service. Machine key generation and storage
 should use the Windows TPM/CNG provider where available, with a separately
 approved enrollment flow and rotation/revocation semantics.
 
+`infra/thessley_ad_service/replay_store.py` now supplies the durable nonce
+claim primitive. It serializes claims in SQLite transactions, rejects a
+duplicate `(machine_id, nonce)`, and refuses an unsafe database directory or
+file. A future service must construct `ReplayGuard(replay_store.claim)` and
+keep the database in a root-owned, non-group/world-writable service directory.
+This still does not provide the trusted machine-key registry or any HTTP route.
+
 ## Technical gate before passwordless claims
 
 The current C credential provider submits a password credential after
