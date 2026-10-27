@@ -148,6 +148,22 @@ AuthPack hash, certificate key, request ID, SID hash, machine ID, and short
 expiry. Do not append Thessley metadata to the PKINIT AuthPack or accept a
 generic approval signature as a substitute for the KDC signature.
 
+There is also a signing API boundary to settle before wiring the phone into the
+Windows provider. `KeystoreManager.signWithBiometric` currently uses Java
+`SHA256withECDSA` and returns a DER-encoded ECDSA signature. Windows
+[`NCryptSignHash`](https://learn.microsoft.com/en-us/windows/win32/api/ncrypt/nf-ncrypt-ncryptsignhash)
+accepts a precomputed hash for ECDSA; a bridge must not send
+that digest to the current Android method and accidentally hash it a second
+time. Define whether the phone receives the exact AuthPack bytes or a digest
+and use matching algorithms at both ends. Windows exposes more than one ECC
+signature representation: for example,
+[`CERT_ECC_SIGNATURE`](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-cert_ecc_signature)
+stores `r` and `s` as little-endian blobs. That structure alone does not
+establish the minidriver's required output encoding, so implement and verify
+an explicit adapter against the precise Smart Card KSP/minidriver entry point.
+Never pass the app's approval-envelope signature through as if it were a
+PKINIT result.
+
 The phone's EC certificate path needs its own Windows test before building the
 minidriver: Windows requires ECC smart-card logon to be enabled by policy, and
 cached/offline sign-in with an ECDSA key needs its associated ECDH key. First
