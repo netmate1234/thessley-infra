@@ -123,6 +123,31 @@ It validates SID-derived principal IDs and reproduces the Android
 the cryptographic protocol layer: it does not yet provide network routes,
 machine authentication, persistent enrollment storage, or AD policy queries.
 
+The next component, `infra/thessley_ad_service/machine_auth.py`, defines the
+machine-to-service request signature contract. Windows signs the exact
+transmitted body bytes with a per-machine P-256 ECDSA key. The canonical message
+is the seven newline-separated UTF-8/ASCII fields:
+
+```text
+thessley_ad_machine_v1
+HTTP_METHOD
+/thessley-ad/v1/route
+machine_id
+unix_timestamp
+base64url_nonce
+lowercase_sha256_of_raw_body
+```
+
+The HTTP adapter must capture raw body bytes before JSON parsing, resolve the
+public key from the trusted machine registry (never from client input), check
+the one-minute timestamp window, and then atomically claim the nonce. The
+`ReplayGuard` deliberately requires a persistent transactional nonce-claim
+callback; it has no process-local production fallback. The machine key registry
+and atomic nonce store are still unimplemented, so this verifier is not yet a
+deployable machine-authentication service. Machine key generation and storage
+should use the Windows TPM/CNG provider where available, with a separately
+approved enrollment flow and rotation/revocation semantics.
+
 ## Technical gate before passwordless claims
 
 The current C credential provider submits a password credential after
