@@ -30,8 +30,11 @@ Windows login feature.
   maintenance shell running as the similarly named local account has a
   different SID. The explicit `enroll-phone --user THESSLEYLAB\\martin` path
   resolves the domain SID from SSH without confusing the two identities.
-- Both enrollment paths were exercised on the client. They stop before creating
-  a phone request because this VM is not paired with an AD API host. The normal
+- Both enrollment paths were exercised on the client. From the local SSH
+  maintenance account, `enroll-current-user` now refuses with a clear
+  local-account message. The qualified `enroll-phone --user
+  THESSLEYLAB\\martin` path resolves the domain identity and stops before a
+  phone request because this VM is not paired with an AD API host. The normal
   Thessley local-account credential provider remains registered.
 - The service's route handlers are now transport-neutral, and the bounded
   direct-TLS HTTP adapter passes loopback tests. A Windows-hosted service

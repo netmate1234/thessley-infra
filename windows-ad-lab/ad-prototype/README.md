@@ -21,9 +21,12 @@ Run from an elevated PowerShell window to pair the machine:
 ```
 
 For ordinary self-enrollment, run the command while signed in to the domain
-account. It resolves the current Windows SID automatically; the service checks
-the account's AD group membership. Admin-assisted enrollment for another
-authorized domain account remains available.
+account. It resolves the current Windows SID automatically and refuses a
+local-account shell. An SSH maintenance session under a local account is not
+the same identity as a signed-in domain account; an administrator can use the
+qualified `enroll-phone --user 'DOMAIN\name'` command instead. The service
+checks the account's AD group membership. Admin-assisted enrollment for
+another authorized domain account remains available.
 
 ```powershell
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' enroll-current-user
