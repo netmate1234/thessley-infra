@@ -5,11 +5,13 @@ foreach ($name in @('SmartcardLogon', 'ThessleyVscLogon')) {
     $template = Get-ADObject -LDAPFilter "(cn=$name)" -SearchBase $base -Properties `
         displayName, flags, revision, pKIDefaultCSPs, pKIDefaultKeySpec, pKIKeyUsage,
         pKIExtendedKeyUsage, msPKI-Cert-Template-OID, msPKI-Template-Schema-Version,
-        msPKI-Template-Minor-Revision, msPKI-Enrollment-Flag, msPKI-Certificate-Name-Flag
+        msPKI-Template-Minor-Revision, msPKI-Enrollment-Flag, msPKI-Certificate-Name-Flag,
+        msPKI-Private-Key-Flag, msPKI-Minimal-Key-Size
     if (-not $template) { Write-Host "${name}: not found"; continue }
     Write-Host "`n[$name]"
     $template | Format-List Name,displayName,flags,revision,pKIDefaultCSPs,pKIDefaultKeySpec,
         pKIKeyUsage,pKIExtendedKeyUsage,msPKI-Cert-Template-OID,
         msPKI-Template-Schema-Version,msPKI-Template-Minor-Revision,
-        msPKI-Enrollment-Flag,msPKI-Certificate-Name-Flag
+        msPKI-Enrollment-Flag,msPKI-Certificate-Name-Flag,
+        msPKI-Private-Key-Flag,msPKI-Minimal-Key-Size
 }

@@ -141,5 +141,31 @@ the lab domain. If offline logon is required, design and test the paired ECDH
 key explicitly; do not export or copy the phone's private signing key to
 Windows. The current TPM-VSC test proves the AD/KDC baseline only.
 
+### Lab certificate-template inspection (read-only, 2026-10-27)
+
+The two current templates were inspected through AD and left unchanged:
+
+| Template | Schema version | Provider | Key spec | Purpose |
+|---|---:|---|---:|---|
+| `SmartcardLogon` | 1 | no explicit provider list | 1 (signature) | Built-in legacy template |
+| `ThessleyVscLogon` | 1 | Microsoft Base Smart Card Crypto Provider | 1 (signature) | Existing RSA TPM-VSC baseline |
+
+These are not the phone ECC template. Do not edit either one to experiment.
+Create a separately named template by duplicating an appropriate template in
+Certificate Templates MMC, set compatibility high enough to expose CNG, and on
+the Cryptography tab choose **Key Storage Provider**, ECDSA P-256, and only the
+required smart-card logon/client-authentication usages. Keep enrollment ACLs
+limited to the lab user and domain admins; publish the new template only on
+the lab CA. Microsoft documents the KSP and ECC settings in its [CNG template
+guidance](https://learn.microsoft.com/en-us/intune/configmgr/core/plan-design/network/cng-certificates-overview)
+and the ECC logon switch in [Smart Card Group Policy](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-group-policy-and-registry-settings).
+Do not hand-edit template LDAP attributes to simulate the GUI settings.
+
+The first test should be online sign-in only. An ECDSA certificate may satisfy
+the logon signature requirement, but Microsoft documents that offline sign-in
+also needs an associated ECDH key. Do not enable a broad domain policy or claim
+offline support until both keys and the actual credential-provider path have
+been tested. The VSC success remains the recovery baseline.
+
 References: [Windows ECC smart-card policy](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-group-policy-and-registry-settings), [Windows smart-card sign-in certificate requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration), [Smart Card Minidriver overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview), and [RFC 4556 PKINIT](https://www.rfc-editor.org/rfc/rfc4556.html).
 
