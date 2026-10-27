@@ -49,7 +49,7 @@ ordinary domain sign-in tests.
 - The CA's `SmartcardLogon` Enroll right is granted only to `THESSLEYLAB\martin` for this lab.
 - Windows client `MARTIN-WM` is joined to the forest. DNS discovery, DC ports 53/88/389/445, machine secure channel, and time source all pass the read-only verifier.
 - The CA issued SmartcardLogon request 7 to `THESSLEYLAB\martin`. The certificate has the Smart Card Logon and Client Authentication EKUs, the expected UPN, and the strong SID security extension matching the domain user's SID. The temporary local batch-logon grant used for enrollment has been removed.
-- The certificate's presence in the domain user's current-user store and certificate-based Windows sign-in still need client-side verification. The issued key is a lab software key, not the phone's protected signing key.
+- The certificate is not yet present in the domain user's persistent current-user store. Issuance ran under a non-interactive task without loading the user's sign-in profile; a one-time interactive domain-user sign-in is needed before enrollment can be repeated into the right store. Certificate-based Windows sign-in remains untested. The issued key is a lab software key, not the phone's protected signing key.
 
 ## Initial setup
 
