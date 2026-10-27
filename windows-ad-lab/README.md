@@ -49,6 +49,7 @@ ordinary domain sign-in tests.
 - The CA's `SmartcardLogon` Enroll right is granted only to `THESSLEYLAB\martin` for this lab.
 - Windows client `MARTIN-WM` is joined to the forest. DNS discovery, DC ports 53/88/389/445, machine secure channel, and time source all pass the read-only verifier.
 - Four SmartcardLogon certificates were issued during enrollment troubleshooting. They are now in the interactive domain user's `CurrentUser\My` store; all pass checks for the Smart Card Logon and Client Authentication EKUs, UPN, matching strong SID extension, private key, and validity. The private keys are non-exportable software keys. Keep the extra lab certificates until a certificate sign-in works, then revoke the unused ones.
+- A separate `ThessleyVscLogon` template is now registered with a forest-unique enterprise OID and published by the CA. Its Enroll ACL is limited to Martin and domain administrators. A TPM virtual smart card was created, and a fifth certificate was issued through the `Microsoft Smart Card Key Storage Provider`; Windows reports its private key as non-exportable. The card's lab PIN is stored only in the ignored `LOCAL-CREDENTIALS.txt`. Certificate enrollment is confirmed, but certificate-based Windows sign-in is not yet proven: the latest KDC record shows password pre-authentication, not certificate pre-authentication. Do not revoke the existing software certificates until a certificate sign-in succeeds.
 - The temporary local batch-logon grant and scheduled enrollment tasks have been removed. Certificate-based Windows sign-in remains untested, and none of these keys is the phone's protected signing key.
 
 ## Initial setup
@@ -66,6 +67,7 @@ ordinary domain sign-in tests.
 3. After the restart, sign in as `THESSLEYLAB\martin` with the lab test-account password. This interactive sign-in creates the persistent domain user profile needed for user certificate enrollment.
 4. Run `verify-domain-client.ps1` from PowerShell to check domain membership, LAN DNS, DC ports, secure channel, time, account SID, and any enrolled SmartcardLogon certificate. It is read-only and exits with a nonzero status if a required check fails.
 5. From a `THESSLEYLAB\martin` interactive session, run `enroll-smartcard-certificate.ps1`. It requests the certificate explicitly into `Cert:\CurrentUser\My`, then runs `verify-smartcard-certificate.ps1` to check the EKUs, UPN, private key, expiry, and SID mapping. This lab certificate does not implement phone-backed private-key signing.
+6. For the TPM virtual smart-card experiment, run `enable-vsc-logon-template.ps1` on the DC, then run `create-vsc-system-task.ps1` elevated on the client. In the signed-in domain user's interactive session, use `start-vsc-enrollment-task.ps1` with `request-vsc-certificate.cmd`. Use `verify-vsc-certificate.cmd` to inspect the issued certificate and provider. These scripts do not modify Windows sign-in providers. Keep the password recovery path available; the VSC certificate has not yet passed a Windows logon test.
 
 The script prompts for the DSRM and test-user passwords. Local-only credentials are recorded in the ignored `LOCAL-CREDENTIALS.txt`; never commit or distribute that file. The local/domain Administrator password is managed separately.
 
@@ -106,10 +108,12 @@ Windows to perform PKINIT with the phone-protected private key.
 
 1. (Complete) Join the disposable Windows client, validate DNS, time,
    connectivity, its secure channel, and an interactive domain-user sign-in.
-2. (Certificate issued and verified) Martin's SmartcardLogon certificates have
+2. (VSC certificate issued; sign-in unverified) Martin's SmartcardLogon certificates have
    the expected EKUs, UPN, strong SID mapping, and non-exportable private keys
-   in the user store. Next validate certificate logon using a Windows-supported
-   key provider. This isolates AD CS/KDC configuration from phone integration.
+   in the user store. A separate certificate is now issued to the TPM virtual
+   smart card. Validate certificate logon and confirm certificate pre-authentication
+   in the KDC audit log before moving on. The latest observed sign-in used
+   password pre-authentication, so this milestone is still open.
 3. Define the standalone service API for pairing a Windows account SID, phone
    key, and machine key; querying AD group membership; starting and polling a
    signed phone approval; and revoking either key. Drupal is not in this flow.
