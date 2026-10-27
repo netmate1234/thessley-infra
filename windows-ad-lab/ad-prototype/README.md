@@ -22,9 +22,11 @@ Run from an elevated PowerShell window to pair the machine:
 
 For ordinary self-enrollment, sign in to the domain account and launch
 **Thessley → Add phone for Windows sign-in** from the Windows Start menu. The
-shortcut uses `pythonw.exe`, so it opens the GUI without a PowerShell or console
-window. It resolves the current Windows SID, displays a scannable QR and pairing
-code, and refuses a local-account session. To start it manually, run:
+shortcut requests elevation through Windows and then uses `pythonw.exe`, so it
+shows the normal UAC approval prompt without opening a PowerShell or console
+window. Elevation is needed to use the protected machine signing key. The GUI
+resolves the current Windows SID, displays a scannable QR and pairing code, and
+refuses a local-account session. To start it manually, run:
 
 ```powershell
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-enroll.cmd'

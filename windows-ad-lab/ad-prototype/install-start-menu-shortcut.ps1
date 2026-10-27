@@ -7,6 +7,7 @@ $pythonw = Join-Path $env:ProgramFiles 'Python313\pythonw.exe'
 $sourceIcon = Join-Path $PSScriptRoot 'thessley.ico'
 $startMenu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Thessley'
 $installedIcon = Join-Path $startMenu 'thessley.ico'
+$launcher = Join-Path $startMenu 'start-enrollment.vbs'
 $shortcut = Join-Path $startMenu 'Add phone for Windows sign-in.lnk'
 
 foreach ($required in @($gui, $pythonw, $sourceIcon)) {
@@ -22,10 +23,18 @@ if ([IO.Path]::GetFullPath($sourceIcon) -ne [IO.Path]::GetFullPath($installedIco
 & icacls.exe $installedIcon /grant '*S-1-5-32-545:R' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not make the Thessley icon readable to Windows Start menu users.' }
 
+$launcherContents = @"
+Set shell = CreateObject("Shell.Application")
+shell.ShellExecute "$pythonw", "-I -X utf8 ""$gui""", "$root", "runas", 1
+"@
+Set-Content -LiteralPath $launcher -Value $launcherContents -Encoding ascii
+& icacls.exe $launcher /grant '*S-1-5-32-545:R' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Could not make the enrollment launcher readable to Windows Start menu users.' }
+
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut($shortcut)
-$link.TargetPath = $pythonw
-$link.Arguments = "-I -X utf8 `"$gui`""
+$link.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
+$link.Arguments = "//B //NoLogo `"$launcher`""
 $link.WorkingDirectory = $root
 $link.IconLocation = "$installedIcon,0"
 $link.Description = 'Enroll the signed-in Windows account phone with Thessley Passkey.'
