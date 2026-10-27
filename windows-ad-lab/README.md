@@ -47,7 +47,9 @@ ordinary domain sign-in tests.
 - A machine certificate with the KDC Authentication EKU has been issued to the DC.
 - Test user: `martin` (`martin@lab.thessley.test`), ordinary domain user. The local-only credential file records the lab passwords and current SID.
 - The CA's `SmartcardLogon` Enroll right is granted only to `THESSLEYLAB\martin` for this lab.
-- Windows client `MARTIN-WM` is joined to the forest. DNS discovery, DC ports 53/88/389/445, machine secure channel, and time source all pass the read-only verifier. No SmartcardLogon user certificate has been issued yet.
+- Windows client `MARTIN-WM` is joined to the forest. DNS discovery, DC ports 53/88/389/445, machine secure channel, and time source all pass the read-only verifier.
+- The CA issued SmartcardLogon request 7 to `THESSLEYLAB\martin`. The certificate has the Smart Card Logon and Client Authentication EKUs, the expected UPN, and the strong SID security extension matching the domain user's SID. The temporary local batch-logon grant used for enrollment has been removed.
+- The certificate's presence in the domain user's current-user store and certificate-based Windows sign-in still need client-side verification. The issued key is a lab software key, not the phone's protected signing key.
 
 ## Initial setup
 
@@ -55,7 +57,7 @@ ordinary domain sign-in tests.
 2. Connect the primary NIC to the physical `enp1s0` LAN with macvtap/bridge mode. Add the libvirt default NAT NIC only for host management; its Windows Firewall SSH rule must stay limited to `192.168.122.1`.
 3. Attach `configure-domain-controller.ps1` to the VM as a read-only CD and run it in elevated PowerShell.
 4. The script sets Swedish input, renames the server, installs AD DS, promotes the forest, configures AD CS, and creates the ordinary `martin` test account. Run it again after the rename and forest-promotion restarts. If the first post-promotion boot has not started NTDS yet, the script performs one recovery restart rather than starting a second promotion.
-5. The DC Kerberos Authentication certificate has been issued and its KDC Authentication EKU verified. The Windows client is now joined and its secure channel is verified. Next, enroll a `SmartcardLogon` user certificate for `martin`, then verify its strong SID mapping before testing logon. Do not treat the template as production-ready.
+5. The DC Kerberos Authentication certificate has been issued and its KDC Authentication EKU verified. The Windows client is joined and its secure channel is verified. A `SmartcardLogon` certificate is now issued for `martin`; verify it in the domain user's store with `verify-smartcard-certificate.ps1` before testing certificate sign-in. Do not treat the template as production-ready.
 
 ## Joining the disposable client
 
@@ -63,7 +65,7 @@ ordinary domain sign-in tests.
 2. Log in to the client with its existing local administrator account, open elevated PowerShell, and run `join-domain-client.ps1` from the `THESSLEYJOIN` CD. It sets active adapter DNS resolvers to the DC's LAN address, disables DNS registration on non-LAN adapters, checks the AD SRV record, synchronizes time from the DC, and prompts for the domain Administrator password in the console before joining. If setup fails, it restores prior DNS resolver and registration settings.
 3. After the restart, sign in as `THESSLEYLAB\martin` with the lab test-account password.
 4. Run `verify-domain-client.ps1` from PowerShell to check domain membership, LAN DNS, DC ports, secure channel, time, account SID, and any enrolled SmartcardLogon certificate. It is read-only and exits with a nonzero status if a required check fails.
-5. From Martin's session, request the test certificate with `certreq.exe -enroll -user -q SmartcardLogon`. This is a lab certificate to validate AD CS and strong mapping; it does not yet implement phone-backed private-key signing. Rerun the verification script afterward to inspect the certificate's SID mapping extension.
+5. From a `THESSLEYLAB\martin` session, request the test certificate with `certreq.exe -enroll -user -q SmartcardLogon`. Run `verify-smartcard-certificate.ps1` in that same session to check the EKUs, UPN, private key, expiry, and SID mapping. This lab certificate does not implement phone-backed private-key signing.
 
 The script prompts for the DSRM and test-user passwords. Local-only credentials are recorded in the ignored `LOCAL-CREDENTIALS.txt`; never commit or distribute that file. The local/domain Administrator password is managed separately.
 
@@ -89,7 +91,10 @@ for narrowly scoped certificate or enrollment operations that are explicitly
 required. Do not install this service on a domain controller for a production
 deployment.
 
-The Windows tile should identify the selected account by its SID and domain,
+The AD flow should be a separate Windows sign-in tile beside the existing
+Thessley tile. The current tile gates the selected account's existing password;
+it is not passwordless AD sign-in. Keep that tile and Windows PIN/password
+recovery unchanged. The AD tile must identify the selected account by its SID and domain,
 request a fresh approval from the standalone Thessley service, and then allow
 Windows to authenticate to the KDC using that account's certificate. It must
 not cache or release the account password as a substitute for certificate
@@ -102,7 +107,8 @@ Windows to perform PKINIT with the phone-protected private key.
 1. (Complete) Join the disposable Windows client and validate DNS, time,
    connectivity, and its secure channel. Ordinary domain-user sign-in remains to
    be tested.
-2. Issue Martin a SmartcardLogon certificate with a strong SID mapping and
+2. (Certificate issued) Issue Martin a SmartcardLogon certificate with a
+   strong SID mapping. Verify it in the domain user's certificate store and
    validate certificate logon using a Windows-supported key provider. This
    isolates AD CS/KDC configuration from Thessley phone integration.
 3. Define the standalone service API for pairing a Windows account SID, phone

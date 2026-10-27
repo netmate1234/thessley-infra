@@ -21,6 +21,14 @@ path.
   origin-pinned Thessley PAM request; the private phone key stays in Android
   Keystore/TEE.
 
+## Windows sign-in options
+
+The AD integration is a separate `Thessley AD Passkey` credential-provider
+tile with its own CLSID. Keep the existing Thessley QR tile unchanged: it
+approves and then submits an account password. Keep Windows PIN/password
+recovery available during the experiment. The new AD tile resolves a domain
+account SID and must not serialize, cache, or release a domain password.
+
 ## Request and enrollment flow
 
 1. The Windows agent resolves the selected account to its SID and domain,

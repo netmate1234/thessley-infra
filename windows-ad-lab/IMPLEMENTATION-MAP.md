@@ -8,7 +8,7 @@ Windows login feature.
 
 | Area | Existing code | Reuse |
 |---|---|---|
-| Windows sign-in tile | `thessley-pam-windows-update/windows-logon-provider/ThessleyCredential.cpp` | The account SID, selected user, interactive-vs-unlock context, status text, cancellation, and QR matrix transport are useful UI plumbing. |
+| Existing Windows sign-in tile | `thessley-pam-windows-update/windows-logon-provider/ThessleyCredential.cpp` | This is the approval-gated password tile. Its account SID, selected user, interactive-vs-unlock context, status, cancellation, and QR matrix transport are useful references, but keep its CLSID and behavior intact. |
 | Tile credential submission | `ThessleyCredential.cpp`, `CSampleCredential::GetSerialization` | **Do not reuse for passwordless AD.** It currently loads or accepts a password and serializes `KERB_INTERACTIVE_UNLOCK_LOGON` / packed credentials after approval. That is approval-gated password sign-in. |
 | Local approval service | `thessley-pam-windows-update/thessley_pam_win/approve.py`, `protocol.py`, and `listener.py` | Reuse the existing phone signature rules and request display only after adding the standalone service transport and SID-bound registry. |
 | Drupal transport | `thessley-pam-windows-update/thessley_pam_win/drupal_agent.py` | **Do not call from the AD project.** It owns Drupal setup, pair, challenge, polling, policy sync, and Drupal-specific errors. |
@@ -17,17 +17,21 @@ Windows login feature.
 
 ## Safe implementation order
 
-1. Finish joining the disposable Windows 11 client and validate the machine
-   secure channel, DNS, time, test user SID, and certificate enrollment.
+1. (AD foundation complete) The disposable Windows client is joined and its
+   secure channel, DNS, time, and test user SID are verified. A SmartcardLogon
+   certificate was issued with the matching SID security extension; verify its
+   private-key presence in the domain user's certificate store next.
 2. Add a new standalone Thessley AD service component, separate from
    `drupal_agent.py` and Drupal APIs. Put its persistent data in a dedicated
    store, not the generic per-Windows-user PAM device database.
 3. Add per-machine authentication to the Windows agent and pair each phone
    key to a domain SID plus an explicit machine or AD-group scope. Keep
    enrollment authorization separate from an ordinary login approval.
-4. Connect the tile to this service through a new agent interface. Preserve
-   built-in Windows PIN/password recovery and never route AD users into the
-   existing Drupal client code.
+4. Build a distinct `Thessley AD Passkey` Windows Credential Provider with a
+   separate CLSID and AD-only account handling. Connect it to this service
+   through a new agent interface. Keep the existing QR password tile and
+   built-in Windows PIN/password recovery intact; never route AD users into
+   the existing Drupal client code.
 5. Replace password serialization only after a Windows certificate provider
    can sign a live KDC PKINIT request with the enrolled phone key. A QR
    approval response by itself cannot complete that step.
