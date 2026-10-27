@@ -20,13 +20,20 @@ Run from an elevated PowerShell window to pair the machine:
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' pair-machine --server 'https://AD-SERVICE-HOST:47810' --tls-sha256 'CERTIFICATE-SHA256'
 ```
 
-For ordinary self-enrollment, run the command while signed in to the domain
-account. It resolves the current Windows SID automatically and refuses a
-local-account shell. An SSH maintenance session under a local account is not
-the same identity as a signed-in domain account; an administrator can use the
-qualified `enroll-phone --user 'DOMAIN\name'` command instead. The service
-checks the account's AD group membership. Admin-assisted enrollment for
-another authorized domain account remains available.
+For ordinary self-enrollment, sign in to the domain account and start the GUI
+from its desktop. The GUI resolves the current Windows SID, displays a scannable
+QR and pairing code, and refuses a local-account session. To start it, run:
+
+```powershell
+& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-enroll.cmd'
+```
+
+Scan the fresh QR with Thessley Passkey, approve Add phone, then confirm on the
+PC only if the phone and PC show the same pairing code. The request is short
+lived; keep the window open until it completes. An SSH maintenance session
+under a local account is a different identity and cannot use self-enrollment.
+The service checks the account's AD group membership. Admin-assisted
+enrollment for another authorized domain account remains available.
 
 ```powershell
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' enroll-current-user
