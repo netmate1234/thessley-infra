@@ -10,9 +10,12 @@ path.
   computer accounts, and Windows logon rights.
 - **AD CS** issues the lab logon certificate after the user identity and SID
   mapping are verified.
-- **Thessley service on the existing Linux host** handles phone enrollment,
-  signed approval requests, revocation, and audit. It is a separate service
-  from Drupal, even if both happen to run on the same physical Orange Pi.
+- **The existing Thessley standalone local-login service** remains for local
+  Windows/Linux accounts only and is not used by this AD flow. This project
+  adds a separate AD API for domain identities, phone enrollment, signed
+  approval requests, revocation, and audit. It is independent of Drupal and
+  the local-login PAM database. Its lab runtime queries AD through AD Web
+  Services as LocalSystem on the DC.
 - **Windows client agent and credential provider** identify the selected
   principal by SID, consult the Thessley service, and invoke a Windows
   certificate provider for the KDC logon. They do not send or cache the
@@ -28,6 +31,41 @@ tile with its own CLSID. Keep the existing Thessley QR tile unchanged: it
 approves and then submits an account password. Keep Windows PIN/password
 recovery available during the experiment. The new AD tile resolves a domain
 account SID and must not serialize, cache, or release a domain password.
+
+## Network and offline behavior
+
+The current lab deployment is LAN-only: the AD API listens on
+`192.168.1.79:47810`, and its firewall allows only `192.168.1.0/24`. It is not
+reachable from a home network or the public internet. Keep the domain
+controller and its AD/Kerberos services private; do not make the DC or its
+LDAP/Kerberos ports internet-accessible.
+
+The QR approval path needs the Windows computer and phone to reach the AD API.
+The API also needs to reach AD to check current identity and group policy.
+Thus, internet service is not required when both devices and the DC are
+reachable on the office LAN. From home, the intended safe route is a VPN into
+the trusted network, with working DNS and routes to both the API and DC. A
+VPN that starts only after Windows sign-in cannot provide connectivity to a
+sign-in tile; that scenario needs a device/pre-logon tunnel or another
+pre-sign-in path. Keep the service certificate name and pin stable across the
+chosen route, and avoid overlapping office/home subnets.
+
+If the network is completely unavailable, this prototype cannot perform a
+fresh Thessley phone approval or current AD authorization check. Windows may
+allow its normal cached domain sign-in, if cached logons are enabled and that
+user has signed in successfully before, but that is a Windows recovery path,
+not offline Thessley QR or passwordless AD sign-in. Microsoft describes this
+cached sign-in behavior in its [cached domain logon guidance](https://learn.microsoft.com/en-us/troubleshoot/windows-server/user-profiles-and-logon/cached-domain-logon-information).
+The passwordless ECC/PKINIT flow is not implemented yet; offline support must
+be designed and tested separately, including the associated ECDH key and
+offline revocation/authorization policy. Do not promise offline Thessley
+sign-in until those pieces work in a disconnected test.
+
+For the intended office, home, and outage behavior, keep Windows PIN/password
+recovery available. Home use should first be tested over a pre-logon-capable
+VPN. Treat fully disconnected Thessley sign-in as a separate feature with an
+explicit policy for how long cached authorization remains valid and how
+revocation behaves while offline.
 
 ## Request and enrollment flow
 
@@ -184,14 +222,63 @@ confirmed. Android attestation chains are not yet verified by this AD
 service, so no hardware-security level is asserted.
 
 The Windows client prototype is installed and verified on the domain-joined
-test client. The AD API source is implemented separately, but an AD API host
-has not yet been configured for this Windows lab. Until that service is
-available, the client can show its commands and preserve the local-account
-tile, but machine pairing, phone enrollment, and approval cannot complete.
-Keep these Windows tests separate from the existing local-account sign-in
-path.
-The passwordless credential provider/PKINIT bridge is also still absent, so
-the project does not yet provide Windows AD sign-in.
+test client. The AD API is deployed on the Windows lab DC at
+`https://192.168.1.79:47810`; the client has its own paired machine key, its
+signed API check passes, and the DC reports `THESSLEYLAB\martin` authorized by
+the allowlisted AD group. The phone credential is not enrolled yet. Keep these
+Windows tests separate from the existing local-account sign-in path. The
+passwordless credential provider/PKINIT bridge is also still absent, so API
+approval tests do not provide Windows AD sign-in.
+
+### Windows lab service host
+
+For the disposable lab, the service can run on `THESSLEY-DC1` itself as a
+LocalSystem scheduled task. It queries AD through the DC's built-in
+ActiveDirectory PowerShell module and ADWS machine identity, stores no AD bind
+password, and makes no directory changes. Do not copy this co-hosted layout to
+a production domain controller. Keep the API firewall limited to the trusted
+LAN and use a separate, least-privileged service host for a real deployment.
+
+The DC LAN interface is statically configured as `192.168.1.79/24`, gateway
+`192.168.1.254`, and DNS `192.168.1.79`. It was previously using that address
+as a DHCP lease; exclude or reserve it on the router to prevent a duplicate.
+Phone and client TCP access to port `47810` was verified. The Windows firewall
+allows only `192.168.1.0/24` on that port. The installer does not register or
+modify any Windows sign-in tile.
+
+From an elevated PowerShell session on the DC, run the package's
+`install-windows-service.ps1`. It installs a pinned Python runtime and the
+`cryptography` wheel, ACL-protects the service/config/database with SYSTEM and
+Administrators access, installs a boot task, and adds the scoped firewall
+rule. It retains any existing `service.json`; review its group SID and host
+before restarting after edits. The installer prints the certificate SHA-256
+pin. Create a one-use machine-pairing code locally with:
+
+```powershell
+& "$env:ProgramFiles\ThessleyAD\thessley-ad-admin.cmd" issue-machine-code
+```
+
+On the Windows 11 Pro client, pair its machine key with the service URL,
+printed certificate pin, and one-use code:
+
+```powershell
+& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' pair-machine --server 'https://192.168.1.79:47810' --tls-sha256 'CERTIFICATE-SHA256'
+```
+
+`check` verifies the machine signature and pinned TLS connection. To check the
+AD group decision without exposing group membership, use:
+
+```powershell
+& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' authorization-check --user 'THESSLEYLAB\martin'
+```
+
+Enroll the phone while signed in as the domain user using
+`enroll-current-user`, or use the qualified
+`enroll-phone --user THESSLEYLAB\martin` path from the admin test shell. Scan
+the enrollment QR, then compare the six-digit pairing code on phone and PC
+before confirming. `approval-test` verifies the phone response only; it does
+not log the user into Windows. The local QR credential provider, PIN, and
+password remain unchanged.
 
 `infra/thessley_ad_service/directory.py` uses LDAPS to a Global Catalog on port
 3269 with certificate validation required and a root-only bind-password file.
