@@ -41,12 +41,13 @@ ordinary domain sign-in tests.
 ## Current lab state
 
 - Forest and DNS: `lab.thessley.test` / `THESSLEYLAB`; AD DS, DNS, KDC, Netlogon, ADWS, and Certificate Services are running.
+- DC time: timezone `Romance Standard Time` (Paris); Windows Time uses `time.windows.com` and advertises the DC as reliable. The DC had been eight hours ahead on its local CMOS clock; correct and verify time before any future domain join.
 - Enterprise root CA: `THESSLEY-LAB-CA`.
 - CA templates enabled: `KerberosAuthentication` and `SmartcardLogon`.
 - A machine certificate with the KDC Authentication EKU has been issued to the DC.
 - Test user: `martin` (`martin@lab.thessley.test`), ordinary domain user. The local-only credential file records the lab passwords and current SID.
 - The CA's `SmartcardLogon` Enroll right is granted only to `THESSLEYLAB\martin` for this lab.
-- The Windows client is still separate and has not yet been joined to this forest.
+- Windows client `MARTIN-WM` is joined to the forest. DNS discovery, DC ports 53/88/389/445, machine secure channel, and time source all pass the read-only verifier. No SmartcardLogon user certificate has been issued yet.
 
 ## Initial setup
 
@@ -54,7 +55,7 @@ ordinary domain sign-in tests.
 2. Connect the primary NIC to the physical `enp1s0` LAN with macvtap/bridge mode. Add the libvirt default NAT NIC only for host management; its Windows Firewall SSH rule must stay limited to `192.168.122.1`.
 3. Attach `configure-domain-controller.ps1` to the VM as a read-only CD and run it in elevated PowerShell.
 4. The script sets Swedish input, renames the server, installs AD DS, promotes the forest, configures AD CS, and creates the ordinary `martin` test account. Run it again after the rename and forest-promotion restarts. If the first post-promotion boot has not started NTDS yet, the script performs one recovery restart rather than starting a second promotion.
-5. The DC Kerberos Authentication certificate has been issued and its KDC Authentication EKU verified. Next, join the client, enroll a `SmartcardLogon` user certificate for `martin`, and verify that the issued certificate has a strong SID mapping before testing logon. Do not treat the template as production-ready.
+5. The DC Kerberos Authentication certificate has been issued and its KDC Authentication EKU verified. The Windows client is now joined and its secure channel is verified. Next, enroll a `SmartcardLogon` user certificate for `martin`, then verify its strong SID mapping before testing logon. Do not treat the template as production-ready.
 
 ## Joining the disposable client
 
@@ -98,8 +99,9 @@ Windows to perform PKINIT with the phone-protected private key.
 
 ### Next milestones
 
-1. Join the disposable Windows client and validate DNS, time, AD group lookup,
-   and ordinary domain logon.
+1. (Complete) Join the disposable Windows client and validate DNS, time,
+   connectivity, and its secure channel. Ordinary domain-user sign-in remains to
+   be tested.
 2. Issue Martin a SmartcardLogon certificate with a strong SID mapping and
    validate certificate logon using a Windows-supported key provider. This
    isolates AD CS/KDC configuration from Thessley phone integration.

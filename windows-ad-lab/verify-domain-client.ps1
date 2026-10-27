@@ -50,7 +50,10 @@ try {
 
 try {
     $srv = Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.$DomainName" -Type SRV -ErrorAction Stop
-    $targets = @($srv | Select-Object -ExpandProperty NameTarget | ForEach-Object { $_.TrimEnd('.') })
+    # Resolve-DnsName may include the target's A record as well as SRV rows.
+    # A records do not have NameTarget, so only inspect actual SRV responses.
+    $targets = @($srv | Where-Object { $_.Type -eq 'SRV' -and $_.NameTarget } |
+        Select-Object -ExpandProperty NameTarget | ForEach-Object { $_.TrimEnd('.') })
     if ($targets -contains $DomainController) {
         Add-Check 'AD DNS discovery' 'PASS' ($targets -join ', ')
     } else {
