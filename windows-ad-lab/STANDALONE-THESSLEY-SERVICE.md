@@ -158,14 +158,15 @@ key registry and hashed, single-use enrollment codes. Its code-minting method
 does not authenticate administrators; only an admin-authorized caller may
 invoke it. The endpoint, rate limit, and audit record around code creation are
 not implemented yet. `infra/thessley_ad_service/http_api.py` exposes the first
-endpoint, which consumes the code and stores the enrolled P-256 key.
+endpoint, which consumes the code and stores the enrolled P-256 key. It also
+exposes `/machines/authenticate`, a signed, replay-protected liveness check to
+bring up machine authentication before adding login-sensitive endpoints.
 `thessley-pam-linux-edit/thessley_pam/listener.py` now
 allows `/thessley-ad/v1/...` routes to register over the same root-only Unix
 socket. Its opt-in `RawBodyRoute` preserves exact HTTPS body bytes and forwards
 only the four whitelisted machine-auth headers. Existing PAM callbacks retain
-their original two-argument form. Machine-authenticated request routes, AD
-identity/group lookup, and the Windows provider needed for logon are still
-absent.
+their original two-argument form. Login challenge routes, AD identity/group
+lookup, and the Windows provider needed for logon are still absent.
 
 ## Technical gate before passwordless claims
 

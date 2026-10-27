@@ -6,9 +6,11 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .machine_registry import MachineRegistry
+    from .machine_auth import ReplayGuard
 
 
 MACHINE_ENROLL_PATH = "/thessley-ad/v1/machines/enroll"
+MACHINE_AUTH_PATH = "/thessley-ad/v1/machines/authenticate"
 
 
 def machine_enrollment_route(registry: "MachineRegistry"):
@@ -40,6 +42,44 @@ def machine_enrollment_route(registry: "MachineRegistry"):
     return RawBodyRoute(handle)
 
 
-def create_routes(registry: "MachineRegistry") -> dict:
-    """Build the exact routes to register on the existing pinned listener."""
-    return {MACHINE_ENROLL_PATH: machine_enrollment_route(registry)}
+def machine_authentication_route(registry: "MachineRegistry", replay_guard: "ReplayGuard"):
+    """Return an authenticated machine liveness endpoint for protocol bring-up."""
+    from thessley_pam.listener import RawBodyRoute
+
+    from .machine_auth import verify_request
+
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        if set(auth_headers) != expected or body != {}:
+            return 400, {"result": "error", "message": "Invalid machine authentication request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        try:
+            timestamp = int(auth_headers["x-thessley-timestamp"])
+        except (TypeError, ValueError):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        public_key = registry.public_key(machine_id)
+        if public_key is None or not verify_request(
+            public_key_spki_b64=public_key,
+            signature_b64=auth_headers["x-thessley-signature"],
+            method="POST",
+            path=MACHINE_AUTH_PATH,
+            machine_id=machine_id,
+            timestamp=timestamp,
+            nonce=auth_headers["x-thessley-nonce"],
+            body=raw_body,
+            replay_guard=replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        return 200, {"result": "authenticated", "machine_id": machine_id}
+
+    return RawBodyRoute(handle)
+
+
+def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard") -> dict:
+    """Build the routes to register on the existing pinned listener."""
+    return {
+        MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
+        MACHINE_AUTH_PATH: machine_authentication_route(registry, replay_guard),
+    }
