@@ -42,6 +42,10 @@ The script prompts for the DSRM and test-user passwords. Local-only credentials 
 
 The DC setup script binds DNS to the LAN IPv4 address and removes the controller's NAT and IPv6 addresses from its host, zone-apex, and Global Catalog A/AAAA records. Before changing DNS, it saves the previous listener, client resolver settings, and affected records under `C:\ProgramData\Thessley\ADLab\DnsBackup`. Reserve the LAN address on the router so this binding remains valid.
 
+### Optional host-only SSH management
+
+`enable-client-ssh.cmd` starts the PowerShell setup with a UAC prompt. The script installs the Windows OpenSSH Server capability, installs a supplied Ed25519 public key for the selected local user and administrator accounts, and opens TCP 22 only from the libvirt management gateway (`192.168.122.1` by default). The matching `.pub` file must be beside the script and is not part of the repository. It disables the broad inbox OpenSSH firewall rule, does not change password or Windows sign-in policy, and leaves all other firewall rules intact.
+
 ## Why the lab uses certificates
 
 The phone key must authorize a Windows credential that the domain controller can validate through Kerberos PKINIT. A QR approval by itself is not an AD credential. The next client-side work is a Windows credential-provider and remote signing bridge for the phone key, plus account/SID enrollment and revocation in Thessley.
