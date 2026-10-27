@@ -57,9 +57,12 @@ normal route for smart-card ECC. This still requires a PC/SC reader/card path
 that can carry requests between the Windows logon environment and the phone;
 the Android app does not appear to Windows as a reader today. A custom CNG KSP
 is a separate, larger provider-development effort using Microsoft's CNG
-Provider Development Kit. Prototype the reader/minidriver boundary before
-committing to either implementation. Keep the current password-based tile
-separate throughout.
+Provider Development Kit. Microsoft documents that third-party KSPs are not
+loaded into the CNG key-isolation service, so a custom KSP must first prove it
+can be called in the LSA/PKINIT signing path. A minidriver loaded into
+protected LSA has a Microsoft driver-signing requirement. Prototype both
+execution and signing constraints before committing to either implementation.
+Keep the current password-based tile separate throughout.
 
 Pairing must bind the phone public key to the exact domain SID and the
 authorized computer/group scope. A local account with the same spelling is a
