@@ -92,6 +92,8 @@ Windows to perform PKINIT with the phone-protected private key.
 
 The detailed standalone service boundary and API plan is in
 [`STANDALONE-THESSLEY-SERVICE.md`](STANDALONE-THESSLEY-SERVICE.md).
+The current code boundaries and safe implementation order are mapped in
+[`IMPLEMENTATION-MAP.md`](IMPLEMENTATION-MAP.md).
 
 Microsoft references: [smart-card sign-in flow and certificate requirements](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration), [certificate credential serialization](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_certificate_logon), [strong certificate mappings](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-pkca/95c6f0e3-3565-41d7-80ed-2333c4c5e107), and [smart-card minidriver architecture](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview).
 
