@@ -235,6 +235,18 @@ actually issued and its key can complete a KDC-backed logon. If the TPM virtual
 card rejects ECC, stop this branch and use a separately isolated PC/SC bridge
 prototype; do not change the joined client's driver-signing state.
 
+### Certificate-template MMC prerequisite (2026-10-27)
+
+The Windows 11 Pro lab client is build 26300.9711 and does not have
+`certtmpl.msc` or the `Rsat.CertificateServices.Tools` capability installed.
+`DISM /Online /Add-Capability` returned `0x80070005` without installing the
+capability or requesting a reboot. Windows Update services were running, no
+Windows Update policy key was configured, and the read-only component-store
+scan reported no corruption. The mounted `ESD-ISO` is Windows installation
+media, not a Features-on-Demand source. Do not repair ACLs or alter AD CS
+templates to work around this. The supported GUI path remains gated on a
+matching Features-on-Demand source or a separately diagnosed servicing fix.
+
 Microsoft references: [Smart Card KSP algorithm support](https://learn.microsoft.com/en-us/windows/win32/seccertenroll/cng-key-storage-providers),
 [TPM virtual smart-card requirements and tool](https://learn.microsoft.com/en-us/windows/security/identity-protection/virtual-smart-cards/virtual-smart-card-use-virtual-smart-cards),
 and [ECC smart-card logon policy](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-group-policy-and-registry-settings).
