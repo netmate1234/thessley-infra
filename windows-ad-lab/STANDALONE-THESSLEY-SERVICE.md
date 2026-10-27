@@ -117,6 +117,12 @@ rate limits, and never accept a client-supplied group list as authority. Keep
 the service identity read-only in AD unless a narrowly scoped certificate
 enrollment operation is separately required.
 
+The first standalone code component is `infra/thessley_ad_service/protocol.py`.
+It validates SID-derived principal IDs and reproduces the Android
+`thessley_win_pam_v2` canonical message and P-256 signature checks. It is only
+the cryptographic protocol layer: it does not yet provide network routes,
+machine authentication, persistent enrollment storage, or AD policy queries.
+
 ## Technical gate before passwordless claims
 
 The current C credential provider submits a password credential after
