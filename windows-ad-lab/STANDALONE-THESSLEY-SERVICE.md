@@ -246,6 +246,9 @@ scan reported no corruption. The mounted `ESD-ISO` is Windows installation
 media, not a Features-on-Demand source. Do not repair ACLs or alter AD CS
 templates to work around this. The supported GUI path remains gated on a
 matching Features-on-Demand source or a separately diagnosed servicing fix.
+Retrying the capability install as `SYSTEM` through a temporary scheduled task
+also stalled in CBS finalization; the task was stopped and deleted, the
+diagnostic log was removed, and the capability remains `Not Present`.
 
 Microsoft references: [Smart Card KSP algorithm support](https://learn.microsoft.com/en-us/windows/win32/seccertenroll/cng-key-storage-providers),
 [TPM virtual smart-card requirements and tool](https://learn.microsoft.com/en-us/windows/security/identity-protection/virtual-smart-cards/virtual-smart-card-use-virtual-smart-cards),
