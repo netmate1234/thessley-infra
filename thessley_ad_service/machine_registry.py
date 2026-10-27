@@ -180,6 +180,19 @@ class MachineRegistry:
         finally:
             connection.close()
 
+    def machine_name(self, machine_id: str) -> str | None:
+        if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
+            return None
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT machine_name FROM machines WHERE machine_id = ? AND revoked_at IS NULL",
+                (machine_id,),
+            ).fetchone()
+            return None if row is None else str(row[0])
+        finally:
+            connection.close()
+
     def revoke(self, machine_id: str, *, now: float | None = None) -> bool:
         if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
             return False

@@ -168,8 +168,13 @@ only the four whitelisted machine-auth headers. Existing PAM callbacks retain
 their original two-argument form. `/principals/resolve` now verifies the
 machine signature, resolves the user SID over LDAPS, and returns an
 authorization boolean based on a server-side group-SID allowlist. It does not
-return client-supplied group claims. The Windows provider and login challenge
-routes are still absent.
+return client-supplied group claims. `/requests` creates an interactive or
+unlock challenge only for an allowed AD user; `/requests/respond` verifies the
+phone's SID-bound v2 signature; `/requests/result` gives the initiating
+machine one authenticated, one-use result. `challenges.py` stores request state
+and `phone_registry.py` binds phone keys to the exact machine and SID.
+Phone-key enrollment still needs its QR/pairing flow and audit trail. The
+Windows agent and passwordless credential provider are still absent.
 
 `infra/thessley_ad_service/directory.py` uses LDAPS to a Global Catalog on port
 3269 with certificate validation required and a root-only bind-password file.
