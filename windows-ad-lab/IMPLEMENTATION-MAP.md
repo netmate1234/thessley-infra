@@ -48,6 +48,63 @@ Windows login feature.
   logon providers, published `ThessleyVscLogon` template, or TPM smart-card
   certificate.
 
+## Windows Start-menu account flyout delay (2026-10-28)
+
+- The separate issue under investigation is a persistent ~40-second delay when
+  opening Start > the account/profile button. A new local test account,
+  `MenuProbe`, was responsive; the delay has been reported on the
+  `THESSLEYLAB\martin` profile. Do not change VM RAM as a proposed fix; the
+  user explicitly ruled that out.
+- Windows Error Reporting recorded `svchost.exe_UserManager` crashes on
+  2026-10-28 at 13:36 (`ntdll.dll`, `0xc0000710`) and 14:52 (`combase.dll`,
+  `0xc0000005`; a companion `svchost.exe` report had `0xc0000602`). These are
+  Windows system modules; the recorded reports did not identify a Thessley
+  module. The reports were archived without their dump files, so the precise
+  faulting call stack is not yet known. Restarting `UserManager` made the menu
+  fast temporarily, but signing out/in brought the delay back.
+- DISM reported no component-store corruption. `StartMenuExperienceHost` is
+  installed and registered. The domain profile's StartMenuExperienceHost
+  `LocalState` was unusually sparse compared with the responsive `MenuProbe`
+  profile. Its contents were preserved by renaming the directory to
+  `LocalState.backup-20261028-1519`; an empty replacement directory was
+  created with inherited SYSTEM, Administrators, and domain-user permissions.
+  This reset has **not** been verified by a fresh domain sign-in yet; the user
+  reports the account button remains slow. Keep the backup until the profile
+  has been tested and any needed data recovered.
+- The VM was at the sign-in screen with `LastLoggedOnUser= .\\MenuProbe`, and
+  the left account list showed `MenuProbe` and `Other user`. The actual domain
+  SID still resolves to the provider's configured SID
+  `S-1-5-21-1719900462-4250469598-2954734011-1101`; the local `Martin` and
+  `MenuProbe` accounts have different machine-local SIDs.
+- To restore the AD QR option, the LogonUI values were exported first to
+  `C:\\ProgramData\\ThessleyPamWin\\backups\\LogonUI-before-domain-last-user-20261028.reg`.
+  The remembered LogonUI account/SID/provider were then set to
+  `THESSLEYLAB\\martin`, the domain SID above, and the Thessley AD provider
+  `{2678765D-9F74-4BDE-A4DA-2B53234BE053}`. Restarting `LogonUI.exe` caused
+  the **Thessley AD approval QR viewer to appear** on the lock screen. The
+  user reports QR sign-in is restored. The phone approval/domain sign-in and
+  persistence across reboot are not yet independently verified. To restore
+  the pre-test LogonUI values, import the backup from an elevated PowerShell
+  session with `reg.exe import ...\\LogonUI-before-domain-last-user-20261028.reg`.
+- A WPR `GeneralProfile` + `XAMLAppResponsiveness` trace captured the slow
+  account-button click at
+  `C:\\ProgramData\\ThessleyPamWin\\diagnostics\\start-menu-user-button-20261028.etl`.
+  `tracerpt` processed 4,904,058 events across 609 buffers in 176 seconds with
+  zero lost events. The generated summary gives provider/event counts, not a
+  causal timeline; Windows' built-in `Get-WinEvent` reader exposes blank
+  provider names for these raw WPR events. The ETL still needs WPA or an
+  equivalent event decoder before attributing the stall.
+- The responsive `MenuProbe` account is local, so it does not isolate a
+  domain-profile problem. Next compare a fresh domain account/profile. The
+  current AD QR flow is a phone-approval prototype, not a passwordless AD
+  credential; sign in to the test profile using its normal Windows credential
+  first, then separately test QR approval if needed. If the fresh domain
+  profile is fast, the issue is specific to Martin's profile; if it is slow,
+  investigate machine-wide shell/domain components. Analyze the existing ETL
+  with WPA-compatible tooling before capturing another large trace. Keep both
+  profile backups and the ETL until the comparison is complete; remove the
+  large ETL after the findings are recorded.
+
 ## Separate phone-key certificate-template experiment (2026-10-28)
 
 - SSH maintenance uses the domain-qualified account form
