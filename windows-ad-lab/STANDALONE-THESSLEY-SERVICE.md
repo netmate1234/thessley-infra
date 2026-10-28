@@ -225,10 +225,11 @@ The Windows client prototype is installed and verified on the domain-joined
 test client. The AD API is deployed on the Windows lab DC at
 `https://192.168.1.79:47810`; the client has its own paired machine key, its
 signed API check passes, and the DC reports `THESSLEYLAB\martin` authorized by
-the allowlisted AD group. The phone credential is not enrolled yet. Keep these
-Windows tests separate from the existing local-account sign-in path. The
-passwordless credential provider/PKINIT bridge is also still absent, so API
-approval tests do not provide Windows AD sign-in.
+the allowlisted AD group. Martin’s phone is enrolled for this machine, and an
+AD QR approval test succeeded on 2026-10-28. Keep these Windows tests separate
+from the existing local-account sign-in path. The passwordless credential
+provider/PKINIT bridge is still absent, so API approval does not provide
+Windows AD sign-in.
 
 ### Windows lab service host
 

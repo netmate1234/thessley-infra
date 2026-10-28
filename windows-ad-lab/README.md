@@ -49,6 +49,8 @@ ordinary domain sign-in tests.
 
 - Forest and DNS: `lab.thessley.test` / `THESSLEYLAB`; AD DS, DNS, KDC, Netlogon, ADWS, and Certificate Services are running.
 - The two active Windows VMs are `MARTIN-WM` (`192.168.122.66`, Windows 11 Pro client) and `THESSLEY-DC1` (`192.168.122.98` management address; `192.168.1.79` LAN address). The client has 8 GiB assigned; the DC has 4 GiB. Both were running during the 2026-10-27 session. The client SSH service is running and `Test-ComputerSecureChannel` succeeds against `lab.thessley.test`.
+- The separate AD API is running on the DC as the `ThessleyADApi` LocalSystem startup task at `https://192.168.1.79:47810`. Its firewall rule allows TCP 47810 only from `192.168.1.0/24`. A cold-start ACL check initially timed out; its limit was increased and the service restarted. The client’s signed API check now succeeds. The existing standalone local-login service and both Windows sign-in providers were left unchanged.
+- The Windows client is paired to the AD API with its own machine key. `authorization-check --user THESSLEYLAB\martin` confirmed the dedicated AD group policy allows that account. Martin’s phone is enrolled for this machine, and an AD QR approval test succeeded on 2026-10-28. This verifies phone approval only; the AD passwordless Credential Provider/PKINIT bridge is not installed.
 - DC time: timezone `Romance Standard Time` (Paris); Windows Time uses `time.windows.com` and advertises the DC as reliable. The DC had been eight hours ahead on its local CMOS clock; correct and verify time before any future domain join.
 - Enterprise root CA: `THESSLEY-LAB-CA`.
 - CA templates enabled: `KerberosAuthentication` and `SmartcardLogon`.
