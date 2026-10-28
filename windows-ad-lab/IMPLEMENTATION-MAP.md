@@ -94,6 +94,12 @@ Windows login feature.
   causal timeline; Windows' built-in `Get-WinEvent` reader exposes blank
   provider names for these raw WPR events. The ETL still needs WPA or an
   equivalent event decoder before attributing the stall.
+- A local streaming parse of the CSV export found no 40-second operation in
+  `StartMenuExperienceHost`: the longest matched XAML operation was about
+  0.99 s and its longest matched RPC call was about 0.26 s. `UserManager` RPCs
+  in the capture were also below 0.25 s. This does not explain the observed
+  delay; it suggests the stall is outside those measured calls or that the
+  trace did not capture the delayed input interval itself.
 - The responsive `MenuProbe` account is local, so it does not isolate a
   domain-profile problem. Next compare a fresh domain account/profile. The
   current AD QR flow is a phone-approval prototype, not a passwordless AD
@@ -104,6 +110,11 @@ Windows login feature.
   with WPA-compatible tooling before capturing another large trace. Keep both
   profile backups and the ETL until the comparison is complete; remove the
   large ETL after the findings are recorded.
+- Created enabled disposable AD user `THESSLEYLAB\\startmenutest` and added
+  it to `ThessleyADSignInAdmins`, matching Martin's relevant group membership
+  without granting Domain Admins. Its temporary password is stored only in
+  the ignored, mode-0600 `LOCAL-CREDENTIALS.txt`. It has not signed in yet, so
+  its profile and account-menu latency remain to be measured.
 
 ## Separate phone-key certificate-template experiment (2026-10-28)
 
