@@ -93,17 +93,41 @@ HRESULT RunAgent(const std::vector<std::wstring>& arguments,
     if (stdinHandle.get() == INVALID_HANDLE_VALUE)
         return HRESULT_FROM_WIN32(GetLastError());
 
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = stdinHandle.get();
-    startup.hStdOutput = writePipe.get();
-    startup.hStdError = writePipe.get();
+    SIZE_T attributeBytes = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeBytes);
+    if (attributeBytes == 0) return HRESULT_FROM_WIN32(GetLastError());
+    std::vector<BYTE> attributeStorage;
+    try {
+        attributeStorage.resize(attributeBytes);
+    } catch (...) {
+        return E_OUTOFMEMORY;
+    }
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
+    if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attributeBytes))
+        return HRESULT_FROM_WIN32(GetLastError());
+    HANDLE inheritedHandles[] = {stdinHandle.get(), writePipe.get()};
+    if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                   inheritedHandles, sizeof(inheritedHandles), nullptr, nullptr)) {
+        const HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
+        DeleteProcThreadAttributeList(attributes);
+        return hr;
+    }
+
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = stdinHandle.get();
+    startup.StartupInfo.hStdOutput = writePipe.get();
+    startup.StartupInfo.hStdError = writePipe.get();
+    startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process{};
     const BOOL created = CreateProcessW(python.c_str(), writable.data(), nullptr, nullptr,
-        TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr,
-        &startup, &process);
-    if (!created) return HRESULT_FROM_WIN32(GetLastError());
+        TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+        nullptr, nullptr,
+        reinterpret_cast<LPSTARTUPINFOW>(&startup), &process);
+    const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
+    DeleteProcThreadAttributeList(attributes);
+    if (!created) return HRESULT_FROM_WIN32(createError);
     ScopedHandle processHandle(process.hProcess), threadHandle(process.hThread);
     writePipe.reset(); // Parent must close its writer so EOF arrives after the child exits.
 
