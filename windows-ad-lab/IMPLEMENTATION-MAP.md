@@ -132,17 +132,59 @@ Windows login feature.
   `C:\\ProgramData\\ThessleyPamWin\\backups\\ad-provider-key-20261028-164901.reg`
   and `ad-provider-class-20261028-164901.reg`, then temporarily removed. The
   provider DLL/data, local Thessley provider, PIN/password options, and virtual
-  smart-card reader were preserved. The account-flyout timing result is
-  pending after the user reported the test click completed. Restore these two
-  `.reg` exports after the comparison if the provider is not responsible.
+  smart-card reader were preserved. The user reported the delay remained while
+  this AD provider was unregistered. This test did not exclude the local
+  Thessley provider.
 - Analyze the existing ETL with WPA-compatible tooling before capturing
   another large trace. Keep the profile backup and ETL until the current
   machine-wide and provider A/B checks are documented.
 - Created enabled disposable AD user `THESSLEYLAB\\startmenutest` and added
   it to `ThessleyADSignInAdmins`, matching Martin's relevant group membership
   without granting Domain Admins. Its temporary password is stored only in
-  the ignored, mode-0600 `LOCAL-CREDENTIALS.txt`. It has not signed in yet, so
-  its profile and account-menu latency remain to be measured.
+  the ignored, mode-0600 `LOCAL-CREDENTIALS.txt`. It signed in and reproduced
+  the slow account flyout, confirming this was not specific to Martin's
+  profile.
+
+## Start-menu account flyout resolution: dual-NIC DNS route (2026-10-28)
+
+- The user confirmed the Start-menu profile flyout became fast after correcting
+  the secondary NIC's DNS configuration. This identifies the delay as a
+  network/DNS path problem encountered by the domain-account WPAD/Netlogon path,
+  not a change in the Thessley credential-provider UI.
+- Clone1 (`MARTIN-WM`) had two connected IPv4 adapters. The LAN adapter
+  `Ethernet` (index 15, `192.168.1.103/24`) used DNS `192.168.1.79` and had
+  interface metric 25. The libvirt/NAT adapter `Ethernet 2` (index 9,
+  `192.168.122.66/24`) was also configured to use `192.168.1.79`, even though
+  that adapter could not reach the DC. Both adapters also had default routes
+  with equal route and interface metrics.
+- Source-bound checks confirmed the path difference: from `192.168.1.103`,
+  TCP ports 53, 88, 135, 389, 445, 464, 3268, and 3269 on the DC
+  `192.168.1.79` all connected in 1–28 ms. From `192.168.122.66`, TCP 53 to
+  `192.168.1.79` timed out after 4 seconds. DNS requests from `.66` to its
+  reachable NAT resolver `192.168.122.1` returned promptly.
+- A corrected, source-bound UDP probe showed that the DC answered WPAD names
+  promptly through the LAN NIC (`wpad.lab.thessley.test` and `wpad.home` with
+  NXDOMAIN; bare `wpad` with SERVFAIL, all within 52 ms). The same requests
+  sent from `.66` to `192.168.1.79` timed out after 1.8 seconds. The earlier
+  first version of this custom probe had a malformed header and its results
+  were discarded; the corrected probe used a complete 12-byte DNS header.
+- On `Ethernet 2`, DNS was changed from the unreachable DC resolver
+  `192.168.1.79` to the reachable NAT resolver `192.168.122.1`. Its IPv4
+  interface metric was changed from automatic 25 to fixed 500, making the LAN
+  adapter the preferred default route while retaining the `.66` address and
+  direct route to the VM host. The original values are recorded in
+  `C:\\Users\\Martin\\wpad-route-before-fix-20261028.txt`.
+- After the change, SSH port 22 on `192.168.122.66` remained reachable; the
+  active DNS settings were `.103 -> 192.168.1.79` and
+  `.66 -> 192.168.122.1`. The default route through `192.168.1.254` is now
+  preferred over the NAT gateway route. The user confirmed the profile flyout
+  was fast after the DNS correction.
+- A separate proxy probe for the intentionally nonexistent host
+  `nosuchhost.lab.thessley.test` still took 11.2 seconds to fail. That is not
+  the profile-flyout test and should not be reported as a remaining account
+  button delay. The temporary WPAD probe task/process has completed; the
+  machine currently has `WinHttp\\DisableWpad=1` and policy
+  `ProxySettingsPerUser=0` from its A/B test.
 
 ## Separate phone-key certificate-template experiment (2026-10-28)
 
