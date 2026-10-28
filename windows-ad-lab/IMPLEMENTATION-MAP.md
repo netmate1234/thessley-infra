@@ -45,6 +45,29 @@ Windows login feature.
   runtime, its protected Windows configuration/state ACLs, and a reachable
   phone-to-service route still need to be built before pairing can be tested.
 
+## Separate phone-key certificate-template experiment (2026-10-28)
+
+- SSH maintenance uses the domain-qualified account form
+  `Administrator@lab.thessley.test@192.168.122.66`; the unqualified local
+  `Administrator@192.168.122.66` is not the same login.
+- The test VM reports `MARTIN-WM`, is joined to `lab.thessley.test`, and has a
+  ready TPM plus the `ThessleyADTest` virtual smart-card reader.
+- The existing `ThessleyVscLogon` / “Thessley TPM Virtual Smart Card Logon”
+  template remains unchanged. It uses the Microsoft Base Smart Card Crypto
+  Provider, RSA 2048, and its existing restricted enrollment ACL. Its TPM
+  virtual-smart-card certificate sign-in is the proven baseline; it does not
+  make an Android-held key available to Windows.
+- Only the unpublished duplicate `Copy 2 of Smartcard Logon` was changed for
+  the Android P-256 certificate experiment: CNG syntax, ECDSA P-256, SHA-256,
+  signing-only key usage, 256-bit minimum, and template minor revision 3. Its
+  ACL, EKUs, OID, and name settings were preserved. The CA issuance list was
+  checked before the update; the duplicate remains unpublished.
+- A rollback copy of the duplicate's prior attributes is on the test VM at
+  `%TEMP%\thessley-copy2-before-update.clixml`. No CA publication, Windows
+  sign-in provider, or existing VSC setting was changed.
+- This is only certificate-template preparation. The phone-key smart-card
+  signing bridge and an end-to-end AD sign-in are still required.
+
 ## Safe implementation order
 
 1. (Complete for the TPM VSC baseline) The disposable Windows client is joined
