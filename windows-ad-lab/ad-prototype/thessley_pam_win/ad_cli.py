@@ -18,6 +18,11 @@ import time
 from . import ad_agent, qr
 
 
+# The enrollment UI is a windowed app. Windows otherwise creates a visible
+# console for each PowerShell child even though we capture its output.
+_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def _is_admin() -> bool:
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -36,6 +41,7 @@ def _sid_for_account(account: str) -> str:
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True, text=True, errors="replace", timeout=15, check=False,
+        creationflags=_NO_CONSOLE,
     )
     sid = result.stdout.strip()
     if result.returncode or not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid, re.IGNORECASE):
@@ -54,6 +60,7 @@ def _current_user_sid() -> str:
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True, text=True, errors="replace", timeout=15, check=False,
+        creationflags=_NO_CONSOLE,
     )
     sid = result.stdout.strip()
     if sid == "LOCAL_ACCOUNT":
@@ -75,6 +82,7 @@ def _require_domain_joined() -> None:
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, errors="replace", timeout=15, check=False,
+            creationflags=_NO_CONSOLE,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError("Windows could not check domain membership.") from exc

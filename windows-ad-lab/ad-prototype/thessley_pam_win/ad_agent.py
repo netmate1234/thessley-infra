@@ -31,6 +31,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from . import qr
 
 SERVICE_PORT = 47810
+# Avoid flashing console windows when the graphical enrollment app updates
+# ACLs on the protected machine key directory.
+_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MACHINE_SIGNATURE_DOMAIN = "thessley_ad_machine_v1"
 MAX_BODY = 64 * 1024
 _MACHINE_ID = re.compile(r"^[a-f0-9]{32}$")
@@ -54,7 +57,8 @@ def _lock_acl(path: str, directory: bool = False) -> None:
     if directory:
         args.extend(["/T", "/C"])
     try:
-        result = subprocess.run(args, capture_output=True, timeout=30, check=False)
+        result = subprocess.run(args, capture_output=True, timeout=30, check=False,
+                                creationflags=_NO_CONSOLE)
     except (OSError, subprocess.SubprocessError) as exc:
         raise AgentError("Could not restrict access to the AD machine key.") from exc
     if result.returncode:
