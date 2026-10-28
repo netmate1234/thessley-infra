@@ -157,7 +157,18 @@ identifies the actual VSC container as `AT_KEYEXCHANGE`, so the provider uses
 1. Serialization with zero caused `STATUS_SMARTCARD_SUBSYSTEM_FAILURE`
 (`0xC0000321`); serialization with 2 caused `STATUS_SMARTCARD_NO_KEY_CONTAINER`
 (`0xC0000384`). The provider now matches the key spec reported by the actual
-container. The
+container. The failure persisted after matching the key spec and supplying the
+PnP reader label. Local System's `certutil -scinfo -sid 22` reports the actual
+reader as `Microsoft Virtual Smart Card 0`, card profile `Identity Device
+(Microsoft Generic Profile)`, and a legacy `Microsoft Base Smart Card Crypto
+Provider` container with `AT_KEYEXCHANGE`. The provider now serializes that
+exact CSP/reader/card/key-spec combination and logs nonsecret stage results plus
+numeric auth statuses, never the PIN or account identity. On 2026-10-28 the
+AD lab VM completed sign-in: serialization returned success (584 bytes) and
+LogonUI reported `STATUS_SUCCESS`. Automatic rollback was stopped after this
+verified result. This confirms the isolated TPM VSC path only; direct phone-key
+PKINIT remains unimplemented. See the credential-serialization README for
+the diagnostic event list and limits. The
 Microsoft structures and layout are documented at [KERB_CERTIFICATE_LOGON](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_certificate_logon)
 and [KERB_SMARTCARD_CSP_INFO](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info),
 and CNG key metadata at [CRYPT_KEY_PROV_INFO](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-crypt_key_prov_info).

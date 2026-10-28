@@ -1068,6 +1068,8 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
     // certificate. The PIN is typed once during setup, then may be DPAPI-protected locally.
     if (_adLabUser)
     {
+        ProviderDiag(L"ADGetSerializationStart", S_OK, _vaultAvailable ? 1 : 0,
+                     L"vault-available; no identity or PIN recorded");
         std::vector<WCHAR> savedPin;
         PasswordVectorWiper wipeSavedPin{savedPin};
         PCWSTR pin = _rgFieldStrings[SFI_PASSWORD];
@@ -1102,21 +1104,34 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         PWSTR domain = nullptr;
         PWSTR user = nullptr;
         hr = ProtectIfNecessaryAndCopyPassword(const_cast<PWSTR>(pin), _cpus, &protectedPin);
+        ProviderDiag(L"ProtectAdCardPin", hr, 0);
         if (SUCCEEDED(hr))
+        {
             hr = SplitDomainAndUsername(_pszQualifiedUserName, &domain, &user);
+            ProviderDiag(L"SplitAdQualifiedName", hr, 0);
+        }
         ULONG authPackage = 0;
         if (SUCCEEDED(hr))
+        {
             hr = RetrieveKerberosAuthPackage(&authPackage);
+            ProviderDiag(L"RetrieveAdKerberosPackage", hr, authPackage);
+        }
         if (SUCCEEDED(hr))
         {
             LUID logonId{};
+            ProviderDiag(L"ADVscMetadata", S_OK, THESSLEY_AD_LAB_VSC_KEYSPEC,
+                L"provider=Microsoft Base Smart Card Crypto Provider;reader=Microsoft Virtual Smart Card 0;card=Identity Device (Microsoft Generic Profile);container=te-ThessleyVscLogon-0ef1969d-38db-09390");
             hr = BuildKerbCertificateSerialization(
-                domain, user, protectedPin, L"", L"",
+                domain, user, protectedPin, THESSLEY_AD_LAB_VSC_CARD,
+                THESSLEY_AD_LAB_VSC_READER,
                 THESSLEY_AD_LAB_VSC_CONTAINER,
                 THESSLEY_AD_LAB_VSC_PROVIDER,
                 THESSLEY_AD_LAB_VSC_KEYSPEC,
                 _cpus == CPUS_UNLOCK_WORKSTATION, &logonId,
                 authPackage, CLSID_ThessleyAD, pcpcs);
+            ProviderDiag(L"BuildADCertificateLogon", hr,
+                         SUCCEEDED(hr) ? pcpcs->cbSerialization : 0,
+                         L"serializer result; PIN omitted");
         }
         if (protectedPin)
         {
@@ -1142,7 +1157,8 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
 
         ThessleySecureClear(_pinPendingSave);
         FreeKerbCertificateSerialization(pcpcs);
-        ProviderDiag(L"BuildADCertificateLogon", hr, 0);
+        ProviderDiag(L"ADGetSerializationFailed", hr, 0,
+                     L"local serialization failed before LSA sign-in");
         SHStrDupW(L"Could not prepare TPM sign-in. Re-enter the card PIN and request fresh phone approval.",
                   ppwszOptionalStatusText);
         *pcpsiOptionalStatusIcon = CPSI_WARNING;

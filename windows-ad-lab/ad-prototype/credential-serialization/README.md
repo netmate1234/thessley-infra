@@ -34,8 +34,29 @@ Microsoft documents the serialization field as `AT_KEYEXCHANGE` (1) or
 container as `AT_KEYEXCHANGE`, so the provider must serialize 1 while keeping
 the exact Microsoft Smart Card KSP and container names. Passing zero first
 caused `STATUS_SMARTCARD_SUBSYSTEM_FAILURE` (`0xC0000321`); passing 2 then
-caused `STATUS_SMARTCARD_NO_KEY_CONTAINER` (`0xC0000384`). The provider now
-uses the key spec reported by the actual container.
+caused `STATUS_SMARTCARD_NO_KEY_CONTAINER` (`0xC0000384`). The provider uses the
+key spec reported by the actual container. The latter status persisted with
+the correct key spec and reader name. Local System's `certutil -scinfo -sid 22`
+shows this VSC on reader `Microsoft Virtual Smart Card 0`; the Calais
+registration names its card `Identity Device (Microsoft Generic Profile)`.
+The same output exposes a legacy `Microsoft Base Smart Card Crypto Provider`
+view of the container with `AT_KEYEXCHANGE`, alongside the CNG KSP view. The
+Kerberos CSP serialization uses that legacy provider, exact reader, card
+profile, and key spec. On 2026-10-28 the isolated VM completed an AD sign-in:
+`BuildADCertificateLogon` returned success with a 584-byte serialization and
+`ReportResult` returned `STATUS_SUCCESS` after LogonUI submitted it. This only
+verifies the lab's TPM virtual smart-card path; it does not establish direct
+phone-key PKINIT.
+
+The provider writes a bounded diagnostic trace to
+`C:\ProgramData\ThessleyPamWin\ad-credential-provider\provider.log`. AD
+serialization events record HRESULTs, lengths, auth-package ID, and fixed
+nonsecret VSC metadata. They must never include a PIN, account name/SID, QR
+payload, or phone-approval response. The trace distinguishes PIN protection,
+qualified-name parsing, Kerberos package lookup, buffer construction, and the
+final LSA status/substatus. When changing the provider DLL, verify its SHA-256
+against the build output and reload LogonUI (a VM reboot was used for this
+test) before interpreting the trace.
 
 The eventual near-term flow is phone approval followed by this TPM VSC
 certificate logon. The private key remains on the PC. This is not the

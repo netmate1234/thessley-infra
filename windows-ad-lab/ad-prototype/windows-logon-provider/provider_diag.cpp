@@ -2,7 +2,7 @@
 #include <strsafe.h>
 #include <mutex>
 
-void ProviderDiag(const wchar_t *eventName, HRESULT result, DWORD count)
+void ProviderDiag(const wchar_t *eventName, HRESULT result, DWORD count, const wchar_t *detail)
 {
     static std::mutex lock;
     std::lock_guard<std::mutex> guard(lock);
@@ -14,11 +14,12 @@ void ProviderDiag(const wchar_t *eventName, HRESULT result, DWORD count)
 
     SYSTEMTIME now{};
     GetSystemTime(&now);
-    wchar_t line[256]{};
+    wchar_t line[768]{};
     if (FAILED(StringCchPrintfW(line, ARRAYSIZE(line),
-            L"%04u-%02u-%02uT%02u:%02u:%02uZ event=%s hr=0x%08lX count=%lu\r\n",
+            L"%04u-%02u-%02uT%02u:%02u:%02uZ event=%s hr=0x%08lX count=%lu detail=%s\r\n",
             now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
-            eventName ? eventName : L"unknown", static_cast<unsigned long>(result), count))) {
+            eventName ? eventName : L"unknown", static_cast<unsigned long>(result), count,
+            detail ? detail : L""))) {
         CloseHandle(file);
         return;
     }
