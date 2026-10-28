@@ -38,6 +38,14 @@ from `windows-logon-provider/ad_lab_vsc_config.h`; do not treat this artifact
 as a general installer. A later deployment must first have a tested rollback
 path and a separate non-network recovery login.
 
+The isolated provider directory also contains an opt-in lab installer and two
+recovery scripts. The installer arms and verifies a SYSTEM scheduled rollback
+before writing either Credential Provider registry key. The default rollback
+is 10 minutes; a successful domain sign-in must be confirmed with the separate
+`keep-ad-lab-provider.ps1` command. Running the rollback removes only this
+provider's unique registration and leaves the existing local, PIN, password,
+and VSC tiles alone. These scripts have not been run against a VM.
+
 The package imports Python modules from `thessley_pam_win/` in this directory
 and cryptography/qrcode dependencies from the existing private vendor folder
 at `C:\ProgramData\ThessleyPamWin\app\vendor`.
