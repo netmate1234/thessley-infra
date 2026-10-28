@@ -186,6 +186,87 @@ Windows login feature.
   machine currently has `WinHttp\\DisableWpad=1` and policy
   `ProxySettingsPerUser=0` from its A/B test.
 
+### Clone1 network settings and recovery
+
+Keep both NICs on the disposable client: the LAN NIC reaches the domain
+controller and the NAT NIC provides the libvirt host's SSH/debug path. Do not
+point the NAT NIC at the DC for DNS; the DC is not routable through that NIC.
+
+| Adapter | Address | Gateway | DNS | IPv4 interface metric | Purpose |
+|---|---|---|---|---:|---|
+| `Ethernet` (index 15) | `192.168.1.103/24` | `192.168.1.254` | `192.168.1.79` | 25 | LAN, AD/DNS, phone reachability |
+| `Ethernet 2` (index 9) | `192.168.122.66/24` | `192.168.122.1` | `192.168.122.1` | 500 | Libvirt NAT and host SSH/debug access |
+
+The original adapter values are saved on the VM at
+`C:\\Users\\Martin\\wpad-route-before-fix-20261028.txt`. Inspect the live
+configuration from elevated PowerShell with:
+
+```powershell
+Get-NetIPConfiguration -InterfaceAlias 'Ethernet','Ethernet 2'
+Get-DnsClientServerAddress -AddressFamily IPv4
+Get-NetIPInterface -AddressFamily IPv4 | Sort-Object InterfaceMetric | Format-Table InterfaceAlias,InterfaceIndex,AutomaticMetric,InterfaceMetric
+Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Format-Table InterfaceAlias,NextHop,RouteMetric
+```
+
+The resulting route preference must keep `Ethernet` ahead of `Ethernet 2`.
+If the NAT NIC is accidentally pointed back at the DC, restore only its DNS
+and route preference (leave its DHCP address and gateway intact):
+
+```powershell
+Set-DnsClientServerAddress -InterfaceIndex 9 -ServerAddresses 192.168.122.1
+Set-NetIPInterface -InterfaceIndex 9 -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric 500
+```
+
+The `.103` and `.79` LAN addresses were DHCP leases during this test. Reserve
+them on the router before treating them as permanent; the `.122.66` address
+belongs to the libvirt NAT network and should remain dynamically assigned.
+
+## AD QR provider missing on the generic “Other user” tile (2026-10-28)
+
+- The current request is to use Thessley QR sign-in after selecting Windows'
+  generic **Other user** tile, including when entering `THESSLEYLAB\\martin`.
+  The current provider is registered as
+  `{2678765D-9F74-4BDE-A4DA-2B53234BE053}` and loads
+  `C:\\ProgramData\\ThessleyPamWin\\ad-credential-provider\\ThessleyADCredentialProvider-diag-next.dll`.
+- The prototype currently creates credentials from the Windows
+  `ICredentialProviderUserArray` and rejects all SIDs except the single lab
+  SID in `windows-logon-provider/ad_lab_vsc_config.h`. It does not yet have a
+  generic username-entry credential for Windows' **Other user** identity.
+- Temporary local/connected-user enumeration values were set, then removed
+  after LogonUI passed three non-target users to this SID-restricted provider
+  (`AdLabSidCheck=0`, `CredentialInitialize=0x80070005`,
+  `GetCredentialCount=0x8000000A`). The VM was rebooted afterward. Those two
+  policy values are currently absent; the local accounts are no longer shown
+  in the left list.
+- Current screenshot: `THESSLEYLAB\\martin` and **Other user** appear at the
+  lower left, with **Other user** selected. Its standard username/password
+  form and Windows key/smart-card sign-in options are visible; no Thessley QR
+  option appears on that generic tile.
+- The LogonUI values currently remember Martin's domain identity and the
+  Thessley provider: `LastLoggedOnUser=THESSLEYLAB\\martin`,
+  `LastLoggedOnSAMUser=THESSLEYLAB\\martin`,
+  `LastLoggedOnUserSID=SelectedUserSID=S-1-5-21-1719900462-4250469598-2954734011-1101`,
+  and `LastLoggedOnProvider={2678765D-9F74-4BDE-A4DA-2B53234BE053}`. The
+  values were exported to
+  `C:\\ProgramData\\ThessleyPamWin\\backups\\LogonUI-before-qr-restore-20261028-current.reg`
+  (that export was made after `LastLoggedOnUser` had already been changed).
+- After the last LogonUI reload, provider diagnostics showed a successful
+  one-user enumeration and matching SID (`SetUserArray count=1`,
+  `AdLabSidCheck count=1`, `CredentialInitialize hr=0`,
+  `GetCredentialCount count=1`). `ADApprovalStart` returned `S_OK`, then the
+  worker ended with `0x80004004`; the log alone does not establish whether the
+  QR viewer appeared or why the worker ended. The UI was subsequently left on
+  **Other user**, so generic-tile behavior remains unverified and QR sign-in
+  from that tile remains unavailable.
+- Next investigation must be read-only: compare provider diagnostics when
+  selecting Martin's account tile versus **Other user**, and inspect the
+  credential-provider/LogonUI state. Do not modify registry values, policy,
+  provider files, accounts, or network settings during diagnosis. A proper
+  product solution likely needs a separate generic AD credential that accepts
+  a qualified username, resolves it to a SID, and obtains server-side policy
+  authorization before a phone approval can begin; never infer authorization
+  from the typed username alone.
+
 ## Separate phone-key certificate-template experiment (2026-10-28)
 
 - SSH maintenance uses the domain-qualified account form
