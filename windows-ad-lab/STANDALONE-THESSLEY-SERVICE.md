@@ -133,6 +133,11 @@ pinning and a unique machine credential for every Windows computer:
 - `POST /thessley-ad/v1/machines/enroll` — pair a machine key to a short-lived
   administrator-authorized enrollment code.
 - `POST /thessley-ad/v1/machines/authenticate` — signed machine liveness check.
+- `POST /thessley-ad/v1/directory/users` — return a bounded, read-only list of
+  AD users, enabled state, and membership in the service-configured
+  authorization groups. The caller must be an enrolled machine and sign the
+  empty request body with its pinned machine key. This endpoint returns no
+  phone keys and accepts no caller-selected LDAP filters or groups.
 - `POST /thessley-ad/v1/principals/resolve` — submit the Windows SID; return
   canonical identity and current group authorization from protected LDAP/AD
   queries.

@@ -185,3 +185,144 @@ $primarySearch.Dispose()
             return False
         principal = self.resolve_user_sid(sid)
         return bool(principal.group_sids.intersection(allowed_group_sids))
+
+    def list_users(self, allowed_group_sids: set[str] | frozenset[str], *, limit: int = 1000) -> dict:
+        """Return a bounded read-only user directory snapshot and effective policy membership.
+
+        This endpoint is called only through the machine-signature-authenticated
+        API. The allowed group SIDs come from protected service configuration;
+        no LDAP filter or group is accepted from a workstation request.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("AD directory result limit is invalid")
+        allowed = validate_group_sid_allowlist(allowed_group_sids)
+        encoded_groups = base64.b64encode(json.dumps(sorted(allowed), separators=(",", ":")).encode("ascii")).decode("ascii")
+        encoded_authority = base64.b64encode(self.config.authority.encode("ascii")).decode("ascii")
+        script = rf"""
+$ErrorActionPreference = 'Stop'
+try {{
+    $allowed = @([Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('{encoded_groups}')) | ConvertFrom-Json)
+    $authority = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('{encoded_authority}'))
+    $limit = {limit}
+    $timeoutSeconds = {self.timeout_seconds}
+    Add-Type -AssemblyName System.DirectoryServices -ErrorAction Stop
+    $root = [System.DirectoryServices.DirectoryEntry]::new('LDAP://RootDSE')
+    $baseDn = [string]$root.Properties['defaultNamingContext'][0]
+    $configurationDn = [string]$root.Properties['configurationNamingContext'][0]
+    if ([string]::IsNullOrWhiteSpace($baseDn)) {{ throw 'LDAP RootDSE did not return the domain naming context.' }}
+    $domain = (($baseDn -split ',') | Where-Object {{ $_ -like 'DC=*' }} | ForEach-Object {{ $_.Substring(3) }}) -join '.'
+    $partition = [System.DirectoryServices.DirectorySearcher]::new(
+        [System.DirectoryServices.DirectoryEntry]::new("LDAP://CN=Partitions,$configurationDn"))
+    $partition.Filter = "(&(objectClass=crossRef)(nCName=$baseDn))"
+    [void]$partition.PropertiesToLoad.Add('nETBIOSName')
+    $domainRef = $partition.FindOne()
+    $netbiosDomain = if ($domainRef) {{ [string]$domainRef.Properties['netbiosname'][0] }} else {{ '' }}
+    $partition.Dispose()
+    if ($authority -ine $domain -and $authority -ine $netbiosDomain) {{ throw 'AD authority does not match the configured domain.' }}
+    $base = [System.DirectoryServices.DirectoryEntry]::new("LDAP://$baseDn")
+    $authorizedSams = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($groupSid in $allowed) {{
+        $sidObject = [Security.Principal.SecurityIdentifier]::new([string]$groupSid)
+        $sidBytes = New-Object byte[] $sidObject.BinaryLength
+        $sidObject.GetBinaryForm($sidBytes, 0)
+        $sidFilter = -join ($sidBytes | ForEach-Object {{ '\' + $_.ToString('X2') }})
+        $groupSearch = [System.DirectoryServices.DirectorySearcher]::new($base)
+        $groupSearch.Filter = "(&(objectCategory=group)(objectSid=$sidFilter))"
+        $groupSearch.ServerTimeLimit = [TimeSpan]::FromSeconds($timeoutSeconds)
+        [void]$groupSearch.PropertiesToLoad.Add('distinguishedName')
+        $group = $groupSearch.FindOne()
+        if ($group) {{
+            $groupDn = [string]$group.Properties['distinguishedname'][0]
+            $escapedDn = $groupDn.Replace('\', '\5c').Replace('*', '\2a').Replace('(', '\28').Replace(')', '\29').Replace([string][char]0, '\00')
+            $memberSearch = [System.DirectoryServices.DirectorySearcher]::new($base)
+            $memberSearch.Filter = "(&(objectCategory=person)(objectClass=user)(memberOf:1.2.840.113556.1.4.1941:=$escapedDn))"
+            $memberSearch.PageSize = 500
+            $memberSearch.SizeLimit = 1001
+            $memberSearch.ServerTimeLimit = [TimeSpan]::FromSeconds($timeoutSeconds)
+            [void]$memberSearch.PropertiesToLoad.Add('sAMAccountName')
+            $members = $memberSearch.FindAll()
+            foreach ($member in $members) {{
+                if ($member.Properties['samaccountname'].Count -gt 0) {{
+                    [void]$authorizedSams.Add([string]$member.Properties['samaccountname'][0])
+                }}
+            }}
+            $members.Dispose()
+            $memberSearch.Dispose()
+        }}
+        $groupSearch.Dispose()
+    }}
+
+    $userSearch = [System.DirectoryServices.DirectorySearcher]::new($base)
+    $userSearch.Filter = '(&(objectCategory=person)(objectClass=user))'
+    $userSearch.PageSize = 500
+    $userSearch.SizeLimit = $limit + 1
+    $userSearch.ServerTimeLimit = [TimeSpan]::FromSeconds($timeoutSeconds)
+    foreach ($property in @('sAMAccountName', 'name', 'userPrincipalName', 'userAccountControl')) {{
+        [void]$userSearch.PropertiesToLoad.Add($property)
+    }}
+    $results = $userSearch.FindAll()
+    $truncated = $results.Count -gt $limit
+    $users = @(
+        foreach ($entry in ($results | Select-Object -First $limit)) {{
+            $p = $entry.Properties
+            if ($p['samaccountname'].Count -eq 0) {{ continue }}
+            $sam = [string]$p['samaccountname'][0]
+            $display = if ($p['name'].Count -gt 0) {{ [string]$p['name'][0] }} else {{ $sam }}
+            $upn = if ($p['userprincipalname'].Count -gt 0) {{ [string]$p['userprincipalname'][0] }} else {{ '' }}
+            $flags = if ($p['useraccountcontrol'].Count -gt 0) {{ [int]$p['useraccountcontrol'][0] }} else {{ 0 }}
+            $enabled = (($flags -band 2) -eq 0)
+            [PSCustomObject]@{{
+                sam = $sam
+                name = $display
+                upn = $upn
+                enabled = $enabled
+                authorized = ($enabled -and $authorizedSams.Contains($sam))
+            }}
+        }}
+    ) | Sort-Object sam
+    $results.Dispose()
+    $userSearch.Dispose()
+    $base.Dispose()
+    $root.Dispose()
+    [Console]::Out.WriteLine((ConvertTo-Json -InputObject ([PSCustomObject]@{{ domain = $domain; users = @($users); truncated = $truncated }}) -Compress -Depth 4))
+}} catch {{
+    [Console]::Error.WriteLine('Active Directory user listing failed.')
+    exit 1
+}}
+"""
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=self.timeout_seconds + 3, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DirectoryUnavailable("Windows could not query the AD user directory") from exc
+        if result.returncode:
+            raise DirectoryUnavailable("Windows could not query the AD user directory")
+        try:
+            payload = json.loads(result.stdout.strip())
+            users = payload.get("users") if isinstance(payload, dict) else None
+            domain = payload.get("domain") if isinstance(payload, dict) else None
+            truncated = payload.get("truncated") if isinstance(payload, dict) else None
+            if (not isinstance(users, list) or not isinstance(domain, str) or not isinstance(truncated, bool)
+                    or len(users) > limit):
+                raise ValueError
+            clean = []
+            for user in users:
+                if not isinstance(user, dict):
+                    raise ValueError
+                sam, name, upn = user.get("sam"), user.get("name"), user.get("upn", "")
+                if (not isinstance(sam, str) or not sam or len(sam) > 64
+                        or not isinstance(name, str) or len(name) > 256
+                        or not isinstance(upn, str) or len(upn) > 256
+                        or not isinstance(user.get("enabled"), bool)
+                        or not isinstance(user.get("authorized"), bool)):
+                    raise ValueError
+                clean.append({"sam": sam, "name": name, "upn": upn,
+                              "enabled": user["enabled"], "authorized": user["authorized"]})
+            return {"domain": domain[:256], "users": clean, "truncated": truncated}
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise DirectoryUnavailable("Windows returned an invalid AD user directory response") from exc

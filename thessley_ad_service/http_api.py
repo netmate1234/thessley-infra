@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 MACHINE_ENROLL_PATH = "/thessley-ad/v1/machines/enroll"
 MACHINE_AUTH_PATH = "/thessley-ad/v1/machines/authenticate"
+DIRECTORY_USERS_PATH = "/thessley-ad/v1/directory/users"
 PRINCIPAL_RESOLVE_PATH = "/thessley-ad/v1/principals/resolve"
 LOGIN_START_PATH = "/thessley-ad/v1/requests"
 PHONE_RESPONSE_PATH = "/thessley-ad/v1/requests/respond"
@@ -107,6 +108,50 @@ def machine_authentication_route(registry: "MachineRegistry", replay_guard: "Rep
         ):
             return 401, {"result": "error", "message": "Machine authentication failed."}
         return 200, {"result": "authenticated", "machine_id": machine_id}
+
+    return RawBodyRoute(handle)
+
+
+def directory_users_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                          directory: "ActiveDirectory", allowed_group_sids: frozenset[str]):
+    """Return a bounded directory view only to an enrolled, signed workstation."""
+    from .directory import DirectoryUnavailable
+
+    allowed_group_sids = frozenset(allowed_group_sids)
+
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        if set(auth_headers) != expected or body != {}:
+            return 400, {"result": "error", "message": "Invalid directory request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(
+            machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
+            auth_headers["x-thessley-signature"], DIRECTORY_USERS_PATH, raw_body, registry, replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        list_users = getattr(directory, "list_users", None)
+        if not callable(list_users):
+            return 503, {"result": "error", "message": "The AD directory listing is unavailable on this service."}
+        try:
+            snapshot = list_users(allowed_group_sids)
+        except DirectoryUnavailable:
+            return 503, {"result": "error", "message": "The AD directory is temporarily unavailable."}
+        if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("domain"), str)
+                or not snapshot["domain"] or len(snapshot["domain"]) > 256
+                or not isinstance(snapshot.get("users"), list) or len(snapshot["users"]) > 1000
+                or not isinstance(snapshot.get("truncated"), bool)):
+            return 503, {"result": "error", "message": "The AD directory returned an invalid response."}
+        for user in snapshot["users"]:
+            if (not isinstance(user, dict)
+                    or not isinstance(user.get("sam"), str) or not user["sam"] or len(user["sam"]) > 64
+                    or not isinstance(user.get("name"), str) or len(user["name"]) > 256
+                    or not isinstance(user.get("upn"), str) or len(user["upn"]) > 256
+                    or not isinstance(user.get("enabled"), bool)
+                    or not isinstance(user.get("authorized"), bool)):
+                return 503, {"result": "error", "message": "The AD directory returned an invalid response."}
+        return 200, {"result": "listed", **snapshot}
 
     return RawBodyRoute(handle)
 
@@ -439,6 +484,7 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
     return {
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
         MACHINE_AUTH_PATH: machine_authentication_route(registry, replay_guard),
+        DIRECTORY_USERS_PATH: directory_users_route(registry, replay_guard, directory, allowed_group_sids),
         PRINCIPAL_RESOLVE_PATH: principal_resolve_route(registry, replay_guard, directory, allowed_group_sids),
         LOGIN_START_PATH: login_start_route(
             registry, replay_guard, directory, allowed_group_sids, challenges, server_host, server_fingerprint
