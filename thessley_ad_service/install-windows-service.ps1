@@ -2,7 +2,8 @@ param(
     [string] $InstallRoot = "$env:ProgramFiles\ThessleyAD",
     [string] $StateRoot = "$env:ProgramData\ThessleyAD",
     [string] $BindAddress = '192.168.1.79',
-    [string] $AllowedGroupSid = 'S-1-5-21-1719900462-4250469598-2954734011-1105'
+    [string] $AllowedGroupSid = 'S-1-5-21-1719900462-4250469598-2954734011-1105',
+    [string[]] $AllowedRemoteAddresses = @()
 )
 $ErrorActionPreference = 'Stop'
 
@@ -19,6 +20,22 @@ if ($address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
     throw "Bind address $BindAddress is not assigned to this DC. No service changes were made."
 }
 if ($AllowedGroupSid -notmatch '^S-1-(?:\d+-)+\d+$') { throw 'AllowedGroupSid must be a canonical AD group SID.' }
+foreach ($source in $AllowedRemoteAddresses) {
+    if ($source -match '^(.+)/(\d{1,2})$') {
+        $sourceAddress = $null
+        if (-not [Net.IPAddress]::TryParse($Matches[1], [ref]$sourceAddress) -or
+            $sourceAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
+            [int]$Matches[2] -lt 1 -or [int]$Matches[2] -gt 32) {
+            throw "AllowedRemoteAddresses contains an invalid IPv4 CIDR: $source"
+        }
+    } else {
+        $sourceAddress = $null
+        if (-not [Net.IPAddress]::TryParse($source, [ref]$sourceAddress) -or
+            $sourceAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+            throw "AllowedRemoteAddresses must contain IPv4 addresses or CIDRs: $source"
+        }
+    }
+}
 $rootDse = [ADSI]'LDAP://RootDSE'
 $baseDn = [string]$rootDse.Properties['defaultNamingContext'][0]
 if ([string]::IsNullOrWhiteSpace($baseDn)) { throw 'Could not read the AD naming context.' }
@@ -91,6 +108,9 @@ $previousTaskWasRunning = $previousTask -and $previousTask.State -eq 'Running'
 $backup = $null
 $movedPreviousApp = $false
 $createdFirewallRule = $false
+$modifiedFirewallRule = $false
+$oldFirewallRemoteAddresses = $null
+$oldFirewallProfiles = $null
 $ruleName = 'Thessley AD API TCP 47810 (LAN)'
 
 try {
@@ -123,9 +143,19 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances 
 Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger -Principal $principal `
     -Settings $settings -Description 'Thessley AD QR sign-in API (lab only)' -Force | Out-Null
 
-    if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
+    $firewallRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($firewallRule) {
+        if ($AllowedRemoteAddresses.Count -gt 0) {
+            $oldFirewallRemoteAddresses = @(($firewallRule | Get-NetFirewallAddressFilter).RemoteAddress)
+            $oldFirewallProfiles = $firewallRule.Profile
+            $modifiedFirewallRule = $true
+            Set-NetFirewallRule -InputObject $firewallRule -Profile Any | Out-Null
+            $firewallRule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $AllowedRemoteAddresses | Out-Null
+        }
+    } else {
+        $newRemoteAddresses = if ($AllowedRemoteAddresses.Count -gt 0) { $AllowedRemoteAddresses } else { @('192.168.1.0/24') }
         New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47810 `
-            -LocalAddress $BindAddress -RemoteAddress '192.168.1.0/24' -Profile Domain,Private | Out-Null
+            -LocalAddress $BindAddress -RemoteAddress $newRemoteAddresses -Profile Any | Out-Null
         $createdFirewallRule = $true
     }
 
@@ -177,6 +207,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the local admin command fil
     }
     if ($createdFirewallRule) {
         Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    } elseif ($modifiedFirewallRule) {
+        $firewallRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($firewallRule) {
+            Set-NetFirewallRule -InputObject $firewallRule -Profile $oldFirewallProfiles -ErrorAction SilentlyContinue | Out-Null
+            $firewallRule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $oldFirewallRemoteAddresses -ErrorAction SilentlyContinue | Out-Null
+        }
     }
     throw $failure
 }
@@ -184,4 +220,9 @@ Write-Host "Installed the isolated Thessley AD API task. Test https://$BindAddre
 Write-Host "TLS certificate SHA-256: $($certificatePin.Trim())"
 Write-Host "Issue a machine code with: `"$adminCommand`" issue-machine-code"
 Write-Host "AD allow group: $groupName ($AllowedGroupSid)"
+if ($AllowedRemoteAddresses.Count -gt 0) {
+    Write-Host "AD API TCP 47810 source filter set to: $($AllowedRemoteAddresses -join ', ')"
+} else {
+    Write-Host 'AD API firewall source scope preserved (or defaults to 192.168.1.0/24 on first install).'
+}
 Write-Host 'This does not install or change a Windows sign-in tile.'

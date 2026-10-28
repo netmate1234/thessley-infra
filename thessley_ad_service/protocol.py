@@ -29,7 +29,7 @@ _AUTHORITY = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
 _FIELD_CONTROL = re.compile(r"[|\s\x00-\x1f\x7f]")
 
 _ACTIONS = {"register", "approve", "deny"}
-_CONTEXTS = {"enrollment", "interactive", "unlock"}
+_CONTEXTS = {"enrollment", "interactive", "unlock", "ssh"}
 
 
 def principal_id_from_sid(sid: str) -> str:

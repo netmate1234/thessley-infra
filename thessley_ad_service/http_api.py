@@ -171,7 +171,7 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         }
         if set(auth_headers) != expected or set(body) != {"sid", "context"}:
             return 400, {"result": "error", "message": "Invalid sign-in request."}
-        if not isinstance(body.get("sid"), str) or body.get("context") not in ("interactive", "unlock"):
+        if not isinstance(body.get("sid"), str) or body.get("context") not in ("interactive", "unlock", "ssh"):
             return 400, {"result": "error", "message": "Invalid sign-in request."}
         machine_id = auth_headers["x-thessley-machine-id"]
         if not _authenticated_machine(

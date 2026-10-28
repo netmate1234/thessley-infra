@@ -215,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("enroll-current-user", help="enroll a phone for the currently signed-in AD account")
     approval = commands.add_parser("approval-test", help="test phone approval without changing Windows logon")
     approval.add_argument("--user", required=True, help="qualified domain account")
-    approval.add_argument("--context", choices=("interactive", "unlock"), default="interactive")
+    approval.add_argument("--context", choices=("interactive", "unlock", "ssh"), default="interactive")
     start = commands.add_parser("approval-start", help="start an AD sign-in approval and return JSON for the native tile")
     start.add_argument("--sid", required=True)
     start.add_argument("--context", choices=("interactive", "unlock"), required=True)
