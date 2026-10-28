@@ -39,14 +39,34 @@ hypervisor and are not included in this repository. `-F /dev/null` bypasses
 local SSH aliases and keeps this command explicit. SSH may request a Thessley
 phone approval; approve that request before continuing.
 
-### Elevated SSH access on the disposable client
+### Group based AD SSH and workstation administrators
 
-`THESSLEYLAB\martin` is a member of `THESSLEYLAB\ThessleyADSignInAdmins`, and
-that group is mapped into the disposable client's local `Administrators`
-group. The current OpenSSH session was verified to have an enabled
-Administrators SID and a High Mandatory Level token, so it can perform the
-same machine-level maintenance as an elevated PowerShell session without
-opening a second shell. Verify before making changes:
+The AD API and managed workstation gate now use
+`THESSLEYLAB\ThessleyQRWorkstationAdmins` (SID
+`S-1-5-21-1719900462-4250469598-2954734011-1107`). It contains `Domain Admins`
+and the explicitly selected user `martin`. It intentionally does not include
+the disposable `startmenutest` account. On clone1, this group is mapped into
+local `Administrators`, so its authorized members retain local administrator
+rights. The SSH gate invokes the AD QR approval for members of this group.
+
+`martin` must start a fresh domain SSH session after group changes so Windows
+builds a new logon token. The login still requires a valid SSH key/password;
+the phone approval adds a second factor and does not replace the Windows
+credential. Each user must enroll their phone for that computer. To apply the
+same policy to another managed workstation, install/pair the AD agent, copy
+`enable-group-ad-ssh-qr.ps1` from this directory to the host, and run it from
+elevated PowerShell. It arms a verified rollback before changing `sshd_config`
+and local Administrators membership; keep the maintenance session open and
+confirm only after a new QR-gated SSH login succeeds. Do not run it on the DC.
+
+The `THESSLEYLAB\Administrator` maintenance SSH path is also behind the group
+QR gate. Keep the automatic rollback armed until the fresh phone-approved
+domain SSH login is verified; if it is not confirmed, the timer restores the
+prior `sshd_config`. The local-account Thessley gate and Windows sign-in tiles
+remain separate.
+
+The group-based SSH session should have an enabled Administrators SID and a
+High Mandatory Level token. Verify before making machine-level changes:
 
 ```powershell
 whoami /user
@@ -73,17 +93,17 @@ ordinary domain sign-in tests.
 
 - Forest and DNS: `lab.thessley.test` / `THESSLEYLAB`; AD DS, DNS, KDC, Netlogon, ADWS, and Certificate Services are running.
 - The two active Windows VMs are `MARTIN-WM` (`192.168.122.66`, Windows 11 Pro client) and `THESSLEY-DC1` (`192.168.122.98` management address; `192.168.1.79` LAN address). The client has 8 GiB assigned; the DC has 4 GiB. Both were running during the 2026-10-27 session. The client SSH service is running and `Test-ComputerSecureChannel` succeeds against `lab.thessley.test`.
-- The separate AD API is running on the DC as the `ThessleyADApi` LocalSystem startup task at `https://192.168.1.79:47810`. Its firewall rule allows TCP 47810 only from `192.168.1.0/24`. A cold-start ACL check initially timed out; its limit was increased and the service restarted. The client’s signed API check and AD group authorization check succeed. The existing standalone local-login service, the Thessley QR tile, and the TPM virtual smart-card template/card were left unchanged.
+- The separate AD API is running on the DC as the `ThessleyADApi` LocalSystem startup task at `https://192.168.1.79:47810`. Its firewall rule allows TCP 47810 only from `192.168.1.0/24`. Its protected `service.json` allowlist now contains only `ThessleyQRWorkstationAdmins`. The client’s signed API check and group authorization check succeeded after this change. The existing standalone local-login service, the Thessley QR tile, and the TPM virtual smart-card template/card were left unchanged.
 - The Windows client is paired to the AD API with its own machine key. `authorization-check --user THESSLEYLAB\martin` confirmed the dedicated AD group policy allows that account. Martin’s phone is enrolled for this machine, and an AD QR approval test succeeded on 2026-10-28. This verifies phone approval only; the AD passwordless Credential Provider/PKINIT bridge is not installed.
-- A separate AD-account SSH QR gate is in development. See [AD-SSH-QR-PROTOTYPE.md](AD-SSH-QR-PROTOTYPE.md) for the request flow, one-port VPN restriction, and opt-in per-account SSH setup with its own rollback. It has not been applied to the client.
+- A separate AD-account SSH QR gate is configured for the workstation administrator group on clone1. See [AD-SSH-QR-PROTOTYPE.md](AD-SSH-QR-PROTOTYPE.md) for the request flow, group policy, firewall restriction, and rollback process.
 - DC time: timezone `Romance Standard Time` (Paris); Windows Time uses `time.windows.com` and advertises the DC as reliable. The DC had been eight hours ahead on its local CMOS clock; correct and verify time before any future domain join.
 - Enterprise root CA: `THESSLEY-LAB-CA`.
 - CA templates enabled: `KerberosAuthentication` and `SmartcardLogon`.
 - A machine certificate with the KDC Authentication EKU has been issued to the DC.
 - Test user: `martin` (`martin@lab.thessley.test`), not a Domain Admin. The local-only credential file records lab passwords and the user's SID.
-- `martin` belongs to `Domain Users` and the dedicated global security group `Thessley AD Sign-in Administrators` (`THESSLEYLAB\ThessleyADSignInAdmins`, SID `S-1-5-21-1719900462-4250469598-2954734011-1105`). The group was created by `create-test-admin-group.ps1`; it does not grant domain-wide administrative rights.
-- On `MARTIN-WM` only, that Thessley group is also a member of the local Administrators group, alongside `THESSLEYLAB\Domain Admins`. This lets the domain test account retain machine administrator rights on this disposable client. Other domain-joined PCs need their own approved local group mapping or policy; AD group membership alone does not make a user a local administrator everywhere.
-- The standalone AD service example allowlists only the Thessley group SID. It must not be widened to Domain Users or Domain Admins for this test.
+- `martin` belongs to the global security group `ThessleyQRWorkstationAdmins`, alongside the nested `Domain Admins` group. It grants the selected members workstation administrator access; it does not change their Domain Admin status.
+- On `MARTIN-WM`, `ThessleyQRWorkstationAdmins` is a member of local `Administrators`. Other domain-joined PCs need the same group-to-local-Administrators mapping and the group SSH gate before this policy applies there.
+- The AD service allowlists only the `ThessleyQRWorkstationAdmins` SID. Do not widen it to `Domain Users`.
 - The CA's `SmartcardLogon` Enroll right is granted only to `THESSLEYLAB\martin` for this lab.
 - Windows client `MARTIN-WM` is joined to the forest. DNS discovery, DC ports 53/88/389/445, machine secure channel, and time source all pass the read-only verifier.
 - Four SmartcardLogon certificates were issued during enrollment troubleshooting. They are now in the interactive domain user's `CurrentUser\My` store; all pass checks for the Smart Card Logon and Client Authentication EKUs, UPN, matching strong SID extension, private key, and validity. The private keys are non-exportable software keys. The VSC baseline sign-in has now succeeded; leave these certificates in place until the VSC test is repeated after a reboot, then revoke unused certificates.

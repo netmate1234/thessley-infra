@@ -69,7 +69,55 @@ Kerberos, LDAP, SMB, and other AD traffic to the domain controller, according
 to the domain/network design. Keep those rules separate from the one-port
 Thessley approval rule.
 
-## Enable for one test account
+## Enable for a workstation administrator group
+
+For the lab's multi-admin setup, the API allowlist and workstation SSH gate use
+the AD security group `THESSLEYLAB\ThessleyQRWorkstationAdmins` (SID
+`S-1-5-21-1719900462-4250469598-2954734011-1107`). It contains `Domain Admins`
+and explicitly selected workstation administrators. The disposable
+`startmenutest` account is intentionally excluded. Keep group membership as the
+central access control: add or remove a user in AD instead of editing each
+PC's `sshd_config`.
+
+The group is mapped into local `Administrators` on each managed workstation,
+so an authorized member retains administrator rights after SSH authentication.
+The AD QR approval remains a second factor; members still need a valid
+Windows SSH authentication method and a phone enrolled for their SID on each
+PC. A Windows domain account is distinct from a same-named local account.
+
+On each domain-joined Windows Pro workstation with the AD agent and its
+approval service installed, copy this directory's `enable-group-ad-ssh-qr.ps1`
+to the workstation, then run it from elevated PowerShell in that directory.
+It backs up `sshd_config`, arms and verifies a 15-minute SYSTEM rollback,
+maps the AD group to local Administrators, replaces the prototype's exact
+per-user AD gate block with a group `Match`, validates `sshd_config`, and
+restarts `sshd`. Members of this group are sent through the AD gate; other
+accounts retain their existing SSH policy. Keep a maintenance SSH session
+open. Then test a second
+interactive connection using a group member whose phone is enrolled:
+
+```powershell
+& '.\enable-group-ad-ssh-qr.ps1' `
+  -Domain 'THESSLEYLAB' `
+  -GroupSamAccountName 'ThessleyQRWorkstationAdmins' `
+  -RollbackMinutes 15
+```
+
+The reusable source is `enable-group-ad-ssh-qr.ps1` in this directory. The
+installer reports its backup and rollback task. Only stop that task after a
+new QR-gated SSH login succeeds. If the test fails, the task restores the
+previous SSH config and removes the local admin mapping it added. Repeat the
+installer on every workstation where this access policy should apply; never
+link it to or run it on the domain controller.
+
+The AD API must allow this group's SID in its protected `service.json`
+`allowed_group_sids` list. After changing that policy, restart the API and
+verify that the client listener remains available. Adding a different group
+to a machine's local `Administrators` group alone does **not** make it
+eligible for QR approval; both the API allowlist and the workstation gate must
+use the intended group.
+
+## Enable for one test account (legacy prototype)
 
 The package installer places `ad-ssh-gate.cmd` but does not change SSH policy.
 From an elevated PowerShell in the extracted Windows package source folder,
@@ -83,8 +131,8 @@ account name:
 & '.\install\enable-ad-ssh-qr.ps1' -Domain 'THESSLEYLAB' -UserName 'martin' -RollbackMinutes 15
 ```
 
-The script backs up `sshd_config`, arms a separate scheduled rollback first,
-adds an exact `Match User thessleylab\martin` rule, validates the config and
+The legacy script backs up `sshd_config`, arms a separate scheduled rollback
+first, adds an exact `Match User thessleylab\martin` rule, validates the config and
 effective ForceCommand, then restarts `sshd`. It leaves the account's current
 SSH authentication methods in effect. Test a **new second** connection. The
 first SSH factor must still succeed, then the approval QR should appear and
@@ -107,8 +155,7 @@ recovery. Do not widen it to all domain users based on this prototype.
 
 The AD service's `/requests` route, machine signature, SID-bound phone
 signature, Android `ssh` context label, Windows SYSTEM-side approval request,
-and isolated ForceCommand gate are implemented in source. The new config
-script is opt-in and source-only. It has not been run on the VM or validated
-against the live domain SSH username representation; verify with `sshd -T`
-before relying on the rule. The API approval is a second factor around SSH,
-not passwordless AD logon.
+and isolated ForceCommand gate are implemented in source. The per-user script
+is retained for the original one-account prototype. The group-based installer
+is the current lab path and is applied separately to each intended workstation.
+The API approval is a second factor around SSH, not passwordless AD logon.
