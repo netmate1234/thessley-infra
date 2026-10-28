@@ -95,10 +95,7 @@ def _require_domain_joined() -> None:
 
 
 def _show_qr(link: str) -> None:
-    # Preserve the ISO quiet zone. A two-module border is too easy for phone
-    # cameras to confuse with the terminal background, especially in SSH
-    # screenshots where the QR nearly fills the available height.
-    rows = qr.lines(link, border=4)
+    rows = qr.lines(link, border=2)
     if rows:
         print("\n".join(rows))
     else:
