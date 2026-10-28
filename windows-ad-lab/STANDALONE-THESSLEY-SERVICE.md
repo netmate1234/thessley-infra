@@ -134,10 +134,16 @@ pinning and a unique machine credential for every Windows computer:
   administrator-authorized enrollment code.
 - `POST /thessley-ad/v1/machines/authenticate` — signed machine liveness check.
 - `POST /thessley-ad/v1/directory/users` — return a bounded, read-only list of
-  AD users, enabled state, and membership in the service-configured
+  AD users, SID, enabled state, and membership in the service-configured
   authorization groups. The caller must be an enrolled machine and sign the
-  empty request body with its pinned machine key. This endpoint returns no
-  phone keys and accepts no caller-selected LDAP filters or groups.
+  empty request body with its pinned machine key. It accepts no caller-selected
+  LDAP filters or groups.
+- `POST /thessley-ad/v1/directory/phone-keys` — list active phone-key metadata
+  for the authenticated machine only. The response excludes public and private
+  key material.
+- `POST /thessley-ad/v1/directory/phone-keys/revoke` — revoke a key only when
+  it is bound to the authenticated machine. The Windows admin UI requires a
+  fresh administrator phone approval before calling this endpoint.
 - `POST /thessley-ad/v1/principals/resolve` — submit the Windows SID; return
   canonical identity and current group authorization from protected LDAP/AD
   queries.
@@ -156,7 +162,8 @@ pinning and a unique machine credential for every Windows computer:
 - `POST /thessley-ad/v1/enrollments/cancel` — cancel a pending pairing from that
   machine; the provisional phone key is discarded.
 - Local root-only admin CLI — issue machine codes and revoke machine or phone
-  keys. No remote deletion endpoint is implemented.
+  keys. Remote phone-key revocation is restricted to the authenticated machine's
+  own keys and is exposed to administrators through the Windows admin UI.
 
 The phone callback can use the existing pinned PAM listener and its compatible
 v2 signature format. The machine API uses the per-machine P-256 request

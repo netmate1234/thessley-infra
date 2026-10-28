@@ -257,7 +257,7 @@ try {{
     $userSearch.PageSize = 500
     $userSearch.SizeLimit = $limit + 1
     $userSearch.ServerTimeLimit = [TimeSpan]::FromSeconds($timeoutSeconds)
-    foreach ($property in @('sAMAccountName', 'name', 'userPrincipalName', 'userAccountControl')) {{
+    foreach ($property in @('sAMAccountName', 'name', 'userPrincipalName', 'userAccountControl', 'objectSid')) {{
         [void]$userSearch.PropertiesToLoad.Add($property)
     }}
     $results = $userSearch.FindAll()
@@ -269,10 +269,13 @@ try {{
             $sam = [string]$p['samaccountname'][0]
             $display = if ($p['name'].Count -gt 0) {{ [string]$p['name'][0] }} else {{ $sam }}
             $upn = if ($p['userprincipalname'].Count -gt 0) {{ [string]$p['userprincipalname'][0] }} else {{ '' }}
+            if ($p['objectsid'].Count -eq 0) {{ continue }}
+            $sid = ([Security.Principal.SecurityIdentifier]::new([byte[]]$p['objectsid'][0], 0)).Value
             $flags = if ($p['useraccountcontrol'].Count -gt 0) {{ [int]$p['useraccountcontrol'][0] }} else {{ 0 }}
             $enabled = (($flags -band 2) -eq 0)
             [PSCustomObject]@{{
                 sam = $sam
+                sid = $sid
                 name = $display
                 upn = $upn
                 enabled = $enabled

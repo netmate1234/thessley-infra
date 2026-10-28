@@ -382,6 +382,42 @@ class PhoneRegistry:
         finally:
             connection.close()
 
+    def list_for_machine(self, machine_id: str) -> list[dict]:
+        """Return active key metadata for one machine, never public key material."""
+        if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
+            return []
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """SELECT credential_id, principal_id, label, enrolled_at
+                   FROM phone_credentials
+                   WHERE machine_id = ? AND revoked_at IS NULL
+                   ORDER BY principal_id, enrolled_at""",
+                (machine_id,),
+            ).fetchall()
+            return [{"credential_id": str(credential), "principal_id": str(principal),
+                     "label": str(label), "enrolled_at": int(enrolled)}
+                    for credential, principal, label, enrolled in rows]
+        finally:
+            connection.close()
+
+    def revoke_for_machine(self, credential_id: str, machine_id: str,
+                           *, now: float | None = None) -> bool:
+        """Revoke only a key belonging to the authenticated machine."""
+        if (not isinstance(credential_id, str) or not _CREDENTIAL_ID.fullmatch(credential_id)
+                or not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)):
+            return False
+        connection = self._connect()
+        try:
+            cursor = connection.execute(
+                "UPDATE phone_credentials SET revoked_at = ? "
+                "WHERE credential_id = ? AND machine_id = ? AND revoked_at IS NULL",
+                (time.time() if now is None else now, credential_id, machine_id),
+            )
+            return cursor.rowcount == 1
+        finally:
+            connection.close()
+
     def revoke(self, credential_id: str, *, now: float | None = None) -> bool:
         if not isinstance(credential_id, str) or not _CREDENTIAL_ID.fullmatch(credential_id):
             return False

@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 MACHINE_ENROLL_PATH = "/thessley-ad/v1/machines/enroll"
 MACHINE_AUTH_PATH = "/thessley-ad/v1/machines/authenticate"
 DIRECTORY_USERS_PATH = "/thessley-ad/v1/directory/users"
+PHONE_KEYS_PATH = "/thessley-ad/v1/directory/phone-keys"
+PHONE_KEY_REVOKE_PATH = "/thessley-ad/v1/directory/phone-keys/revoke"
 PRINCIPAL_RESOLVE_PATH = "/thessley-ad/v1/principals/resolve"
 LOGIN_START_PATH = "/thessley-ad/v1/requests"
 PHONE_RESPONSE_PATH = "/thessley-ad/v1/requests/respond"
@@ -146,6 +148,7 @@ def directory_users_route(registry: "MachineRegistry", replay_guard: "ReplayGuar
         for user in snapshot["users"]:
             if (not isinstance(user, dict)
                     or not isinstance(user.get("sam"), str) or not user["sam"] or len(user["sam"]) > 64
+                    or not isinstance(user.get("sid"), str) or not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", user["sid"])
                     or not isinstance(user.get("name"), str) or len(user["name"]) > 256
                     or not isinstance(user.get("upn"), str) or len(user["upn"]) > 256
                     or not isinstance(user.get("enabled"), bool)
@@ -153,6 +156,50 @@ def directory_users_route(registry: "MachineRegistry", replay_guard: "ReplayGuar
                 return 503, {"result": "error", "message": "The AD directory returned an invalid response."}
         return 200, {"result": "listed", **snapshot}
 
+    return RawBodyRoute(handle)
+
+
+def phone_keys_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                     phones: "PhoneRegistry"):
+    """List active phone-key metadata for the authenticated machine only."""
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {"x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"}
+        if set(auth_headers) != expected or body != {}:
+            return 400, {"result": "error", "message": "Invalid phone-key listing request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(machine_id, auth_headers["x-thessley-timestamp"],
+                                      auth_headers["x-thessley-nonce"], auth_headers["x-thessley-signature"],
+                                      PHONE_KEYS_PATH, raw_body, registry, replay_guard):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        if not registry.machine_name(machine_id):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        keys = phones.list_for_machine(machine_id)
+        if len(keys) > 5000:
+            return 503, {"result": "error", "message": "The phone-key listing is too large."}
+        return 200, {"result": "listed", "keys": keys}
+    return RawBodyRoute(handle)
+
+
+def phone_key_revoke_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                           phones: "PhoneRegistry"):
+    """Revoke a key only when it belongs to the authenticated machine."""
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {"x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"}
+        credential_id = body.get("credential_id")
+        if (set(auth_headers) != expected or set(body) != {"credential_id"}
+                or not isinstance(credential_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{32,64}", credential_id)):
+            return 400, {"result": "error", "message": "Invalid phone-key revocation request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(machine_id, auth_headers["x-thessley-timestamp"],
+                                      auth_headers["x-thessley-nonce"], auth_headers["x-thessley-signature"],
+                                      PHONE_KEY_REVOKE_PATH, raw_body, registry, replay_guard):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        if not registry.machine_name(machine_id):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        if not phones.revoke_for_machine(credential_id, machine_id):
+            return 404, {"result": "error", "message": "No active matching phone key was found for this computer."}
+        return 200, {"result": "revoked"}
     return RawBodyRoute(handle)
 
 
@@ -485,6 +532,8 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
         MACHINE_AUTH_PATH: machine_authentication_route(registry, replay_guard),
         DIRECTORY_USERS_PATH: directory_users_route(registry, replay_guard, directory, allowed_group_sids),
+        PHONE_KEYS_PATH: phone_keys_route(registry, replay_guard, phones),
+        PHONE_KEY_REVOKE_PATH: phone_key_revoke_route(registry, replay_guard, phones),
         PRINCIPAL_RESOLVE_PATH: principal_resolve_route(registry, replay_guard, directory, allowed_group_sids),
         LOGIN_START_PATH: login_start_route(
             registry, replay_guard, directory, allowed_group_sids, challenges, server_host, server_fingerprint
