@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import getpass
+import json
 import re
 import subprocess
 import sys
@@ -175,6 +176,30 @@ def _approval_test(account: str, context: str) -> int:
     return 0 if approved else 1
 
 
+def _approval_start(sid: str, context: str) -> int:
+    """Machine-authenticated, quiet JSON interface for a future native tile."""
+    if not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid, re.IGNORECASE):
+        raise ValueError("The selected account SID is malformed.")
+    _require_domain_joined()
+    started = ad_agent.start_login(sid, context)
+    print(json.dumps({
+        "request_id": started["request_id"],
+        "link": started["link"],
+        "qr_matrix": started["qr_matrix"],
+    }, separators=(",", ":")), flush=True)
+    return 0
+
+
+def _approval_poll(request_id: str, timeout: int) -> int:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+        raise ValueError("The approval request ID is malformed.")
+    approved = ad_agent.poll_login(
+        request_id, threading.Event(), say=lambda _message: None, timeout=timeout,
+    )
+    print(json.dumps({"status": "approved" if approved else "not_approved"}), flush=True)
+    return 0 if approved else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="thessley-ad-test", description="Isolated Thessley AD sign-in prototype")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -191,6 +216,12 @@ def main(argv: list[str] | None = None) -> int:
     approval = commands.add_parser("approval-test", help="test phone approval without changing Windows logon")
     approval.add_argument("--user", required=True, help="qualified domain account")
     approval.add_argument("--context", choices=("interactive", "unlock"), default="interactive")
+    start = commands.add_parser("approval-start", help="start an AD sign-in approval and return JSON for the native tile")
+    start.add_argument("--sid", required=True)
+    start.add_argument("--context", choices=("interactive", "unlock"), required=True)
+    poll = commands.add_parser("approval-poll", help="poll an AD sign-in approval and return JSON for the native tile")
+    poll.add_argument("--request-id", required=True)
+    poll.add_argument("--timeout", type=int, default=175, choices=range(1, 176))
     args = parser.parse_args(argv)
 
     try:
@@ -226,6 +257,10 @@ def main(argv: list[str] | None = None) -> int:
             return _phone_enroll(sid=_current_user_sid())
         if args.command == "approval-test":
             return _approval_test(args.user, args.context)
+        if args.command == "approval-start":
+            return _approval_start(args.sid, args.context)
+        if args.command == "approval-poll":
+            return _approval_poll(args.request_id, args.timeout)
     except (ad_agent.AgentError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

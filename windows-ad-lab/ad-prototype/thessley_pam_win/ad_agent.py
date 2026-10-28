@@ -386,7 +386,9 @@ def poll_login(request_id: str, cancel, say=lambda _message: None, timeout: int 
     """Poll a one-use machine-bound AD approval result. Does not perform Windows logon."""
     if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
         raise AgentError("Invalid AD sign-in request id.")
-    deadline = time.monotonic() + max(1, min(int(timeout), 120))
+    # The service's AD login challenges live for three minutes. Leave a small
+    # margin for the client to receive the one-use result before server expiry.
+    deadline = time.monotonic() + max(1, min(int(timeout), 175))
     while time.monotonic() < deadline:
         if cancel.is_set():
             return False

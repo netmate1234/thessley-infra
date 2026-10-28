@@ -10,6 +10,14 @@ not yet perform Windows AD sign-in. Passwordless AD sign-in needs a separate
 PKINIT-compatible credential bridge; the local QR tile remains the path for
 local accounts, including Windows Home.
 
+Two quiet JSON commands are available as the native AD tile's service
+adapter: `approval-start --sid SID --context interactive|unlock` returns a
+validated one-use request ID, phone link, and QR matrix; `approval-poll
+--request-id ID --timeout 175` waits for the machine-bound result. They do not
+log in to Windows. The eventual provider must still protect the entered VSC PIN
+and submit the certificate serialization; keep the existing provider and
+recovery tiles separate.
+
 The package imports Python modules from `thessley_pam_win/` in this directory
 and cryptography/qrcode dependencies from the existing private vendor folder
 at `C:\ProgramData\ThessleyPamWin\app\vendor`.
