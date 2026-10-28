@@ -152,10 +152,12 @@ CredProtect-protected PIN, takes card metadata and the Kerberos auth package
 from a future provider, and does not call LSA or register a provider. Martin's
 VSC certificate reports CNG `dwProvType = 0`, `dwKeySpec = 0`. That certificate
 metadata is distinct from `KERB_SMARTCARD_CSP_INFO.KeySpec`, which Microsoft
-documents as `AT_KEYEXCHANGE` (1) or `AT_SIGNATURE` (2). The provider uses
-`AT_SIGNATURE` for the VSC's PKINIT signing key. The previous value zero caused
-Windows `STATUS_SMARTCARD_SUBSYSTEM_FAILURE` (`0xC0000321`); the corrected
-serialization still needs an isolated LogonUI sign-in test. The
+documents as `AT_KEYEXCHANGE` (1) or `AT_SIGNATURE` (2). `certutil -key -csp SC`
+identifies the actual VSC container as `AT_KEYEXCHANGE`, so the provider uses
+1. Serialization with zero caused `STATUS_SMARTCARD_SUBSYSTEM_FAILURE`
+(`0xC0000321`); serialization with 2 caused `STATUS_SMARTCARD_NO_KEY_CONTAINER`
+(`0xC0000384`). The provider now matches the key spec reported by the actual
+container. The
 Microsoft structures and layout are documented at [KERB_CERTIFICATE_LOGON](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_certificate_logon)
 and [KERB_SMARTCARD_CSP_INFO](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info),
 and CNG key metadata at [CRYPT_KEY_PROV_INFO](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-crypt_key_prov_info).

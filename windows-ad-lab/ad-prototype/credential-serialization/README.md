@@ -30,11 +30,12 @@ The existing Martin certificate is present in the domain user's store, uses
 `dwProvType = 0` and `dwKeySpec = 0`, identifying the CNG KSP path. That
 certificate metadata value is not the same as `KERB_SMARTCARD_CSP_INFO.KeySpec`:
 Microsoft documents the serialization field as `AT_KEYEXCHANGE` (1) or
-`AT_SIGNATURE` (2). This certificate is used for PKINIT signing, so the provider
-must serialize `AT_SIGNATURE` (2) while keeping the exact Microsoft Smart Card
-KSP and container names. Passing zero into the serialization field caused
-Windows to report `STATUS_SMARTCARD_SUBSYSTEM_FAILURE` (`0xC0000321`). The
-corrected value still needs a fresh isolated LogonUI sign-in test.
+`AT_SIGNATURE` (2). On the test VM, `certutil -key -csp SC` identifies this VSC
+container as `AT_KEYEXCHANGE`, so the provider must serialize 1 while keeping
+the exact Microsoft Smart Card KSP and container names. Passing zero first
+caused `STATUS_SMARTCARD_SUBSYSTEM_FAILURE` (`0xC0000321`); passing 2 then
+caused `STATUS_SMARTCARD_NO_KEY_CONTAINER` (`0xC0000384`). The provider now
+uses the key spec reported by the actual container.
 
 The eventual near-term flow is phone approval followed by this TPM VSC
 certificate logon. The private key remains on the PC. This is not the

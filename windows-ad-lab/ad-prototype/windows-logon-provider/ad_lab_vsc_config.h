@@ -5,6 +5,5 @@
 #define THESSLEY_AD_LAB_USER_SID L"S-1-5-21-1719900462-4250469598-2954734011-1101"
 #define THESSLEY_AD_LAB_VSC_CONTAINER L"te-ThessleyVscLogon-0ef1969d-38db-09390"
 #define THESSLEY_AD_LAB_VSC_PROVIDER L"Microsoft Smart Card Key Storage Provider"
-// KERB_SMARTCARD_CSP_INFO requires AT_KEYEXCHANGE (1) or AT_SIGNATURE (2).
-// The TPM VSC certificate is used for PKINIT signing.
-#define THESSLEY_AD_LAB_VSC_KEYSPEC 2
+// certutil -key -csp SC identifies this VSC key container as AT_KEYEXCHANGE.
+#define THESSLEY_AD_LAB_VSC_KEYSPEC 1
