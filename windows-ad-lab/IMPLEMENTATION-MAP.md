@@ -87,17 +87,33 @@ Windows login feature.
 3. (Complete for the approval path) Enroll one phone key for Martin, approve a
    live login request, and receive the one-use result on the initiating client.
    Still exercise denial, expiry, revocation, and cross-machine result refusal.
-4. Build a distinct `Thessley AD Passkey` Windows Credential Provider with a
-   separate CLSID and AD-only account handling. Connect it to this service
-   through a new agent interface. Keep the existing QR password tile and
-   built-in Windows PIN/password recovery intact; never route AD users into
-   the existing Drupal client code.
-5. Replace password serialization only after a Windows certificate provider
-   can sign a live KDC PKINIT request with the enrolled phone key. A QR
-   approval response by itself cannot complete that step.
-6. Test enrollment, interactive sign-in, lock/unlock, denied and expired
-   requests, network loss, phone revocation, machine revocation, and fallback.
-   Keep this on the disposable VM until each path is repeatable.
+4. Prototype a distinct `Thessley AD Passkey` Credential Provider with its own
+   CLSID and AD-only account handling. Keep the current QR password tile,
+   existing TPM smart-card path, and built-in Windows PIN/password recovery
+   intact. Never route AD users into the Drupal client code.
+5. Keep these bridge milestones separate:
+
+   - **Near-term lab bridge: phone approval + TPM virtual smart card.** The
+     user approves the SID-bound request on the phone, then supplies the VSC
+     PIN. The new provider submits a Kerberos certificate-logon serialization
+     for the existing TPM VSC certificate. This demonstrates an AD-domain QR
+     approval gate without sending or storing the AD password. The private
+     key stays in the computer TPM; this is not phone-key PKINIT and must be
+     labeled accordingly.
+   - **Target bridge: phone-held key + PKINIT.** Only call this passwordless
+     phone-key sign-in after a supported Windows smart-card/KSP bridge can
+     pass the actual fresh PKINIT signing operation to the Android Keystore
+     key and the KDC accepts it. A Thessley approval signature is not a
+     substitute for that KDC signature.
+
+   The VSC bridge is opt-in and does not replace or silently change the
+   phone-held-key design. Stop before installation if it requires weakening
+   Windows recovery or changing the existing VSC template.
+6. First validate provider serialization and the TPM certificate on the
+   disposable VM without registering a provider or touching LogonUI. Install
+   only with automatic rollback and a tested recovery route. Then test
+   interactive sign-in, lock/unlock, denied and expired requests, network
+   loss, phone revocation, machine revocation, and fallback.
 
 ## Windows cryptographic bridge choice
 
@@ -106,6 +122,24 @@ the TPM virtual smart card to use its local, non-exportable RSA key and the KDC
 validates its certificate. It is an important baseline, but it does not expose
 the Android key or make the phone the PKINIT signer. Keep its template and card
 unchanged.
+
+Windows also defines a certificate credential serialization containing the
+domain, selected user, smart-card PIN, and smart-card provider data. That makes
+the VSC path a plausible isolated bridge experiment: a new Thessley AD provider
+could require a fresh phone approval and then submit the existing VSC
+certificate credential. It must obtain the certificate/container metadata
+from the actual card and must never substitute a password tile. This adds
+phone approval to a computer-held TPM credential; the VSC PIN and TPM
+requirements remain, and the phone's private key is not used for PKINIT. It is
+a stepping stone, not the phone-held-key end state.
+
+The domain certificate is in Martin's domain-user certificate context, not the
+separate local SSH maintenance account's `CurrentUser` store. A remote metadata
+inspection under the maintenance account therefore returns no certificate and
+must not be treated as evidence that the VSC enrollment is missing. Inspect it
+from an interactive `THESSLEYLAB\martin` session or a narrowly scoped task
+running as that identity. Do not issue, remove, or replace certificates as part
+of this inspection.
 
 For direct phone-key AD sign-in, prefer the Windows smart-card Base CSP/KSP
 plus a card minidriver if the prototype can expose the phone key through a
