@@ -146,6 +146,7 @@ CSampleCredential::CSampleCredential():
     _pszUserSid(nullptr),
     _pszQualifiedUserName(nullptr),
     _fIsLocalUser(false),
+    _adLabUser(false),
     _vaultAvailable(false),
     _passwordEntryMode(false),
     _savePasswordAfterSuccess(false),
@@ -173,6 +174,8 @@ CSampleCredential::~CSampleCredential()
     {
         _approvalThread.join();
     }
+    ThessleySecureClear(_passwordPendingSave);
+    ThessleySecureClear(_pinPendingSave);
     if (_rgFieldStrings[SFI_PASSWORD])
     {
         size_t lenPassword = wcslen(_rgFieldStrings[SFI_PASSWORD]);
@@ -219,6 +222,7 @@ void CSampleCredential::_StartApproval()
     _approvalCancelled.store(false);
     _phoneApproved.store(false);
     ThessleySecureClear(_passwordPendingSave);
+    ThessleySecureClear(_pinPendingSave);
     _savePasswordAfterSuccess = false;
     if (_rgFieldStrings[SFI_EDIT_TEXT])
     {
@@ -339,7 +343,7 @@ void CSampleCredential::_StartApproval()
             {
                 if (LaunchQrViewer(matrix))
                 {
-                    update(SFI_EDIT_TEXT, L"Scan the QR code with Thessley Passkey, then enter the TPM card PIN.");
+                    update(SFI_EDIT_TEXT, L"Scan and approve on your phone. First setup may ask for the card PIN once.");
                     update(SFI_LOGONSTATUS_TEXT, L"Waiting for phone approval.");
                     std::string result;
                     agentHr = PollAdApproval(wideRequestId.c_str(), 175,
@@ -437,7 +441,7 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
     }
     if (SUCCEEDED(hr))
     {
-        hr = SHStrDupW(L"Scan for AD approval, enter the TPM card PIN, then submit.", &_rgFieldStrings[SFI_EDIT_TEXT]);
+        hr = SHStrDupW(L"Scan and approve on your phone. First setup may ask for the card PIN once.", &_rgFieldStrings[SFI_EDIT_TEXT]);
     }
     if (SUCCEEDED(hr))
     {
@@ -531,17 +535,40 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
     }
     if (SUCCEEDED(hr))
     {
-        // This first tile is deliberately limited to the one disposable lab
-        // identity whose TPM VSC certificate metadata was inspected.
-        if (_fIsLocalUser || wcscmp(_pszUserSid, THESSLEY_AD_LAB_USER_SID) != 0)
+        // Restrict this provider to the one inspected AD lab SID. Windows can
+        // report Identity_LocalUserProvider for a domain profile too, so the
+        // provider ID is not a reliable local-vs-domain test here. Use the SID
+        // allowlist as the account boundary, then force the AD serialization
+        // path for that exact identity.
+        const bool isAllowedAdLabUser =
+            _pszUserSid && wcscmp(_pszUserSid, THESSLEY_AD_LAB_USER_SID) == 0;
+        ProviderDiag(L"AdLabSidCheck", S_OK, isAllowedAdLabUser ? 1 : 0);
+        ProviderDiag(L"IdentityLocalProvider", S_OK, _fIsLocalUser ? 1 : 0);
+        if (!isAllowedAdLabUser)
         {
             hr = E_ACCESSDENIED;
         }
         else
         {
-            _vaultAvailable = false;
-            _passwordEntryMode = true; // visible field is the TPM card PIN, never an account password
+            _fIsLocalUser = false;
+            _adLabUser = true;
+            _vaultAvailable = ThessleyPinVaultExists(_pszUserSid);
+            _passwordEntryMode = !_vaultAvailable; // only the first sign-in needs the PIN typed
             _fChecked = false;
+            if (_rgFieldStrings[SFI_EDIT_TEXT])
+            {
+                SecureZeroMemory(_rgFieldStrings[SFI_EDIT_TEXT], wcslen(_rgFieldStrings[SFI_EDIT_TEXT]) * sizeof(WCHAR));
+                CoTaskMemFree(_rgFieldStrings[SFI_EDIT_TEXT]);
+            }
+            _rgFieldStrings[SFI_EDIT_TEXT] = nullptr;
+            SHStrDupW(_vaultAvailable
+                ? L"Phone approval will unlock this PC's TPM sign-in key."
+                : L"For the first sign-in, enter the TPM PIN once. Check Remember to use QR approval alone next time.",
+                &_rgFieldStrings[SFI_EDIT_TEXT]);
+            if (_rgFieldStrings[SFI_CHECKBOX]) CoTaskMemFree(_rgFieldStrings[SFI_CHECKBOX]);
+            _rgFieldStrings[SFI_CHECKBOX] = nullptr;
+            SHStrDupW(L"Remember TPM PIN on this PC for QR-only sign-in (encrypted)",
+                      &_rgFieldStrings[SFI_CHECKBOX]);
         }
     }
 
@@ -642,11 +669,14 @@ HRESULT CSampleCredential::GetFieldState(DWORD dwFieldID,
         *pcpfis = _rgFieldStatePairs[dwFieldID].cpfis;
         if (dwFieldID == SFI_PASSWORD)
         {
-            *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            *pcpfs = (_adLabUser && !_passwordEntryMode)
+                ? CPFS_HIDDEN : CPFS_DISPLAY_IN_SELECTED_TILE;
             *pcpfis = CPFIS_FOCUSED;
         }
-        else if (dwFieldID == SFI_CHECKBOX)
-            *pcpfs = CPFS_HIDDEN; // this provider never saves or handles an account password
+        else if (dwFieldID == SFI_CHECKBOX && !_adLabUser)
+            *pcpfs = CPFS_HIDDEN; // Local accounts never expose the AD card-PIN option.
+        else if (dwFieldID == SFI_CHECKBOX && _adLabUser)
+            *pcpfs = _passwordEntryMode ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN;
         hr = S_OK;
     }
     else
@@ -806,7 +836,7 @@ HRESULT CSampleCredential::GetCheckboxValue(DWORD dwFieldID, _Out_ BOOL *pbCheck
 // Sets whether the specified checkbox is checked or not.
 HRESULT CSampleCredential::SetCheckboxValue(DWORD dwFieldID, BOOL bChecked)
 {
-    if (!_fIsLocalUser)
+    if (!_fIsLocalUser && !_adLabUser)
         return E_ACCESSDENIED;
     HRESULT hr;
 
@@ -893,8 +923,8 @@ HRESULT CSampleCredential::SetComboBoxSelectedValue(DWORD dwFieldID, DWORD dwSel
 // Called when the user clicks a command link.
 HRESULT CSampleCredential::CommandLinkClicked(DWORD dwFieldID)
 {
-    if (!_fIsLocalUser)
-        return E_ACCESSDENIED; // the AD clone exposes no password setup/control links
+    if (!_fIsLocalUser && !_adLabUser)
+        return E_ACCESSDENIED; // Reject identities outside the local and allowlisted AD flows.
     HRESULT hr = S_OK;
 
     CREDENTIAL_PROVIDER_FIELD_STATE cpfsShow = CPFS_HIDDEN;
@@ -929,6 +959,30 @@ HRESULT CSampleCredential::CommandLinkClicked(DWORD dwFieldID)
             _fShowControls = !_fShowControls;
             break;
         case SFI_QR_SETUP_LINK:
+            if (_adLabUser)
+            {
+                _passwordEntryMode = !_passwordEntryMode;
+                _fChecked = _passwordEntryMode;
+                _savePasswordAfterSuccess = false;
+                if (_pCredProvCredentialEvents)
+                {
+                    _pCredProvCredentialEvents->BeginFieldUpdates();
+                    _pCredProvCredentialEvents->SetFieldState(this, SFI_PASSWORD,
+                        _passwordEntryMode ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN);
+                    _pCredProvCredentialEvents->SetFieldState(this, SFI_CHECKBOX,
+                        _passwordEntryMode ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN);
+                    _pCredProvCredentialEvents->SetFieldCheckbox(this, SFI_CHECKBOX, _fChecked,
+                        L"Remember TPM card PIN on this PC for QR-only sign-in (encrypted)");
+                    _pCredProvCredentialEvents->SetFieldString(this, SFI_QR_SETUP_LINK,
+                        _passwordEntryMode ? L"Cancel PIN setup" : L"Set up QR-only sign-in");
+                    _pCredProvCredentialEvents->SetFieldString(this, SFI_EDIT_TEXT,
+                        _passwordEntryMode
+                            ? L"Enter the card PIN once. Check Remember; after successful sign-in, future logins use phone approval only."
+                            : L"Approve this sign-in on your phone.");
+                    _pCredProvCredentialEvents->EndFieldUpdates();
+                }
+                break;
+            }
             _passwordEntryMode = !_passwordEntryMode;
             _savePasswordAfterSuccess = _passwordEntryMode && _fChecked;
             _fChecked = _passwordEntryMode;
@@ -998,23 +1052,43 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
 
     // The AD lab clone never serializes an account password. Phone approval
     // only authorizes this one attempt to use the local TPM virtual smart-card
-    // certificate; the user must still enter that card's PIN.
-    if (!_fIsLocalUser)
+    // certificate. The PIN is typed once during setup, then may be DPAPI-protected locally.
+    if (_adLabUser)
     {
-        if (!_rgFieldStrings[SFI_PASSWORD] || !_rgFieldStrings[SFI_PASSWORD][0])
+        std::vector<WCHAR> savedPin;
+        PasswordVectorWiper wipeSavedPin{savedPin};
+        PCWSTR pin = _rgFieldStrings[SFI_PASSWORD];
+        const bool typedPin = pin && pin[0];
+        if (!typedPin && _vaultAvailable)
+        {
+            const HRESULT loadHr = ThessleyPinVaultLoad(_pszUserSid, savedPin);
+            ProviderDiag(L"LoadAdCardPinVault", loadHr, 0);
+            if (SUCCEEDED(loadHr)) pin = savedPin.data();
+        }
+        if (!pin || !pin[0])
         {
             _phoneApproved.store(false);
-            SHStrDupW(L"Enter the TPM smart-card PIN, then request phone approval again.",
+            SHStrDupW(L"Enter the TPM card PIN for this first sign-in, then approve the QR on your phone.",
                       ppwszOptionalStatusText);
             *pcpsiOptionalStatusIcon = CPSI_WARNING;
             return S_OK;
+        }
+
+        if (_fChecked && typedPin)
+        {
+            const size_t chars = wcslen(pin) + 1;
+            _pinPendingSave.assign(pin, pin + chars);
+        }
+        else
+        {
+            ThessleySecureClear(_pinPendingSave);
         }
 
         _phoneApproved.store(false); // every phone approval is single-use
         PWSTR protectedPin = nullptr;
         PWSTR domain = nullptr;
         PWSTR user = nullptr;
-        hr = ProtectIfNecessaryAndCopyPassword(_rgFieldStrings[SFI_PASSWORD], _cpus, &protectedPin);
+        hr = ProtectIfNecessaryAndCopyPassword(const_cast<PWSTR>(pin), _cpus, &protectedPin);
         if (SUCCEEDED(hr))
             hr = SplitDomainAndUsername(_pszQualifiedUserName, &domain, &user);
         ULONG authPackage = 0;
@@ -1038,24 +1112,25 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         }
         CoTaskMemFree(domain);
         CoTaskMemFree(user);
+        if (_rgFieldStrings[SFI_PASSWORD])
+        {
+            SecureZeroMemory(_rgFieldStrings[SFI_PASSWORD],
+                             wcslen(_rgFieldStrings[SFI_PASSWORD]) * sizeof(WCHAR));
+            CoTaskMemFree(_rgFieldStrings[SFI_PASSWORD]);
+            _rgFieldStrings[SFI_PASSWORD] = nullptr;
+            SHStrDupW(L"", &_rgFieldStrings[SFI_PASSWORD]);
+        }
 
         if (SUCCEEDED(hr))
         {
-            if (_rgFieldStrings[SFI_PASSWORD])
-            {
-                SecureZeroMemory(_rgFieldStrings[SFI_PASSWORD],
-                                 wcslen(_rgFieldStrings[SFI_PASSWORD]) * sizeof(WCHAR));
-                CoTaskMemFree(_rgFieldStrings[SFI_PASSWORD]);
-                _rgFieldStrings[SFI_PASSWORD] = nullptr;
-                SHStrDupW(L"", &_rgFieldStrings[SFI_PASSWORD]);
-            }
             *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
             return S_OK;
         }
 
+        ThessleySecureClear(_pinPendingSave);
         FreeKerbCertificateSerialization(pcpcs);
         ProviderDiag(L"BuildADCertificateLogon", hr, 0);
-        SHStrDupW(L"Could not prepare the TPM smart-card sign-in. Check the PIN and retry.",
+        SHStrDupW(L"Could not prepare TPM sign-in. Re-enter the card PIN and request fresh phone approval.",
                   ppwszOptionalStatusText);
         *pcpsiOptionalStatusIcon = CPSI_WARNING;
         return S_OK;
@@ -1258,6 +1333,37 @@ HRESULT CSampleCredential::ReportResult(NTSTATUS ntsStatus,
             *pcpsiOptionalStatusIcon = CPSI_WARNING;
         }
     }
+    if (_adLabUser && ntsStatus == STATUS_SUCCESS && !_pinPendingSave.empty())
+    {
+        const HRESULT saveHr = ThessleyPinVaultSave(_pszUserSid, _pinPendingSave.data());
+        ProviderDiag(L"SaveAdCardPinVault", saveHr, 0);
+        if (SUCCEEDED(saveHr))
+        {
+            _vaultAvailable = true;
+            _passwordEntryMode = false;
+            _fChecked = false;
+            if (_rgFieldStrings[SFI_EDIT_TEXT])
+            {
+                SecureZeroMemory(_rgFieldStrings[SFI_EDIT_TEXT], wcslen(_rgFieldStrings[SFI_EDIT_TEXT]) * sizeof(WCHAR));
+                CoTaskMemFree(_rgFieldStrings[SFI_EDIT_TEXT]);
+            }
+            _rgFieldStrings[SFI_EDIT_TEXT] = nullptr;
+            SHStrDupW(L"Phone approval unlocks this PC's TPM sign-in key.", &_rgFieldStrings[SFI_EDIT_TEXT]);
+            if (_pCredProvCredentialEvents)
+            {
+                _pCredProvCredentialEvents->SetFieldState(this, SFI_PASSWORD, CPFS_HIDDEN);
+                _pCredProvCredentialEvents->SetFieldState(this, SFI_CHECKBOX, CPFS_HIDDEN);
+                _pCredProvCredentialEvents->SetFieldString(this, SFI_EDIT_TEXT, _rgFieldStrings[SFI_EDIT_TEXT]);
+            }
+        }
+        else
+        {
+            SHStrDupW(L"Sign-in worked, but the encrypted PIN could not be saved. The next sign-in will ask for it once again.",
+                      ppwszOptionalStatusText);
+            *pcpsiOptionalStatusIcon = CPSI_WARNING;
+        }
+    }
+    ThessleySecureClear(_pinPendingSave);
     ThessleySecureClear(_passwordPendingSave);
     _savePasswordAfterSuccess = false;
 
@@ -1291,10 +1397,14 @@ HRESULT CSampleCredential::ReportResult(NTSTATUS ntsStatus,
             _pCredProvCredentialEvents->SetFieldState(this, SFI_PASSWORD, CPFS_DISPLAY_IN_SELECTED_TILE);
             _pCredProvCredentialEvents->SetFieldState(this, SFI_CHECKBOX, CPFS_DISPLAY_IN_SELECTED_TILE);
             _pCredProvCredentialEvents->SetFieldCheckbox(this, SFI_CHECKBOX, TRUE,
-                L"Save encrypted password for QR-only sign-in");
+                _adLabUser ? L"Remember TPM card PIN on this PC for QR-only sign-in (encrypted)"
+                           : L"Save encrypted password for QR-only sign-in");
             _pCredProvCredentialEvents->SetFieldString(this, SFI_EDIT_TEXT,
-                L"The saved password was rejected. Enter the current Windows password to update QR-only sign-in.");
-            _pCredProvCredentialEvents->SetFieldString(this, SFI_QR_SETUP_LINK, L"Cancel password update");
+                _adLabUser
+                    ? L"The saved card PIN was rejected. Enter the current TPM PIN and approve the fresh QR to update it."
+                    : L"The saved password was rejected. Enter the current Windows password to update QR-only sign-in.");
+            _pCredProvCredentialEvents->SetFieldString(this, SFI_QR_SETUP_LINK,
+                _adLabUser ? L"Cancel PIN update" : L"Cancel password update");
             _pCredProvCredentialEvents->EndFieldUpdates();
         }
     }

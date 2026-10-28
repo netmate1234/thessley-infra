@@ -18,12 +18,16 @@ adapter: `approval-start --sid SID --context interactive|unlock` returns a
 validated one-use request ID, phone link, and QR matrix; `approval-poll
 --request-id ID --timeout 175` waits for the machine-bound result. They do not
 log in to Windows. The isolated AD Credential Provider uses them to request
-approval, then requires the user-entered PIN for the existing TPM VSC
-certificate and builds a Kerberos certificate-logon serialization. This is
-phone approval plus the PC-held card PIN; the private key remains in the TPM
-virtual smart card. The tile does not serialize an account password or save a
-password. The existing local provider, TPM sign-in, and PIN/password recovery
-tiles remain separate.
+approval, then uses the existing TPM VSC certificate to build a Kerberos
+certificate-logon serialization. On first use, enter the card PIN and
+explicitly check the remember option. After a successful logon, the PIN is
+stored in a separate SID-scoped DPAPI LocalMachine vault, with access limited
+to SYSTEM and Administrators. Later logons require phone approval but no PC
+PIN entry. This convenience reduces the protection provided by the card PIN
+against a compromised local administrator; phone approval remains mandatory
+for each sign-in attempt. The private key remains in the TPM virtual smart
+card. The tile does not serialize or save an account password. The existing
+local provider, TPM sign-in, and PIN/password recovery tiles remain separate.
 
 Build the isolated AD tile and QR viewer for review only:
 

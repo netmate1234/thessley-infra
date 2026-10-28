@@ -23,6 +23,7 @@
 #include "Dll.h"
 #include "resource.h"
 #include "password_vault.h"
+#include "pin_vault.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -132,10 +133,12 @@ public:
     DWORD                                   _dwComboIndex;                                  // Tracks the current index of our combobox.
     bool                                    _fShowControls;                                 // Tracks the state of our show/hide controls link.
     bool                                    _fIsLocalUser;                                  // If the cred prov is assosiating with a local user tile
+    bool                                    _adLabUser;
     bool                                    _vaultAvailable;
     bool                                    _passwordEntryMode;
     bool                                    _savePasswordAfterSuccess;
     std::vector<WCHAR>                      _passwordPendingSave;
+    std::vector<WCHAR>                      _pinPendingSave;
     std::atomic<bool>                       _approvalInProgress;
     std::atomic<bool>                       _approvalCancelled;
     std::atomic<bool>                       _phoneApproved;

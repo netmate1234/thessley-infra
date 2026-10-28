@@ -7,7 +7,7 @@ void ProviderDiag(const wchar_t *eventName, HRESULT result, DWORD count)
     static std::mutex lock;
     std::lock_guard<std::mutex> guard(lock);
     HANDLE file = CreateFileW(
-        L"C:\\ProgramData\\ThessleyPamWin\\credential-provider\\provider.log",
+        L"C:\\ProgramData\\ThessleyPamWin\\ad-credential-provider\\provider.log",
         FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) return;

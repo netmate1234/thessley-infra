@@ -29,14 +29,36 @@ addresses with the local debug key:
 
 ```bash
 ssh -i ~/.ssh/thessley-vm-debug Administrator@192.168.122.98
-ssh -i ~/.ssh/thessley-vm-debug martin@192.168.122.66
+ssh -F /dev/null -l 'martin@lab.thessley.test' 192.168.122.66
 ```
 
 The first command reaches the domain controller; the second reaches the Windows
-client. The client SSH session is the local Windows account `Martin` (the SSH
-username is lowercase `martin`), not the domain test account. The key is stored
-on the hypervisor and is not included in this repository. SSH may request a
-Thessley phone approval; approve that request before continuing.
+client. The client SSH session uses the domain account `THESSLEYLAB\martin`.
+The host accepts the hypervisor's existing SSH key; private keys remain on the
+hypervisor and are not included in this repository. `-F /dev/null` bypasses
+local SSH aliases and keeps this command explicit. SSH may request a Thessley
+phone approval; approve that request before continuing.
+
+### Elevated SSH access on the disposable client
+
+`THESSLEYLAB\martin` is a member of `THESSLEYLAB\ThessleyADSignInAdmins`, and
+that group is mapped into the disposable client's local `Administrators`
+group. The current OpenSSH session was verified to have an enabled
+Administrators SID and a High Mandatory Level token, so it can perform the
+same machine-level maintenance as an elevated PowerShell session without
+opening a second shell. Verify before making changes:
+
+```powershell
+whoami /user
+whoami /groups
+[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+```
+
+This elevation applies only to the disposable `MARTIN-WM` client. SSH is
+firewalled to the hypervisor management gateway (`192.168.122.1`); it does not
+open SSH to the physical LAN. Do not store the user's password or SSH private
+key in this repository. This admin mapping is for lab administration and does
+not make `martin` a Domain Admin.
 
 Lab passwords and account SIDs are kept only in the ignored local file
 `LOCAL-CREDENTIALS.txt` beside this README. It has mode `0600`; it is excluded
