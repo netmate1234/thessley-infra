@@ -4,6 +4,10 @@ This is a disposable Windows Server 2025 evaluation lab for validating QR-mediat
 
 ## Lab layout
 
+For a concise map of the current management addresses, SSH commands, phone
+approval route, firewall scope, and remote access limitations, see
+[`ACCESS.md`](ACCESS.md).
+
 - Forest: `lab.thessley.test` (`THESSLEYLAB` NetBIOS name)
 - Server: `THESSLEY-DC1`, primary NIC attached to the `192.168.1.x` LAN; a second libvirt NAT NIC provides host-only management
 - Server roles: AD DS, DNS, and an Enterprise Root CA on the same VM for lab use only
