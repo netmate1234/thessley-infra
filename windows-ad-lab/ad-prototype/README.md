@@ -5,18 +5,38 @@ separate from the installed local-account Thessley app and its credential
 provider. It does not add or replace a Windows sign-in tile.
 
 The current prototype supports pairing the computer, requesting phone-key
-enrollment for an authorized AD account, and testing phone approval. It does
-not yet perform Windows AD sign-in. Passwordless AD sign-in needs a separate
-PKINIT-compatible credential bridge; the local QR tile remains the path for
-local accounts, including Windows Home.
+enrollment for an authorized AD account, and testing phone approval. A
+separate, build-only Credential Provider clone now connects those approvals to
+a lab TPM virtual smart-card certificate. It is hard-limited to the inspected
+`THESSLEYLAB\\martin` SID and VSC container on the disposable Pro VM. It is not
+registered or installed by the prototype setup scripts. The working local QR
+tile remains unchanged and continues to cover local accounts, including
+Windows Home.
 
 Two quiet JSON commands are available as the native AD tile's service
 adapter: `approval-start --sid SID --context interactive|unlock` returns a
 validated one-use request ID, phone link, and QR matrix; `approval-poll
 --request-id ID --timeout 175` waits for the machine-bound result. They do not
-log in to Windows. The eventual provider must still protect the entered VSC PIN
-and submit the certificate serialization; keep the existing provider and
-recovery tiles separate.
+log in to Windows. The isolated AD Credential Provider uses them to request
+approval, then requires the user-entered PIN for the existing TPM VSC
+certificate and builds a Kerberos certificate-logon serialization. This is
+phone approval plus the PC-held card PIN; the private key remains in the TPM
+virtual smart card. The tile does not serialize an account password or save a
+password. The existing local provider, TPM sign-in, and PIN/password recovery
+tiles remain separate.
+
+Build the isolated AD tile and QR viewer for review only:
+
+```bash
+bash infra/windows-ad-lab/ad-prototype/windows-logon-provider/build.sh
+```
+
+The output goes to `/tmp/thessley-ad-provider-build` by default. This only
+compiles files; it does not register the provider, deploy it to the VM, or
+change any sign-in setting. The provider embeds the lab SID and VSC container
+from `windows-logon-provider/ad_lab_vsc_config.h`; do not treat this artifact
+as a general installer. A later deployment must first have a tested rollback
+path and a separate non-network recovery login.
 
 The package imports Python modules from `thessley_pam_win/` in this directory
 and cryptography/qrcode dependencies from the existing private vendor folder

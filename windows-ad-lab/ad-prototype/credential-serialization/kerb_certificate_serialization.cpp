@@ -1,6 +1,7 @@
 #include "kerb_certificate_serialization.h"
 
 #include <ntsecapi.h>
+#include <wincrypt.h>
 #include <wincred.h>
 
 #include <algorithm>
