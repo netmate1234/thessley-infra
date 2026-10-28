@@ -6,6 +6,14 @@ Credential Provider. It builds a `KERB_CERTIFICATE_LOGON` or
 `LsaLogonUser`, talk to the approval service, register a provider, or alter a
 Windows sign-in path.
 
+`ad_approval_client.cpp` is the separate native adapter for the AD agent. It
+starts the existing Python agent with a SID and logon context, captures its
+bounded JSON response without a shell or visible console, and polls the
+machine-bound one-use decision. Cancellation terminates only the local polling
+process; the server request expires naturally. The caller must close the QR
+viewer and securely clear the response after use. It is not yet called by a
+Credential Provider.
+
 The PIN parameter must already be protected with `CredProtect`. The helper
 checks that property and refuses an unprotected PIN. The caller supplies the
 Kerberos authentication-package ID, provider CLSID, and card metadata. Optional
@@ -39,8 +47,8 @@ From the repository root on Linux with MinGW-w64 installed:
 bash infra/windows-ad-lab/ad-prototype/credential-serialization/build.sh
 ```
 
-The script writes an object file under `/tmp`; it does not produce or install a
-Credential Provider DLL.
+The script writes two object files under `/tmp`; it does not produce or install
+a Credential Provider DLL.
 
 References: Microsoft's [`CRYPT_KEY_PROV_INFO`](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-crypt_key_prov_info)
 documentation describes `dwProvType = 0` as CNG and passes `dwKeySpec` to
