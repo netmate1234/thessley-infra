@@ -141,6 +141,11 @@ from an interactive `THESSLEYLAB\martin` session or a narrowly scoped task
 running as that identity. Do not issue, remove, or replace certificates as part
 of this inspection.
 
+`inspect-vsc-user-certificate.ps1` is a read-only helper for that interactive
+domain session. It reports certificate and provider/container metadata without
+exporting the key or requesting a signature. It deliberately refuses to run
+under the local SSH maintenance identity.
+
 For direct phone-key AD sign-in, prefer the Windows smart-card Base CSP/KSP
 plus a card minidriver if the prototype can expose the phone key through a
 supported PC/SC reader path. The minidriver is the card-specific interface
