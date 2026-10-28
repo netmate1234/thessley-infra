@@ -76,6 +76,16 @@ try {
         'ContainerInherit,ObjectInherit', 'None', 'Allow'))
     Set-Acl -LiteralPath $pinDir -AclObject $pinAcl
 
+    # Keep the user's encrypted QR-only PIN seed across a reinstall. The value
+    # is DPAPI LocalMachine protected and SID-scoped; do not force another PIN
+    # prompt simply because the provider package was refreshed.
+    $previousPinDir = if ($orphanedDir) { Join-Path $orphanedDir 'pins' } else { $null }
+    if ($previousPinDir -and (Test-Path -LiteralPath $previousPinDir -PathType Container)) {
+        foreach ($pinFile in Get-ChildItem -LiteralPath $previousPinDir -File -Force) {
+            Copy-Item -LiteralPath $pinFile.FullName -Destination $pinDir -Force
+        }
+    }
+
     Copy-Item -LiteralPath $dllSource, $viewerSource, $rollbackSource, $keepSource -Destination $installDir
     foreach ($file in Get-ChildItem -LiteralPath $installDir -File) {
         $fileAcl = Get-Acl -LiteralPath $file.FullName
@@ -84,6 +94,15 @@ try {
         } | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value })
         if ('S-1-5-18' -notin $allowedSids -or 'S-1-5-32-544' -notin $allowedSids) {
             throw "The staged file ACL is missing SYSTEM or Administrators access: $($file.Name)"
+        }
+    }
+    foreach ($pinFile in Get-ChildItem -LiteralPath $pinDir -File -Force) {
+        $fileAcl = Get-Acl -LiteralPath $pinFile.FullName
+        $allowedSids = @($fileAcl.Access | Where-Object {
+            $_.AccessControlType -eq 'Allow' -and $_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl
+        } | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value })
+        if ('S-1-5-18' -notin $allowedSids -or 'S-1-5-32-544' -notin $allowedSids) {
+            throw "The preserved PIN file ACL is missing SYSTEM or Administrators access: $($pinFile.Name)"
         }
     }
 

@@ -27,13 +27,14 @@ handoff, LogonUI owns it.
 The existing Martin certificate is present in the domain user's store, uses
 `Microsoft Smart Card Key Storage Provider`, and has this TPM VSC container:
 `te-ThessleyVscLogon-0ef1969d-38db-09390`. Its certificate metadata reports
-`dwProvType = 0` and `dwKeySpec = 0`, identifying the CNG KSP path. Microsoft
-documents that a zero legacy key spec is passed to `NCryptOpenKey` for a CNG
-provider. The serialization helper accepts zero only with the exact Microsoft
-Smart Card KSP name; legacy CSPs must use `AT_KEYEXCHANGE` (1) or
-`AT_SIGNATURE` (2). The certificate has RSA-2048 and both KeyEncipherment and
-DigitalSignature usages. This resolves the key-spec mismatch, but does not yet
-prove that LogonUI accepts the resulting serialization for this TPM VSC.
+`dwProvType = 0` and `dwKeySpec = 0`, identifying the CNG KSP path. That
+certificate metadata value is not the same as `KERB_SMARTCARD_CSP_INFO.KeySpec`:
+Microsoft documents the serialization field as `AT_KEYEXCHANGE` (1) or
+`AT_SIGNATURE` (2). This certificate is used for PKINIT signing, so the provider
+must serialize `AT_SIGNATURE` (2) while keeping the exact Microsoft Smart Card
+KSP and container names. Passing zero into the serialization field caused
+Windows to report `STATUS_SMARTCARD_SUBSYSTEM_FAILURE` (`0xC0000321`). The
+corrected value still needs a fresh isolated LogonUI sign-in test.
 
 The eventual near-term flow is phone approval followed by this TPM VSC
 certificate logon. The private key remains on the PC. This is not the

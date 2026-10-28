@@ -142,6 +142,7 @@ public:
     std::atomic<bool>                       _approvalInProgress;
     std::atomic<bool>                       _approvalCancelled;
     std::atomic<bool>                       _phoneApproved;
+    std::atomic<ULONGLONG>                  _phoneApprovedAt;
     std::thread                             _approvalThread;
     void _CancelApproval();
     void _StartApproval();

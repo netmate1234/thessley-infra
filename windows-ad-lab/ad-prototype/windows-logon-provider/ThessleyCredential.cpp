@@ -155,7 +155,8 @@ CSampleCredential::CSampleCredential():
     _dwComboIndex(0),
     _approvalInProgress(false),
     _approvalCancelled(false),
-    _phoneApproved(false)
+    _phoneApproved(false),
+    _phoneApprovedAt(0)
 {
     DllAddRef();
     const HRESULT marshalHr = CoCreateFreeThreadedMarshaler(
@@ -221,6 +222,7 @@ void CSampleCredential::_StartApproval()
     if (_approvalThread.joinable()) _approvalThread.join();
     _approvalCancelled.store(false);
     _phoneApproved.store(false);
+    _phoneApprovedAt.store(0);
     ThessleySecureClear(_passwordPendingSave);
     ThessleySecureClear(_pinPendingSave);
     _savePasswordAfterSuccess = false;
@@ -367,6 +369,7 @@ void CSampleCredential::_StartApproval()
             CloseQrViewer();
             if (ok && !_approvalCancelled.load())
             {
+                _phoneApprovedAt.store(GetTickCount64());
                 _phoneApproved.store(true);
                 update(SFI_LOGONSTATUS_TEXT, IsAutoLogonReady() && providerEvents
                     ? L"Phone approved. Signing in..."
@@ -627,6 +630,7 @@ HRESULT CSampleCredential::SetDeselected()
         _approvalThread.join();
     }
     _phoneApproved.store(false);
+    _phoneApprovedAt.store(0);
     if (_rgFieldStrings[SFI_EDIT_TEXT])
     {
         SecureZeroMemory(_rgFieldStrings[SFI_EDIT_TEXT], wcslen(_rgFieldStrings[SFI_EDIT_TEXT]) * sizeof(WCHAR));
@@ -1041,7 +1045,16 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
     *pcpsiOptionalStatusIcon = CPSI_NONE;
     ZeroMemory(pcpcs, sizeof(*pcpcs));
 
-    // The phone approval is a one-use gate. The built-in Windows PIN/password tiles remain separate recovery paths.
+    // The phone approval is a short-lived, one-use gate. Keep the built-in Windows PIN/password tiles separate.
+    if (_phoneApproved.load())
+    {
+        const ULONGLONG approvedAt = _phoneApprovedAt.load();
+        if (approvedAt == 0 || GetTickCount64() - approvedAt > 120000)
+        {
+            _phoneApproved.store(false);
+            _phoneApprovedAt.store(0);
+        }
+    }
     if (!_phoneApproved.load())
     {
         SHStrDupW(L"Approve this sign-in with Thessley Passkey first, or choose another Windows sign-in option.",
@@ -1067,8 +1080,7 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         }
         if (!pin || !pin[0])
         {
-            _phoneApproved.store(false);
-            SHStrDupW(L"Enter the TPM card PIN for this first sign-in, then approve the QR on your phone.",
+            SHStrDupW(L"Enter the TPM card PIN and submit. This phone approval stays valid briefly.",
                       ppwszOptionalStatusText);
             *pcpsiOptionalStatusIcon = CPSI_WARNING;
             return S_OK;
@@ -1085,6 +1097,7 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         }
 
         _phoneApproved.store(false); // every phone approval is single-use
+        _phoneApprovedAt.store(0);
         PWSTR protectedPin = nullptr;
         PWSTR domain = nullptr;
         PWSTR user = nullptr;
@@ -1143,6 +1156,7 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
     if (_vaultAvailable && !_passwordEntryMode)
     {
         _phoneApproved.store(false);
+        _phoneApprovedAt.store(0);
         const HRESULT loadHr = ThessleyPasswordVaultLoad(_pszUserSid, vaultPassword);
         ProviderDiag(L"LoadLocalPasswordVault", loadHr, 0);
         if (FAILED(loadHr))
@@ -1173,6 +1187,7 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
     }
 
     _phoneApproved.store(false); // exactly one Windows authentication attempt per phone approval
+    _phoneApprovedAt.store(0);
     _savePasswordAfterSuccess = _passwordEntryMode && _fChecked;
     ThessleySecureClear(_passwordPendingSave);
 
@@ -1306,6 +1321,9 @@ HRESULT CSampleCredential::ReportResult(NTSTATUS ntsStatus,
                                         _Outptr_result_maybenull_ PWSTR *ppwszOptionalStatusText,
                                         _Out_ CREDENTIAL_PROVIDER_STATUS_ICON *pcpsiOptionalStatusIcon)
 {
+    // Record NTSTATUS and substatus only; never log account secrets or PINs.
+    ProviderDiag(L"ReportResult", static_cast<HRESULT>(ntsStatus),
+                 static_cast<DWORD>(ntsSubstatus));
     *ppwszOptionalStatusText = nullptr;
     *pcpsiOptionalStatusIcon = CPSI_NONE;
 

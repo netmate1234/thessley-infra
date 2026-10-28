@@ -73,12 +73,11 @@ HRESULT BuildCspInfo(PCWSTR cardName, PCWSTR readerName,
     if (FAILED(hr)) return hr;
     hr = ValidateInput(providerName, false, &providerChars);
     if (FAILED(hr)) return hr;
-    // Legacy CSPs use AT_KEYEXCHANGE / AT_SIGNATURE. For a CNG KSP, zero is
-    // the documented dwLegacyKeySpec value passed to NCryptOpenKey. Accept it
-    // only for the Microsoft Smart Card KSP used by this VSC certificate.
-    if (keySpec != AT_KEYEXCHANGE && keySpec != AT_SIGNATURE &&
-        !(keySpec == 0 && providerName != nullptr &&
-          wcscmp(providerName, L"Microsoft Smart Card Key Storage Provider") == 0))
+    // KERB_SMARTCARD_CSP_INFO.KeySpec is the legacy key-usage selector even
+    // when ProviderName identifies a CNG KSP. Kerberos smart-card logon only
+    // accepts AT_KEYEXCHANGE or AT_SIGNATURE here; the certificate's CNG
+    // dwKeySpec value (0) must not be copied into this separate field.
+    if (keySpec != AT_KEYEXCHANGE && keySpec != AT_SIGNATURE)
         return E_INVALIDARG;
 
     // The bBuffer starts with a DWORD reserved prefix (two WCHARs), followed
