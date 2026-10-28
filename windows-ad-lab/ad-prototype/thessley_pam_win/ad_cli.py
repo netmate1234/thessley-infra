@@ -112,6 +112,7 @@ def _phone_enroll(account: str | None = None, sid: str | None = None) -> int:
         return 1
     print(f"Scan with Thessley Passkey to enroll for {started['authority']}\\{started['username']}:")
     _show_qr(started["link"])
+    print(f"Complete enrollment link (phone-app fallback): {started['link']}")
     print("\nWaiting for the phone. Compare the pairing codes before confirming.", flush=True)
     deadline = time.monotonic() + 115
     while time.monotonic() < deadline:
@@ -162,10 +163,11 @@ def _approval_test(account: str, context: str) -> int:
         return 1
     print(f"Scan with Thessley Passkey for {account} ({context}):")
     _show_qr(started["link"])
+    print(f"Complete approval link: {started['link']}", flush=True)
     print("This test checks QR approval only. It does not log in to Windows.", flush=True)
     try:
         approved = ad_agent.poll_login(
-            started["request_id"], threading.Event(), say=lambda message: print(message, flush=True), timeout=95,
+            started["request_id"], threading.Event(), say=lambda message: print(message, flush=True), timeout=175,
         )
     except (ad_agent.AgentError, OSError, ValueError) as exc:
         print(f"AD phone-approval test failed: {exc}", file=sys.stderr)
@@ -181,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
     pair.add_argument("--tls-sha256", required=True, help="64-character TLS certificate SHA-256")
     commands.add_parser("status", help="show machine pairing state")
     commands.add_parser("check", help="check the pinned machine-authenticated service connection")
+    authorize = commands.add_parser("authorization-check", help="check the selected domain account against the AD group policy")
+    authorize.add_argument("--user", required=True, help="qualified domain account")
     enroll = commands.add_parser("enroll-phone", help="admin-assisted phone enrollment for a domain account")
     enroll.add_argument("--user", required=True, help="qualified domain account, e.g. THESSLEYLAB\\martin")
     commands.add_parser("enroll-current-user", help="enroll a phone for the currently signed-in AD account")
@@ -210,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
             result = ad_agent.check_connection()
             print(f"Signed service check succeeded for machine {result['machine_id']}.")
             return 0
+        if args.command == "authorization-check":
+            _require_domain_joined()
+            result = ad_agent.check_domain_authorization(_sid_for_account(args.user))
+            state = "authorized" if result["authorized"] else "not authorized"
+            print(f"AD policy: {result['authority']}\\{result['username']} is {state} on this prototype.")
+            return 0 if result["authorized"] else 1
         if args.command == "enroll-phone":
             return _phone_enroll(args.user)
         if args.command == "enroll-current-user":

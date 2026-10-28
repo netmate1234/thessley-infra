@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "bind_address": "192.168.1.79",
+  "public_host": "192.168.1.79",
+  "authority": "THESSLEYLAB",
+  "allowed_group_sids": [
+    "S-1-5-21-1719900462-4250469598-2954734011-1105"
+  ]
+}

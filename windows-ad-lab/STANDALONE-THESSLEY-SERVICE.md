@@ -233,12 +233,13 @@ Windows AD sign-in.
 
 ### Windows lab service host
 
-For the disposable lab, the service can run on `THESSLEY-DC1` itself as a
-LocalSystem scheduled task. It queries AD through the DC's built-in
-ActiveDirectory PowerShell module and ADWS machine identity, stores no AD bind
-password, and makes no directory changes. Do not copy this co-hosted layout to
-a production domain controller. Keep the API firewall limited to the trusted
-LAN and use a separate, least-privileged service host for a real deployment.
+For the disposable lab, the service runs on `THESSLEY-DC1` itself as a
+LocalSystem scheduled task. It queries AD through Windows LDAP/ADSI using the
+DC machine identity (SSPI), without the RSAT ActiveDirectory PowerShell module,
+stored bind password, or directory writes. Because this process is co-hosted
+on the DC, do not copy the layout to production. A separate service host should
+use LDAPS with certificate validation, a least-privileged domain identity, and
+a narrowly scoped firewall rule.
 
 The DC LAN interface is statically configured as `192.168.1.79/24`, gateway
 `192.168.1.254`, and DNS `192.168.1.79`. It was previously using that address
@@ -402,20 +403,16 @@ actually issued and its key can complete a KDC-backed logon. If the TPM virtual
 card rejects ECC, stop this branch and use a separately isolated PC/SC bridge
 prototype; do not change the joined client's driver-signing state.
 
-### Certificate-template MMC prerequisite (2026-10-27)
+### Certificate-template MMC availability (2026-10-28)
 
-The Windows 11 Pro lab client is build 26300.9711 and does not have
-`certtmpl.msc` or the `Rsat.CertificateServices.Tools` capability installed.
-`DISM /Online /Add-Capability` returned `0x80070005` without installing the
-capability or requesting a reboot. Windows Update services were running, no
-Windows Update policy key was configured, and the read-only component-store
-scan reported no corruption. The mounted `ESD-ISO` is Windows installation
-media, not a Features-on-Demand source. Do not repair ACLs or alter AD CS
-templates to work around this. The supported GUI path remains gated on a
-matching Features-on-Demand source or a separately diagnosed servicing fix.
-Retrying the capability install as `SYSTEM` through a temporary scheduled task
-also stalled in CBS finalization; the task was stopped and deleted, the
-diagnostic log was removed, and the capability remains `Not Present`.
+The current Windows 11 Pro lab client now reports
+`Rsat.CertificateServices.Tools~~~~0.0.1.0` as `Installed`, and
+`C:\Windows\System32\certtmpl.msc` is present. This supersedes the earlier
+2026-10-27 note that the capability was missing after failed servicing
+attempts. No certificate template or sign-in policy has been changed yet.
+Use the supported Certificate Templates MMC to create a separately named ECC
+test template; keep `SmartcardLogon`, `ThessleyVscLogon`, and existing sign-in
+providers unchanged.
 
 Microsoft references: [Smart Card KSP algorithm support](https://learn.microsoft.com/en-us/windows/win32/seccertenroll/cng-key-storage-providers),
 [TPM virtual smart-card requirements and tool](https://learn.microsoft.com/en-us/windows/security/identity-protection/virtual-smart-cards/virtual-smart-card-use-virtual-smart-cards),

@@ -6,9 +6,9 @@ import os
 import math
 import re
 import sqlite3
-import stat
 import time
 from pathlib import Path
+from .state_permissions import finish_private_sqlite, prepare_private_sqlite
 
 _MACHINE_ID = re.compile(r"^[a-f0-9]{32}$")
 _NONCE = re.compile(r"^[A-Za-z0-9_-]{22,86}$")
@@ -30,34 +30,7 @@ class SQLiteReplayStore:
         self._initialize()
 
     def _prepare_file(self) -> None:
-        directory = self.path.parent
-        try:
-            directory_stat = os.stat(directory, follow_symlinks=False)
-        except OSError as exc:
-            raise RuntimeError("AD service state directory must exist") from exc
-        if (
-            not stat.S_ISDIR(directory_stat.st_mode)
-            or directory_stat.st_uid != os.geteuid()
-            or directory_stat.st_mode & 0o022
-        ):
-            raise RuntimeError("AD service state directory has unsafe ownership or permissions")
-
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            fd = os.open(self.path, flags, 0o600)
-        except OSError as exc:
-            raise RuntimeError("Could not safely open AD service replay database") from exc
-        try:
-            file_stat = os.fstat(fd)
-            if (
-                not stat.S_ISREG(file_stat.st_mode)
-                or file_stat.st_uid != os.geteuid()
-                or file_stat.st_mode & 0o077
-            ):
-                raise RuntimeError("AD service replay database has unsafe ownership or permissions")
-            os.fchmod(fd, 0o600)
-        finally:
-            os.close(fd)
+        prepare_private_sqlite(self.path, description="AD service replay database")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
@@ -82,7 +55,7 @@ class SQLiteReplayStore:
             )
         finally:
             connection.close()
-        os.chmod(self.path, 0o600)
+        finish_private_sqlite(self.path)
 
     def claim(self, machine_id: str, nonce: str, expires_at: float) -> bool:
         """Return true exactly once for a machine/nonce pair before expiry."""

@@ -6,10 +6,10 @@ import os
 import re
 import secrets
 import sqlite3
-import stat
 import time
 from pathlib import Path
 from typing import Callable
+from .state_permissions import finish_private_sqlite, prepare_private_sqlite
 
 from .protocol import canonical_phone_message, principal_id_from_sid, timestamp_is_fresh, verify_phone_signature
 
@@ -34,23 +34,7 @@ class ChallengeStore:
         self._initialize()
 
     def _prepare_file(self) -> None:
-        try:
-            parent = os.stat(self.path.parent, follow_symlinks=False)
-        except OSError as exc:
-            raise RuntimeError("AD service state directory must exist") from exc
-        if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
-            raise RuntimeError("AD service state directory has unsafe ownership or permissions")
-        try:
-            fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        except OSError as exc:
-            raise RuntimeError("Could not safely open AD challenge database") from exc
-        try:
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-                raise RuntimeError("AD challenge database has unsafe ownership or permissions")
-            os.fchmod(fd, 0o600)
-        finally:
-            os.close(fd)
+        prepare_private_sqlite(self.path, description="AD challenge database")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
@@ -84,7 +68,7 @@ class ChallengeStore:
             )
         finally:
             connection.close()
-        os.chmod(self.path, 0o600)
+        finish_private_sqlite(self.path)
 
     def create(self, *, machine_id: str, sid: str, username: str, authority: str,
                context: str, lifetime_seconds: int = 90, now: float | None = None) -> dict:

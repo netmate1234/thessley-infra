@@ -11,14 +11,16 @@ This is a disposable Windows Server 2025 evaluation lab for validating QR-mediat
 - Input layout: Swedish (`sv-SE`)
 - Evaluation media: Windows Server 2025 Standard Evaluation Core
 
-The DC VM uses fixed virtual MACs and DHCP. Its direct LAN address is
-`192.168.1.79` (verified 2026-10-27); the libvirt management address is
+The DC VM uses a fixed virtual MAC. Its direct LAN address is now statically
+configured as `192.168.1.79/24` with gateway `192.168.1.254` and itself as DNS;
+the libvirt management address is
 `192.168.122.98`. The Windows client is also directly on the LAN at
 `192.168.1.103`, as well as its management address `192.168.122.66`. The
-phone reached the DC's LDAPS ports from Wi-Fi and reached the client over TCP.
-A router DHCP reservation is preferred so the DC's LAN address remains stable
-across long shutdowns. SSH on the management NIC is allowed only from the
-hypervisor gateway `192.168.122.1`.
+phone reached the DC's LDAPS and Thessley API ports from Wi-Fi and reached the
+client over TCP. The DC's static address was previously its DHCP lease; reserve
+or exclude it on the router (`192.168.1.254`) to prevent a later duplicate.
+SSH on the management NIC is allowed only from the hypervisor gateway
+`192.168.122.1`.
 
 ## Access and credentials
 
@@ -49,7 +51,7 @@ ordinary domain sign-in tests.
 
 - Forest and DNS: `lab.thessley.test` / `THESSLEYLAB`; AD DS, DNS, KDC, Netlogon, ADWS, and Certificate Services are running.
 - The two active Windows VMs are `MARTIN-WM` (`192.168.122.66`, Windows 11 Pro client) and `THESSLEY-DC1` (`192.168.122.98` management address; `192.168.1.79` LAN address). The client has 8 GiB assigned; the DC has 4 GiB. Both were running during the 2026-10-27 session. The client SSH service is running and `Test-ComputerSecureChannel` succeeds against `lab.thessley.test`.
-- The separate AD API is running on the DC as the `ThessleyADApi` LocalSystem startup task at `https://192.168.1.79:47810`. Its firewall rule allows TCP 47810 only from `192.168.1.0/24`. A cold-start ACL check initially timed out; its limit was increased and the service restarted. The client’s signed API check now succeeds. The existing standalone local-login service and both Windows sign-in providers were left unchanged.
+- The separate AD API is running on the DC as the `ThessleyADApi` LocalSystem startup task at `https://192.168.1.79:47810`. Its firewall rule allows TCP 47810 only from `192.168.1.0/24`. A cold-start ACL check initially timed out; its limit was increased and the service restarted. The client’s signed API check and AD group authorization check succeed. The existing standalone local-login service, the Thessley QR tile, and the TPM virtual smart-card template/card were left unchanged.
 - The Windows client is paired to the AD API with its own machine key. `authorization-check --user THESSLEYLAB\martin` confirmed the dedicated AD group policy allows that account. Martin’s phone is enrolled for this machine, and an AD QR approval test succeeded on 2026-10-28. This verifies phone approval only; the AD passwordless Credential Provider/PKINIT bridge is not installed.
 - DC time: timezone `Romance Standard Time` (Paris); Windows Time uses `time.windows.com` and advertises the DC as reliable. The DC had been eight hours ahead on its local CMOS clock; correct and verify time before any future domain join.
 - Enterprise root CA: `THESSLEY-LAB-CA`.
@@ -75,7 +77,7 @@ ordinary domain sign-in tests.
 
 ## Joining the disposable client
 
-1. Confirm the DC is running and still has its reserved LAN address (`192.168.1.79` at last check). Do not start the client if host memory is low; shut down unrelated VMs first.
+1. Confirm the DC is running and retains its static LAN address (`192.168.1.79`). Verify that address is excluded/reserved on the router so another DHCP client cannot claim it. Do not start the client if host memory is low; shut down unrelated VMs first.
 2. Log in to the client with its existing local administrator account, open elevated PowerShell, and run `join-domain-client.ps1` from the `THESSLEYJOIN` CD. It sets active adapter DNS resolvers to the DC's LAN address, disables DNS registration on non-LAN adapters, checks the AD SRV record, synchronizes time from the DC, and prompts for the domain Administrator password in the console before joining. If setup fails, it restores prior DNS resolver and registration settings.
 3. After the restart, sign in as `THESSLEYLAB\martin` with the lab test-account password. This interactive sign-in creates the persistent domain user profile needed for user certificate enrollment.
 4. Run `verify-domain-client.ps1` from PowerShell to check domain membership, LAN DNS, DC ports, secure channel, time, account SID, and any enrolled SmartcardLogon certificate. It is read-only and exits with a nonzero status if a required check fails.

@@ -48,6 +48,8 @@ def make_server(address: tuple[str, int], certfile: str, keyfile: str,
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Connection", "close")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
@@ -100,8 +102,33 @@ def make_server(address: tuple[str, int], certfile: str, keyfile: str,
         def log_message(self, _format: str, *_args) -> None:
             return
 
+        def setup(self) -> None:
+            super().setup()
+            self.connection.settimeout(5)
+
     class Server(ThreadingHTTPServer):
         daemon_threads = True
+        request_queue_size = 32
+
+        def __init__(self, *args, **kwargs):
+            self._request_slots = threading.BoundedSemaphore(32)
+            super().__init__(*args, **kwargs)
+
+        def process_request(self, request, client_address):
+            if not self._request_slots.acquire(blocking=False):
+                self.shutdown_request(request)
+                return
+            try:
+                super().process_request(request, client_address)
+            except Exception:
+                self._request_slots.release()
+                raise
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                self._request_slots.release()
 
         def handle_error(self, _request, _client_address) -> None:
             return

@@ -178,13 +178,13 @@ class ActiveDirectory:
         filter_text = f"(objectSid={_ldap_escape_binary(binary_sid)})"
         connection = self._connect()
         try:
-            from ldap3 import SUBTREE
+            from ldap3 import BASE, SUBTREE
 
             connection.search(
                 search_base=self.config.base_dn,
                 search_filter=filter_text,
                 search_scope=SUBTREE,
-                attributes=["objectSid", "objectClass", "sAMAccountName", "userAccountControl", "tokenGroups"],
+                attributes=["objectSid", "objectClass", "sAMAccountName", "userAccountControl"],
                 size_limit=2,
                 time_limit=self.config.timeout_seconds,
             )
@@ -193,13 +193,13 @@ class ActiveDirectory:
                 raise PrincipalNotFound("SID does not resolve to exactly one AD principal")
             entry = entries[0]
             attrs = {str(name).lower(): values for name, values in entry.entry_raw_attributes.items()}
-            object_classes = {item.decode("utf-8", "ignore").lower() for item in attrs.get("objectClass", [])}
+            object_classes = {item.decode("utf-8", "ignore").lower() for item in attrs.get("objectclass", [])}
             if "user" not in object_classes or "computer" in object_classes:
                 raise PrincipalNotFound("SID is not a user account")
-            returned_sid = attrs.get("objectSid", [])
+            returned_sid = attrs.get("objectsid", [])
             if len(returned_sid) != 1 or sid_from_bytes(returned_sid[0]) != sid:
                 raise PrincipalNotFound("AD returned a different SID")
-            account_flags = attrs.get("userAccountControl", [])
+            account_flags = attrs.get("useraccountcontrol", [])
             if len(account_flags) != 1:
                 raise PrincipalNotFound("AD account flags are unavailable")
             try:
@@ -207,13 +207,35 @@ class ActiveDirectory:
                     raise PrincipalNotFound("AD account is disabled")
             except (ValueError, UnicodeDecodeError) as exc:
                 raise PrincipalNotFound("AD account flags are invalid") from exc
-            account_names = attrs.get("sAMAccountName", [])
+            account_names = attrs.get("samaccountname", [])
             if len(account_names) != 1:
                 raise PrincipalNotFound("AD account name is unavailable")
             username = account_names[0].decode("utf-8")
             if not _USERNAME.fullmatch(username):
                 raise PrincipalNotFound("AD account name is invalid")
-            group_sids = frozenset(sid_from_bytes(group) for group in attrs.get("tokenGroups", []))
+            # AD computes tokenGroups only for a base-object query. Asking for
+            # it in the initial subtree search can fail with LDAP unwillingToPerform
+            # or silently leave the attribute absent, which would break group gating.
+            entry_dn = str(getattr(entry, "entry_dn", ""))
+            if not entry_dn or "\x00" in entry_dn:
+                raise DirectoryUnavailable("AD did not return a valid user distinguished name")
+            connection.search(
+                search_base=entry_dn,
+                search_filter="(objectClass=*)",
+                search_scope=BASE,
+                attributes=["tokenGroups"],
+                size_limit=1,
+                time_limit=self.config.timeout_seconds,
+            )
+            group_entries = connection.entries
+            if len(group_entries) != 1:
+                raise DirectoryUnavailable("AD did not return tokenGroups for the user")
+            group_attrs = {
+                str(name).lower(): values for name, values in group_entries[0].entry_raw_attributes.items()
+            }
+            if "tokengroups" not in group_attrs:
+                raise DirectoryUnavailable("AD did not return tokenGroups for the user")
+            group_sids = frozenset(sid_from_bytes(group) for group in group_attrs["tokengroups"])
             from .protocol import principal_id_from_sid
 
             return DirectoryPrincipal(
@@ -223,7 +245,7 @@ class ActiveDirectory:
                 authority=self.config.authority,
                 group_sids=group_sids,
             )
-        except PrincipalNotFound:
+        except (PrincipalNotFound, DirectoryUnavailable):
             raise
         except Exception as exc:
             raise DirectoryUnavailable("AD SID/group lookup failed") from exc

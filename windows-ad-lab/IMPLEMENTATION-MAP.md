@@ -29,21 +29,24 @@ Windows login feature.
   so reserve them on the router before relying on them across VM restarts.
 - `martin` is in the dedicated `ThessleyADSignInAdmins` group, and the group is
   mapped to the client's local Administrators group. It is not Domain Admins.
-- The isolated client helper now exposes `enroll-current-user`. It resolves the
-  current process SID, so run it from the signed-in domain account. An SSH
-  maintenance shell running as the similarly named local account has a
-  different SID. The explicit `enroll-phone --user THESSLEYLAB\\martin` path
-  resolves the domain SID from SSH without confusing the two identities.
-- Both enrollment paths were exercised on the client. From the local SSH
-  maintenance account, `enroll-current-user` now refuses with a clear
-  local-account message. The qualified `enroll-phone --user
-  THESSLEYLAB\\martin` path resolves the domain identity and stops before a
-  phone request because this VM is not paired with an AD API host. The normal
-  Thessley local-account credential provider remains registered.
-- The service's route handlers are now transport-neutral, and the bounded
-  direct-TLS HTTP adapter passes loopback tests. A Windows-hosted service
-  runtime, its protected Windows configuration/state ACLs, and a reachable
-  phone-to-service route still need to be built before pairing can be tested.
+- The isolated client helper exposes `enroll-current-user` and
+  `enroll-phone --user THESSLEYLAB\\martin`. The first uses the process SID;
+  the second resolves the explicitly qualified domain account. A similarly
+  named local SSH maintenance account is a different SID and cannot be
+  mistaken for the domain user.
+- The standalone AD API is deployed as the `ThessleyADApi` SYSTEM task on the
+  disposable DC at `https://192.168.1.79:47810`. Its listener and paired client
+  machine key were verified. A signed machine check succeeded, and
+  `authorization-check --user THESSLEYLAB\\martin` returned authorized from
+  the allowlisted AD security group. The service uses Windows LDAP/ADSI and
+  SSPI as LocalSystem; it does not require RSAT or store an AD password.
+- The DC has one active phone key registered for Martin on the paired test
+  client. A fresh QR approval completed successfully after extending the
+  request lifetime to three minutes. The client received the one-use approved
+  result. The earlier expired request was stale and is not reusable.
+- These changes did not alter the local-account credential provider, Windows
+  logon providers, published `ThessleyVscLogon` template, or TPM smart-card
+  certificate.
 
 ## Separate phone-key certificate-template experiment (2026-10-28)
 
@@ -76,12 +79,14 @@ Windows login feature.
    correct account mapping and a non-exportable key. Windows sign-in succeeded;
    the DC recorded PKINIT pre-authentication type 16 and the matching thumbprint.
    This proves the AD CS/KDC path, not phone-held key signing.
-2. Add a new standalone Thessley AD service component, separate from
-   `drupal_agent.py` and Drupal APIs. Put its persistent data in a dedicated
-   store, not the generic per-Windows-user PAM device database.
-3. Add per-machine authentication to the Windows agent and pair each phone
-   key to a domain SID plus an explicit machine or AD-group scope. Keep
-   enrollment authorization separate from an ordinary login approval.
+2. (Complete for the lab control plane) The standalone AD service and Windows
+   agent authenticate the machine, resolve the selected SID and nested AD
+   security groups, and create a short-lived request bound to the machine,
+   SID hash, domain authority, context, and nonce. Keep this API separate from
+   Drupal and local-account login.
+3. (Complete for the approval path) Enroll one phone key for Martin, approve a
+   live login request, and receive the one-use result on the initiating client.
+   Still exercise denial, expiry, revocation, and cross-machine result refusal.
 4. Build a distinct `Thessley AD Passkey` Windows Credential Provider with a
    separate CLSID and AD-only account handling. Connect it to this service
    through a new agent interface. Keep the existing QR password tile and
@@ -96,12 +101,21 @@ Windows login feature.
 
 ## Windows cryptographic bridge choice
 
-Prefer the Windows smart-card Base CSP/KSP plus a card minidriver if the
-prototype can expose the phone key through a supported PC/SC reader path. The
-minidriver is the card-specific interface Windows already uses for smart-card
-cryptographic operations, including ECC. This does **not** make a Windows
-Credential Provider alone sufficient: a usable reader/card interface and the
-exact smart-card logon serialization path still need to be demonstrated.
+The existing `ThessleyVscLogon` path proves AD smart-card sign-in: Windows asks
+the TPM virtual smart card to use its local, non-exportable RSA key and the KDC
+validates its certificate. It is an important baseline, but it does not expose
+the Android key or make the phone the PKINIT signer. Keep its template and card
+unchanged.
+
+For direct phone-key AD sign-in, prefer the Windows smart-card Base CSP/KSP
+plus a card minidriver if the prototype can expose the phone key through a
+supported PC/SC reader path. The minidriver is the card-specific interface
+Windows already uses for smart-card cryptographic operations, including ECC.
+This does **not** make a Windows Credential Provider alone sufficient: a usable
+reader/card interface and the exact smart-card logon serialization path still
+need to be demonstrated. Do not silently substitute the TPM VSC's local key
+for the phone's enrolled key; that would change the design to phone-approved
+use of a computer-held credential.
 
 A custom CNG KSP is an alternate route, not a small wrapper around the existing
 credential provider. It needs Microsoft's Cryptographic Provider Development

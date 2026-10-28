@@ -260,6 +260,28 @@ def check_connection() -> dict:
     return result
 
 
+def check_domain_authorization(sid: str) -> dict:
+    """Ask AD for the domain identity and allowlist decision without listing groups."""
+    if not isinstance(sid, str) or not _SID.fullmatch(sid):
+        raise AgentError("The selected Windows SID is invalid.")
+    sid = sid.upper()
+    result = _signed_post("/thessley-ad/v1/principals/resolve", {"sid": sid})
+    principal = result.get("principal")
+    expected_id = hashlib.sha256(sid.encode("ascii")).hexdigest()
+    if (result.get("result") != "resolved" or not isinstance(result.get("authorized"), bool)
+            or not isinstance(principal, dict)
+            or set(principal) != {"sid", "principal_id", "principal_type", "authority", "username"}
+            or principal.get("sid") != sid or principal.get("principal_id") != expected_id
+            or principal.get("principal_type") != "domain"
+            or not isinstance(principal.get("authority"), str)
+            or not isinstance(principal.get("username"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}", principal["authority"])
+            or not re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", principal["username"], re.IGNORECASE)):
+        raise AgentError("The AD service returned an invalid authorization result.")
+    return {"sid": sid, "authority": principal["authority"], "username": principal["username"],
+            "authorized": result["authorized"]}
+
+
 def _load() -> tuple[dict, ec.EllipticCurvePrivateKey, str, int, str]:
     folder = _folder()
     config_path = os.path.join(folder, "machine.json")

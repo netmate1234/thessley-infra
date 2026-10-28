@@ -200,6 +200,9 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                 username=principal.username,
                 authority=principal.authority,
                 context=body["context"],
+                # Give a person enough time to unlock the phone, scan, and
+                # approve. The challenge remains one-use and machine-bound.
+                lifetime_seconds=180,
             )
         except (RuntimeError, TypeError, ValueError):
             return 503, {"result": "error", "message": "Could not create a sign-in request."}
