@@ -146,6 +146,16 @@ domain session. It reports certificate and provider/container metadata without
 exporting the key or requesting a signature. It deliberately refuses to run
 under the local SSH maintenance identity.
 
+The separate `ad-prototype/credential-serialization/` spike now builds a
+standalone Kerberos smart-card serialization object. It requires a
+CredProtect-protected PIN, takes card metadata and the Kerberos auth package
+from a future provider, and does not call LSA or register a provider. Martin's
+VSC certificate reports CNG `dwKeySpec = 0`, while the Kerberos CSP structure
+requires an explicit `AT_KEYEXCHANGE` or `AT_SIGNATURE`; resolve that mapping
+from the working card path before connecting this helper to a tile. The
+Microsoft structures and layout are documented at [KERB_CERTIFICATE_LOGON](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_certificate_logon)
+and [KERB_SMARTCARD_CSP_INFO](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info).
+
 For direct phone-key AD sign-in, prefer the Windows smart-card Base CSP/KSP
 plus a card minidriver if the prototype can expose the phone key through a
 supported PC/SC reader path. The minidriver is the card-specific interface
