@@ -150,11 +150,14 @@ The separate `ad-prototype/credential-serialization/` spike now builds a
 standalone Kerberos smart-card serialization object. It requires a
 CredProtect-protected PIN, takes card metadata and the Kerberos auth package
 from a future provider, and does not call LSA or register a provider. Martin's
-VSC certificate reports CNG `dwKeySpec = 0`, while the Kerberos CSP structure
-requires an explicit `AT_KEYEXCHANGE` or `AT_SIGNATURE`; resolve that mapping
-from the working card path before connecting this helper to a tile. The
+VSC certificate reports CNG `dwProvType = 0`, `dwKeySpec = 0`; Microsoft
+documents that zero is passed to `NCryptOpenKey` for a CNG provider. The helper
+accepts it only with the exact Microsoft Smart Card KSP name. This resolves the
+key-spec mismatch, but the resulting serialization still needs an isolated
+LogonUI sign-in test before the helper can be connected to a tile. The
 Microsoft structures and layout are documented at [KERB_CERTIFICATE_LOGON](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_certificate_logon)
-and [KERB_SMARTCARD_CSP_INFO](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info).
+and [KERB_SMARTCARD_CSP_INFO](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info),
+and CNG key metadata at [CRYPT_KEY_PROV_INFO](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-crypt_key_prov_info).
 
 For direct phone-key AD sign-in, prefer the Windows smart-card Base CSP/KSP
 plus a card minidriver if the prototype can expose the phone key through a
