@@ -51,9 +51,10 @@ Windows login feature.
 ## Windows Start-menu account flyout delay (2026-10-28)
 
 - The separate issue under investigation is a persistent ~40-second delay when
-  opening Start > the account/profile button. A new local test account,
-  `MenuProbe`, was responsive; the delay has been reported on the
-  `THESSLEYLAB\martin` profile. Do not change VM RAM as a proposed fix; the
+  opening Start > the account/profile button. The delay reproduces on both
+  `THESSLEYLAB\martin` and a fresh domain account, `THESSLEYLAB\startmenutest`.
+  This rules out a Martin-only profile issue, but does not rule out machine-wide
+  effects from Thessley changes. Do not change VM RAM as a proposed fix; the
   user explicitly ruled that out.
 - Windows Error Reporting recorded `svchost.exe_UserManager` crashes on
   2026-10-28 at 13:36 (`ntdll.dll`, `0xc0000710`) and 14:52 (`combase.dll`,
@@ -100,16 +101,43 @@ Windows login feature.
   in the capture were also below 0.25 s. This does not explain the observed
   delay; it suggests the stall is outside those measured calls or that the
   trace did not capture the delayed input interval itself.
-- The responsive `MenuProbe` account is local, so it does not isolate a
-  domain-profile problem. Next compare a fresh domain account/profile. The
-  current AD QR flow is a phone-approval prototype, not a passwordless AD
-  credential; sign in to the test profile using its normal Windows credential
-  first, then separately test QR approval if needed. If the fresh domain
-  profile is fast, the issue is specific to Martin's profile; if it is slow,
-  investigate machine-wide shell/domain components. Analyze the existing ETL
-  with WPA-compatible tooling before capturing another large trace. Keep both
-  profile backups and the ETL until the comparison is complete; remove the
-  large ETL after the findings are recorded.
+- The responsive `MenuProbe` account is local, so it did not isolate a
+  domain-profile problem. The fresh domain account `THESSLEYLAB\\startmenutest`
+  has now signed in and reproduced the same slow account flyout. This points to
+  a machine-wide cause, but the recent Thessley AD sign-in and smart-card lab
+  changes remain candidates until isolated. The AD QR flow is phone approval,
+  not a passwordless AD credential; this comparison used ordinary Windows
+  credentials.
+- The client is Windows 11 Pro 26H2, build `26300.9711` (`BuildLabEx`
+  `26100.1.amd64fre.ge_release.240331-1435`). WER contains two
+  `svchost.exe_UserManager` crashes: at 13:36 in `ntdll.dll` (`0xc0000710`)
+  and at 14:52 in `combase.dll` (`0xc0000005`), with a companion `svchost.exe`
+  failure in `combase.dll` (`0xc0000602`). The UserManager, ProfSvc, and
+  StateRepository services are currently running. No corresponding SCM 7031 or
+  7034 event was found in the latest query. A corrected Windows Update scan
+  found only a Defender intelligence update, not a newer OS cumulative update
+  through the VM's configured update source. Microsoft
+  published Release Preview build `26300.9807` on 2026-10-16, later than this
+  VM's `26300.9711`; see the [official Insider announcement](https://blogs.windows.com/windows-insider/2026/10/16/announcing-new-builds-for-16-october-2026/).
+- An active PnP smart-card reader named `ThessleyADTest`
+  (`ROOT\\SMARTCARDREADER\\0000`) was found. It was temporarily disabled on
+  2026-10-28 as a reversible A/B diagnostic. The user reported the same delay
+  with it disabled; it was then re-enabled and verified `Status=OK`. The
+  instance registry contains only `0000`; the follow-up PnP query did not
+  reveal additional smart-card reader instances.
+- The separate Thessley AD Credential Provider was confirmed registered at
+  `{2678765D-9F74-4BDE-A4DA-2B53234BE053}`, with its `InprocServer32` pointing
+  to `ThessleyADCredentialProvider-diag-next.dll`. For a reversible A/B test,
+  only its Credential Providers and COM CLSID registry trees were exported to
+  `C:\\ProgramData\\ThessleyPamWin\\backups\\ad-provider-key-20261028-164901.reg`
+  and `ad-provider-class-20261028-164901.reg`, then temporarily removed. The
+  provider DLL/data, local Thessley provider, PIN/password options, and virtual
+  smart-card reader were preserved. The account-flyout timing result is
+  pending after the user reported the test click completed. Restore these two
+  `.reg` exports after the comparison if the provider is not responsible.
+- Analyze the existing ETL with WPA-compatible tooling before capturing
+  another large trace. Keep the profile backup and ETL until the current
+  machine-wide and provider A/B checks are documented.
 - Created enabled disposable AD user `THESSLEYLAB\\startmenutest` and added
   it to `ThessleyADSignInAdmins`, matching Martin's relevant group membership
   without granting Domain Admins. Its temporary password is stored only in
