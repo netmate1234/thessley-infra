@@ -16,8 +16,10 @@ the account, domain name, and certificate template are not compiled or written
 into the request. The script writes DER PKCS#10 and a protected JSON manifest
 under `%ProgramData%\ThessleyPamWin\ad-agent\certificate-requests`.
 
-The manifest expires after five minutes. To remove a cancelled attempt by its
-ID, run elevated:
+The manifest and non-exportable machine key are retained for at most 24 hours
+from CSR creation so an approved CA request can finish asynchronously. This is
+bounded local key retention; it is not a sign-in session or approval pass. To
+remove a cancelled attempt immediately, run elevated:
 
 ```powershell
 & '.\cleanup-ephemeral-csr.ps1' -RequestId 'REQUEST-GUID' -Reason Cancelled
@@ -32,8 +34,14 @@ To reap only expired requests:
 The cleanup script validates the manifest and generated container prefix,
 removes only the matching machine key and matching temporary request-store
 record, then deletes the CSR and manifest. It retains the manifest if key
-deletion fails. Automatic cleanup after successful sign-in and a scheduled
-expiry sweep are not yet integrated.
+deletion fails. Do not clean up a request while its CA response may still be
+needed. Automatic cleanup after successful sign-in and a scheduled expiry
+sweep are not yet integrated; run the expiry sweep manually after the retention
+window:
+
+```powershell
+& '.\cleanup-ephemeral-csr.ps1' -SweepExpired
+```
 
 Start the isolated approval using the CSR file so the local client computes the
 digest from canonical DER:
@@ -51,12 +59,12 @@ After the phone approves, submit the same request file while polling:
 The paired machine signs the upload. The service accepts it only once, for the
 matching machine and approved challenge, revalidates the exact DER request, and
 stores it once with the challenge record. An exact retry returns the same
-verification receipt; a different CSR is rejected. The CSR is public material, but
-the service database remains service-owned and ACL-protected. No endpoint can
-retrieve it or submit it to AD CS yet; this upload currently ends with a
-validation receipt. Both service runtimes purge expired challenge and CSR rows
-at startup and every 60 seconds.
-Certificate issuance and Windows logon remain unavailable.
+verification receipt; a different CSR is rejected. The CSR is public material,
+but the service database remains service-owned and ACL-protected. After the
+manual issuer handoff below, the originating machine can fetch the validated
+certificate through a machine-authenticated endpoint. Both service runtimes
+purge expired challenge and CSR rows at startup and every 60 seconds. Certificate
+installation and Windows logon remain unavailable.
 
 The challenge store also has an internal, one-use `claim_certificate_issuance`
 handoff for the future issuer worker. It yields a CSR only after the matching

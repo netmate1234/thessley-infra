@@ -12,6 +12,7 @@ $csrPath = $null
 $manifestPath = $null
 $manifest = $null
 $providerName = 'Microsoft Software Key Storage Provider'
+$requestLifetime = [TimeSpan]::FromHours(24)
 $rsa = $null
 
 function Set-ProtectedDirectory([string] $Path) {
@@ -81,7 +82,7 @@ try {
         state = 'key-created'
         request_id = $requestId
         created_utc = $now.ToString('o')
-        expires_utc = $now.AddMinutes(5).ToString('o')
+        expires_utc = $now.Add($requestLifetime).ToString('o')
         csr_path = $csrPath
         csr_sha256 = ''
         request_thumbprint = ''
@@ -154,7 +155,7 @@ catch {
                     state = 'key-created'
                     request_id = $requestId
                     created_utc = $now.ToString('o')
-                    expires_utc = $now.AddMinutes(5).ToString('o')
+                    expires_utc = $now.Add($requestLifetime).ToString('o')
                     csr_path = $csrPath
                     csr_sha256 = ''
                     request_thumbprint = ''
