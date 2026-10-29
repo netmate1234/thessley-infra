@@ -108,6 +108,7 @@ $previousTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyConti
 $previousTaskXml = if ($previousTask) { Export-ScheduledTask -TaskName $taskName }
 $previousTaskWasRunning = $previousTask -and $previousTask.State -eq 'Running'
 $backup = $null
+$stateBackup = $null
 $movedPreviousApp = $false
 $createdFirewallRule = $false
 $modifiedFirewallRule = $false
@@ -126,6 +127,20 @@ try {
         if ($currentTask.State -eq 'Running') {
             Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
             throw 'The existing API task did not stop; the live application was left unchanged.'
+        }
+    }
+
+    # Keep an explicit, ACL-inheriting snapshot of persistent identity and
+    # enrollment state before replacing the app. This includes the machine and
+    # phone public-key database and the TLS identity; it never copies private
+    # phone keys because those remain on the phones.
+    $stateBackupRoot = Join-Path $StateRoot 'backups'
+    $stateBackup = Join-Path $stateBackupRoot ("pre-update-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Path $stateBackup -Force | Out-Null
+    foreach ($stateFile in @('state.sqlite3', 'service.json', 'https-cert.pem', 'https-key.pem')) {
+        $statePath = Join-Path $StateRoot $stateFile
+        if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            Copy-Item -LiteralPath $statePath -Destination (Join-Path $stateBackup $stateFile) -ErrorAction Stop
         }
     }
 
@@ -220,6 +235,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the local admin command fil
 }
 Write-Host "Installed the Thessley AD API and management site. Test https://$BindAddress`:47810 from the phone and client."
 Write-Host "Administrator site: https://$BindAddress`:47810/admin/ (sign in as a domain controller administrator)."
+if ($stateBackup) { Write-Host "Pre-update service state backup: $stateBackup" }
 Write-Host "TLS certificate SHA-256: $($certificatePin.Trim())"
 Write-Host "Issue a machine code with: `"$adminCommand`" issue-machine-code"
 Write-Host "AD allow group: $groupName ($AllowedGroupSid)"

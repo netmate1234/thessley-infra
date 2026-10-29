@@ -284,10 +284,13 @@ continue working. Local-account QR keys and offline sign-in remain separate.
 From an elevated PowerShell session on the DC, run the package's
 `install-windows-service.ps1`. It installs a pinned Python runtime and the
 `cryptography` and QR-rendering wheels, ACL-protects the service/config/database with SYSTEM and
-Administrators access, installs a boot task, and adds the scoped firewall
-rule. It retains any existing `service.json`; review its group SID and host
-before restarting after edits. The installer prints the certificate SHA-256
-pin. Create a one-use machine-pairing code locally with:
+Administrators access, saves a timestamped copy of the database, service
+configuration, and TLS identity under `C:\ProgramData\ThessleyAD\backups`,
+installs a boot task, and adds the scoped firewall rule. It reconciles pinned
+Python dependencies on upgrades and retains any existing `service.json`;
+review its group SID and host before restarting after edits. The installer
+prints the certificate SHA-256 pin. Create a one-use machine-pairing code
+locally with:
 
 ```powershell
 & "$env:ProgramFiles\ThessleyAD\thessley-ad-admin.cmd" issue-machine-code
