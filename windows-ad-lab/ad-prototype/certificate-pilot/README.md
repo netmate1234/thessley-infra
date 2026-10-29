@@ -43,14 +43,28 @@ The command will refuse because the certificate method is intentionally absent
 from selectable policy. This keeps the proof path inert until the CA and KDC
 gates below are implemented.
 
+## Broker-side request validation
+
+`infra/thessley_ad_service/certificate_requests.py` contains a pure validation
+helper for the future broker boundary. Before any CA operation is added, callers
+must pass the exact DER bytes and the digest bound into phone approval to
+`validate_approved_csr`. It enforces the size bound, digest equality, valid
+PKCS#10 signature, RSA-3072/SHA-256 profile, one random temporary CN, and no
+requested extensions. It returns only request fingerprints and metadata; it
+does not contact AD CS, authorize a SID, consume approval, or issue a
+certificate. It is not yet wired to an HTTP route, by design.
+
 ## Still required
 
 - A CNG-backed Credential Provider path that can use the issued key for
   Kerberos certificate logon.
 - A broker-side, tightly restricted Enrollment Agent identity and signed CMC
   Enrollment-on-Behalf-of request.
-- CSR, issued-certificate, EKU, template, issuer, validity, and strong SID
-  mapping checks on both broker and workstation.
+- A CSR upload route that verifies the challenge is still approved and
+  unexpired, binds the uploaded DER bytes to the approved digest, and invokes
+  the strict CSR helper above before any CA operation.
+- Issued-certificate, EKU, template, issuer, validity, and strong SID mapping
+  checks on both broker and workstation.
 - One-use delivery of the certificate to the originating machine, followed by
   PKINIT validation in a disposable domain-joined VM.
 - Cleanup after success, denial, timeout, crash, and reboot; recovery must not
