@@ -395,6 +395,41 @@ class AdLogonKeyRegistry:
         finally:
             connection.close()
 
+    def revoke_for_approval_credential(self, credential_id: str, *, administrator: str,
+                                       now: float | None = None) -> int | None:
+        """Disable every AD logon key authorized through a revoked phone key.
+
+        Keep revoked rows for audit, but make them ineligible immediately.
+        """
+        if (not isinstance(credential_id, str) or not _CREDENTIAL_ID.fullmatch(credential_id)
+                or not isinstance(administrator, str) or not administrator
+                or len(administrator) > 256 or any(ord(char) < 32 for char in administrator)):
+            return 0
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "UPDATE ad_logon_keys SET revoked_at = ?, revoked_by = ? "
+                "WHERE approval_credential_id = ? AND revoked_at IS NULL",
+                (time.time() if now is None else now, administrator, credential_id),
+            )
+            revoked = cursor.rowcount
+            connection.execute(
+                "UPDATE ad_logon_key_enrollments SET status='cancelled', pairing_code='', credential_id='' "
+                "WHERE credential_id = ? AND status IN ('pending','ready')",
+                (credential_id,),
+            )
+            connection.execute("COMMIT")
+            return revoked
+        except sqlite3.Error:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            return None
+        finally:
+            connection.close()
+
     def active_public_key(self, *, principal_id: str, key_id: str) -> str | None:
         if (not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id)
                 or not isinstance(key_id, str) or not _KEY_ID.fullmatch(key_id)):

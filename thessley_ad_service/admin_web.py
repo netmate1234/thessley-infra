@@ -595,7 +595,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             machine_name = html.escape(str(matching.get("machine_name", "")))
             content = f'''<h1>Confirm phone revocation</h1>
 <section class="card error"><p>You are about to revoke <strong>{label}</strong> on <strong>{machine_name}</strong>.</p>
-<p>This phone will no longer be able to approve sign-ins for this AD account. This action cannot be undone.</p>
+<p>This phone will no longer approve sign-ins. AD logon keys enrolled through this phone will also be revoked. Revocation is permanent; audit records are retained.</p>
 <form method="post" action="/admin/confirm-revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
 <input type="hidden" name="credential_id" value="{html.escape(credential)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}">
 <button class="danger">Yes, revoke this phone</button> <a class="button" href="/admin/">Cancel</a></form></section>'''
@@ -608,9 +608,19 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 return self._response(400, self._page("Revoke key", '<section class="card error">Invalid key reference.</section>'))
             matching = any(item["credential_id"] == credential
                            for item in self.phones.list_for_principal(principal_id))
-            if not matching or not self.phones.revoke(credential):
+            if not matching:
                 return self._response(404, self._page("Revoke key", '<section class="card error">No active matching phone key was found.</section>'))
-            _LOG.warning("admin_phone_revoked actor=%s principal_id=%s credential_id=%s", session["sid"], principal_id, credential)
+            linked_ad_keys = self.ad_logon_keys.revoke_for_approval_credential(
+                credential, administrator=session["sid"],
+            ) if self.ad_logon_keys is not None else 0
+            if linked_ad_keys is None:
+                _LOG.error("admin_phone_revoke_ad_key_cleanup_failed actor=%s principal_id=%s credential_id=%s",
+                           session["sid"], principal_id, credential)
+                return self._response(503, self._page("Revoke key", '<section class="card error">Could not safely revoke the linked AD keys. The phone key was left active; retry in a moment.</section>'))
+            if not self.phones.revoke(credential):
+                return self._response(409, self._page("Revoke key", '<section class="card error">The phone key changed while revocation was in progress. Refresh before retrying.</section>'))
+            _LOG.warning("admin_phone_revoked actor=%s principal_id=%s credential_id=%s linked_ad_keys_revoked=%d",
+                         session["sid"], principal_id, credential, linked_ad_keys)
             return self._response(303, "", extra_headers=(("Location", "/admin/"),))
         if path in ("/admin/revoke-logon-key", "/admin/confirm-revoke-logon-key"):
             key_id = form.get("key_id", "")
@@ -677,7 +687,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                     content += f'''<form method="post" action="/admin/revoke" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone…</button></form></div>'''
             else:
                 content += '<div class="muted">No phone enrolled.</div>'
-            content += '<div class="muted small">Phone-key protection is checked by the server during enrollment. Software-backed keys remain usable; unverified keys are treated as software-backed. AD logon keys below are separate.</div>'
+            content += '<div class="muted small">Phone-key protection is checked by the server during enrollment. AD logon keys are separate sign-in credentials, but revoking the phone key that enrolled them also revokes those linked AD keys.</div>'
             logon_keys = self.ad_logon_keys.list_for_principal(principal_id) if self.ad_logon_keys else []
             active_logon_keys = [key for key in logon_keys if key["revoked_at"] is None]
             content += '<div class="phone"><strong>AD logon keys</strong><div class="muted small">Separate from phone approvals; sign-in is disabled until attestation and the Windows signing bridge are validated.</div>'
