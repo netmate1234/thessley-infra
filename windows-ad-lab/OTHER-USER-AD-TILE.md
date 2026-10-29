@@ -140,6 +140,10 @@ Read-only inspection of `THESSLEY-DC1` found the following state:
   template were published. Do not publish this copy or use it as the pilot.
 - No Enrollment Agent certificate was found in the DC's LocalMachine\My store
   during the read-only check.
+- The CA service is running. Its default policy `EditFlags` did not include
+  `EDITF_ATTRIBUTESUBJECTALTNAME2`, and `DisableExtensionList` was empty. This
+  is a useful baseline, not proof that a future issued certificate will carry
+  the correct SID extension; inspect the actual pilot certificate.
 
 Therefore the next lab step is to create a **new, separate, unpublished** pilot
 template and a dedicated Enrollment Agent identity, then configure CA
