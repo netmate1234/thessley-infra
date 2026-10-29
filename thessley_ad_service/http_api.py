@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import re
 from dataclasses import dataclass
 from collections.abc import Callable
@@ -762,7 +763,15 @@ def ad_logon_key_enroll_route(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRe
             attestation_chain=body["attestation_chain"],
         )
         if registered is None:
+            logging.getLogger("thessley.ad.api").warning(
+                "ad_logon_key_enrollment_rejected principal_id=%s credential_id=%s request_id=%s",
+                body["principal_id"], body["credential_id"], body["request_id"],
+            )
             return 409, {"result": "error", "message": "The key proof was invalid, duplicated, or expired."}
+        logging.getLogger("thessley.ad.api").info(
+            "ad_logon_key_recorded principal_id=%s key_id=%s already_recorded=%s",
+            body["principal_id"], registered["key_id"], registered["already_recorded"],
+        )
         return 201, {"result": "recorded", **registered,
                      "message": "Key recorded; hardware attestation is unverified and sign-in is not enabled."}
 

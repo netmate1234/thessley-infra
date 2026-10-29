@@ -22,7 +22,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from .phone_registry import CENTRAL_AD_MACHINE_ID, _CREDENTIAL_ID, _LABEL
+from .phone_registry import CENTRAL_AD_MACHINE_ID
 from .protocol import timestamp_is_fresh, verify_phone_signature
 from .state_permissions import finish_private_sqlite, prepare_private_sqlite
 
@@ -30,6 +30,8 @@ _PRINCIPAL_ID = re.compile(r"^[a-f0-9]{64}$")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{16,96}$")
 _NONCE = re.compile(r"^[A-Za-z0-9_-]{16,96}$")
 _KEY_ID = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
+_CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
+_LABEL = re.compile(r"^[^|\x00-\x1f\x7f]{1,64}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _SIGNATURE_DOMAIN = "thessley_ad_logon_key_enroll_v1"
 
@@ -108,7 +110,7 @@ class AdLogonKeyRegistry:
 
     @staticmethod
     def _attestation_chain(values: object) -> str | None:
-        if not isinstance(values, list) or not 1 <= len(values) <= 10:
+        if not isinstance(values, list) or len(values) > 10:
             return None
         decoded: list[str] = []
         total = 0
@@ -182,6 +184,23 @@ class AdLogonKeyRegistry:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """SELECT key_id, principal_id, approval_credential_id,
+                          public_key_sha256, label, attestation_status, created_at, revoked_at
+                   FROM ad_logon_keys WHERE request_id = ?""",
+                (request_id,),
+            ).fetchone()
+            if existing is not None:
+                (existing_id, existing_principal, existing_credential, existing_digest,
+                 existing_label, attestation_status, created_at, revoked_at) = existing
+                if (existing_principal != principal_id or existing_credential != credential_id
+                        or existing_digest != key_digest or existing_label != label or revoked_at is not None):
+                    connection.execute("ROLLBACK")
+                    return None
+                connection.execute("COMMIT")
+                return {"key_id": existing_id, "public_key_sha256": key_digest,
+                        "attestation_status": attestation_status, "created_at": created_at,
+                        "already_recorded": True}
             connection.execute(
                 """INSERT INTO ad_logon_keys
                    (key_id, request_id, principal_id, approval_credential_id,
@@ -193,7 +212,8 @@ class AdLogonKeyRegistry:
             )
             connection.execute("COMMIT")
             return {"key_id": key_id, "public_key_sha256": key_digest,
-                    "attestation_status": "unverified", "created_at": current}
+                    "attestation_status": "unverified", "created_at": current,
+                    "already_recorded": False}
         except sqlite3.IntegrityError:
             try:
                 connection.execute("ROLLBACK")
