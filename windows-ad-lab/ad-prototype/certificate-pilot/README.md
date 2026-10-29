@@ -71,7 +71,11 @@ challenge. It has no retrieval endpoint and cannot issue certificates.
 - A CNG-backed Credential Provider path that can use the issued key for
   Kerberos certificate logon.
 - A broker-side, tightly restricted Enrollment Agent identity and signed CMC
-  Enrollment-on-Behalf-of request.
+  Enrollment-on-Behalf-of request. Microsoft’s protocol requires the signed
+  CMS/CMC envelope to carry exactly one PKCS#10 request and the required
+  requester-name attribute; the signer certificate must have the Certificate
+  Request Agent EKU. See [Microsoft's EOBO request format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/2d1cf183-2507-4026-bc05-7b6b65dfced9)
+  and [EOBO processing rules](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/6becda04-e17f-46df-825a-cec64ed0a203).
 - Issued-certificate, EKU, template, issuer, validity, and strong SID mapping
   checks on both broker and workstation.
 - One-use delivery of the certificate to the originating machine, followed by
@@ -82,6 +86,11 @@ challenge. It has no retrieval endpoint and cannot issue certificates.
 No CA template should be published and no login tile should be installed from
 this proof until those gates have passed. The helper uses the Windows software
 KSP; it does not claim TPM/TEE key protection.
+
+The KDC must resolve the issued certificate through a strong mapping. A name in
+the subject or UPN alone is not sufficient; the pilot is intended to use the
+AD SID security extension and verify that it matches the approved account. See
+[Microsoft's KDC mapping-strength rules](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-pkca/95c6f0e3-3565-41d7-80ed-2333c4c5e107).
 
 The implementation follows Microsoft's documented `IX509PrivateKey` and
 `IX509Enrollment` APIs and `certutil -delkey` semantics:
