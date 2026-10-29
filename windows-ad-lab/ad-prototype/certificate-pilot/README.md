@@ -73,9 +73,11 @@ CSR public key, approved SID, configured template name/OID, and pinned direct
 issuer signature before persisting the DER certificate. It is also not exposed
 over HTTP. The machine-authenticated `certificate_result` route returns the
 stored certificate only to the originating machine; retries are safe for a
-short retention window. The Windows agent helper independently checks the
-returned DER and CSR public-key match. No CLI invokes the helper, installs the
-certificate into the machine key container, or performs logon yet.
+short retention window. The `certificate-fetch` CLI invokes the Windows agent
+helper, independently checks the returned DER digest and CSR public-key match,
+and writes a new certificate file without overwriting an existing file. It
+does not install the certificate into the machine key container or perform
+logon.
 
 ## CMC/EOBO request construction (source-only)
 
@@ -162,8 +164,8 @@ and SID matching is required for a strong KDC mapping under
   response, then independently validate the certificate on the workstation.
 - Define revocation handling, trust-chain rules, and fail-closed recovery for
   issuance that succeeds after the client times out or reboots.
-- One-use delivery of the certificate to the originating machine, followed by
-  PKINIT validation in a disposable domain-joined VM.
+- A controlled issuer worker and one-use delivery path, followed by PKINIT
+  validation in a disposable domain-joined VM.
 - Cleanup after success, denial, timeout, crash, and reboot; recovery must not
   delete unrelated machine keys or certificates.
 

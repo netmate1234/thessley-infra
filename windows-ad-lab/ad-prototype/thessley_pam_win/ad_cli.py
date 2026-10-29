@@ -10,6 +10,7 @@ import argparse
 import ctypes
 import getpass
 import json
+import os
 import re
 import subprocess
 import sys
@@ -245,6 +246,47 @@ def _certificate_approval_start(sid: str, csr_sha256: str | None, csr_file: str 
     return 0
 
 
+def _certificate_fetch(request_id: str, csr_sha256: str, csr_file: str, output_path: str) -> int:
+    """Fetch a validated public certificate without installing it or its key."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+        raise ValueError("The certificate request ID is malformed.")
+    if not re.fullmatch(r"[a-f0-9]{64}", csr_sha256):
+        raise ValueError("The approved CSR SHA-256 is malformed.")
+    if not isinstance(output_path, str) or not output_path or len(output_path) > 4096:
+        raise ValueError("Choose a destination file for the verified certificate.")
+
+    result = ad_agent.fetch_issued_certificate(request_id, csr_file, csr_sha256)
+    destination = os.path.abspath(output_path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor = os.open(destination, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(result["certificate_der"])
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(destination)
+        except OSError:
+            pass
+        raise
+    print(json.dumps({
+        "status": "certificate_fetched_and_csr_key_matched",
+        "request_id": request_id,
+        "csr_sha256": result["csr_sha256"],
+        "certificate_sha256": result["certificate_sha256"],
+        "certificate_der_path": destination,
+        "installed": False,
+        "logon_enabled": False,
+    }, separators=(",", ":")), flush=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="thessley-ad-test", description="Isolated Thessley AD sign-in prototype")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -287,6 +329,16 @@ def main(argv: list[str] | None = None) -> int:
                                   help="same local PEM/DER CSR used for certificate-approval-start")
     certificate_poll.add_argument("--template", required=True)
     certificate_poll.add_argument("--timeout", type=int, default=175, choices=range(1, 176))
+    certificate_fetch = commands.add_parser(
+        "certificate-fetch",
+        help="fetch a validated public certificate for the original CSR; does not install it",
+    )
+    certificate_fetch.add_argument("--request-id", required=True)
+    certificate_fetch.add_argument("--csr-sha256", required=True)
+    certificate_fetch.add_argument("--csr-file", required=True,
+                                   help="original local PEM/DER CSR used for approval")
+    certificate_fetch.add_argument("--output", required=True,
+                                   help="new DER certificate file; an existing file is never overwritten")
     args = parser.parse_args(argv)
 
     try:
@@ -339,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
             return _certificate_approval_poll(
                 args.request_id, args.csr_sha256, args.template, args.csr_file, args.timeout,
             )
+        if args.command == "certificate-fetch":
+            return _certificate_fetch(args.request_id, args.csr_sha256, args.csr_file, args.output)
     except (ad_agent.AgentError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

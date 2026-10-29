@@ -110,11 +110,13 @@ returns a certificate after the internal issuance validator has accepted and
 stored it. The claim, CA-response validation, and storage operations are not
 wired to an issuer worker or HTTP endpoint. A separate DC-side PowerShell proof
 can build and manually submit CMC/EOBO, but it is not called by the service and
-has not been run against a CA. No component installs a returned certificate or
-performs PKINIT. The policy store still refuses to enable this method, so do
-not register a login tile from this scaffold. The v3 request does not embed a
-user, SID, machine, or template; the service resolves the user and reads the
-template from protected configuration.
+has not been run against a CA. The new `certificate-fetch` command can retrieve
+only a service-validated result, checks that the certificate public key matches
+the retained CSR, and writes a new DER file without overwriting an existing
+file. It does not install the certificate or perform PKINIT. The policy store
+still refuses to enable this method, so do not register a login tile from this
+scaffold. The v3 request does not embed a user, SID, machine, or template; the
+service resolves the user and reads the template from protected configuration.
 
 `activate.ps1` stages and validates a replacement before moving it into place,
 then installs the all-users Start menu shortcut and Thessley icon. The current
