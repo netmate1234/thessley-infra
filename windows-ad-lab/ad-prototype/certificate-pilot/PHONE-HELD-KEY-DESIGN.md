@@ -141,6 +141,16 @@ VM:
    security model: the private key is on the PC, and the phone approves each
    use.
 
+There is a second constraint on a custom CNG KSP route: Microsoft's [Key
+Storage and Retrieval](https://learn.microsoft.com/en-us/windows/desktop/SecCNG/key-storage-and-retrieval)
+documentation says third-party KSPs are not loaded in the key-isolation
+service. Since Windows certificate logon needs the system authentication path
+to reach the signing key, we must not assume a custom remote KSP can be called
+from that path. This is an architectural inference from Microsoft's provider
+and key-isolation descriptions; it needs an isolated Windows proof before it
+can be treated as a supported route. A Credential Provider alone cannot make
+the certificate private key available to Kerberos.
+
 Do not issue or install a phone-key certificate as if it were a usable Windows
 credential before one route has passed the bridge gate. A certificate only
 contains the public key; it does not make Windows able to ask Android Keystore
