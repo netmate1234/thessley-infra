@@ -66,7 +66,8 @@ phone key and the new P-256 key sign the same request binding (principal ID,
 credential ID, SPKI digest, nonce, timestamp, request ID, and label). It stores
 the public key and attestation chain separately from phone approval keys.
 Attestation remains `unverified`; no endpoint can issue a certificate from
-these records or enable sign-in.
+these records or enable sign-in. The AD admin page lists each recorded key by
+label, fingerprint, and attestation state, and offers a two-step revoke action.
 
 The exact UTF-8 signing input is
 `thessley_ad_logon_key_enroll_v1|request_id|principal_id|credential_id|public_key_sha256|nonce|timestamp|label`.

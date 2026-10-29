@@ -22,6 +22,7 @@ _LOG = logging.getLogger("thessley.ad.admin")
 _SAM = re.compile(r"^[A-Za-z0-9_.-]{1,20}$")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
+_AD_LOGON_KEY_ID = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 _ADMINISTRATORS_SID = "S-1-5-32-544"
 _SESSION_COOKIE = "thessley_ad_admin"
 _PREAUTH_COOKIE = "thessley_ad_preauth"
@@ -92,7 +93,8 @@ class AdminWeb:
     """Cookie-session management UI, mounted under /admin on the DC HTTPS API."""
 
     def __init__(self, *, directory, phones, challenges, allowed_group_sids, authority: str,
-                 public_host: str, certificate_fingerprint: str, login_policy=None, machines=None):
+                 public_host: str, certificate_fingerprint: str, login_policy=None, machines=None,
+                 ad_logon_keys=None):
         self.directory = directory
         self.phones = phones
         self.challenges = challenges
@@ -102,6 +104,7 @@ class AdminWeb:
         self.certificate_fingerprint = certificate_fingerprint
         self.login_policy = login_policy
         self.machines = machines
+        self.ad_logon_keys = ad_logon_keys
         self._sessions: dict[str, dict] = {}
         self._preauth: dict[str, float] = {}
         self._login_attempts: dict[str, list[float]] = {}
@@ -538,6 +541,30 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 return self._response(404, self._page("Revoke key", '<section class="card error">No active matching phone key was found.</section>'))
             _LOG.warning("admin_phone_revoked actor=%s principal_id=%s credential_id=%s", session["sid"], principal_id, credential)
             return self._response(303, "", extra_headers=(("Location", "/admin/"),))
+        if path in ("/admin/revoke-logon-key", "/admin/confirm-revoke-logon-key"):
+            key_id = form.get("key_id", "")
+            principal_id = form.get("principal_id", "")
+            if (self.ad_logon_keys is None or not _AD_LOGON_KEY_ID.fullmatch(key_id)
+                    or not re.fullmatch(r"[a-f0-9]{64}", principal_id)):
+                return self._response(400, self._page("AD logon key", '<section class="card error">Invalid key reference.</section>'))
+            key = next((item for item in self.ad_logon_keys.list_for_principal(principal_id)
+                        if item["key_id"] == key_id and item["revoked_at"] is None), None)
+            if key is None:
+                return self._response(404, self._page("AD logon key", '<section class="card error">No active matching key was found.</section>'))
+            if path == "/admin/revoke-logon-key":
+                content = f'''<h1>Confirm AD logon-key revocation</h1>
+<section class="card error"><p>Revoke <strong>{html.escape(key["label"])}</strong> for this AD account?</p>
+<p>Fingerprint: <code>{html.escape(key["public_key_sha256"])}</code></p>
+<p>This public key is not currently eligible for sign-in. Revocation is permanent.</p>
+<form method="post" action="/admin/confirm-revoke-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
+<input type="hidden" name="key_id" value="{html.escape(key_id)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}">
+<button class="danger">Yes, revoke this key</button> <a class="button" href="/admin/">Cancel</a></form></section>'''
+                return self._response(200, self._page("Confirm AD logon-key revocation", content))
+            if not self.ad_logon_keys.revoke(key_id=key_id, administrator=session["sid"]):
+                return self._response(409, self._page("AD logon key", '<section class="card error">The key was already revoked or could not be updated.</section>'))
+            _LOG.warning("admin_ad_logon_key_revoked actor=%s principal_id=%s key_id=%s",
+                         session["sid"], principal_id, key_id)
+            return self._response(303, "", extra_headers=(("Location", "/admin/"),))
         return self._response(404, self._page("Not found", "<section class=card>Page not found.</section>"))
 
     def _directory_page(self, session: dict):
@@ -569,6 +596,18 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                     content += f'''<form method="post" action="/admin/revoke" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone…</button></form></div>'''
             else:
                 content += '<div class="muted">No phone enrolled.</div>'
+            logon_keys = self.ad_logon_keys.list_for_principal(principal_id) if self.ad_logon_keys else []
+            active_logon_keys = [key for key in logon_keys if key["revoked_at"] is None]
+            content += '<div class="phone"><strong>AD logon keys</strong><div class="muted small">Separate from phone approvals; sign-in is disabled until attestation and the Windows signing bridge are validated.</div>'
+            if active_logon_keys:
+                for key in active_logon_keys:
+                    fingerprint = html.escape(key["public_key_sha256"])
+                    content += f'''<div class="phone"><strong>{html.escape(key["label"])}</strong>
+<div class="muted small">SHA-256 {fingerprint} · Attestation: {html.escape(key["attestation_status"])}</div>
+<form method="post" action="/admin/revoke-logon-key" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="key_id" value="{html.escape(key['key_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke key…</button></form></div>'''
+            else:
+                content += '<div class="muted small">No AD logon key enrolled.</div>'
+            content += '</div>'
             content += '</div><div>'
             if authorized or dc_administrator:
                 content += f'''<form method="post" action="/admin/enroll"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button>Enroll phone</button></form>'''
