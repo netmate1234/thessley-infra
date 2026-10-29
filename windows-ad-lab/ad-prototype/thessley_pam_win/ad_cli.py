@@ -185,6 +185,8 @@ def _approval_start(sid: str, context: str) -> int:
     print(json.dumps({
         "request_id": started["request_id"],
         "link": started["link"],
+        "credential_method": started["credential_method"],
+        "policy_source": started["policy_source"],
         "qr_matrix": started["qr_matrix"],
     }, separators=(",", ":")), flush=True)
     return 0
@@ -249,7 +251,8 @@ def main(argv: list[str] | None = None) -> int:
             _require_domain_joined()
             result = ad_agent.check_domain_authorization(_sid_for_account(args.user))
             state = "authorized" if result["authorized"] else "not authorized"
-            print(f"AD policy: {result['authority']}\\{result['username']} is {state} on this prototype.")
+            print(f"AD policy: {result['authority']}\\{result['username']} is {state} on this prototype; "
+                  f"sign-in method is {result['credential_method']} ({result['policy_source']}).")
             return 0 if result["authorized"] else 1
         if args.command == "enroll-phone":
             return _phone_enroll(args.user)

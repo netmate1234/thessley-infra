@@ -4,6 +4,62 @@ This is a map from the disposable AD lab to the existing Thessley source. It
 keeps the AD experiment separate from the current Drupal-backed distributed
 Windows login feature.
 
+## Generic AD account tile: current blocker and target
+
+The current request is to use the already-enrolled
+`THESSLEYLAB\Administrator` identity at Clone 1's normal Windows sign-in
+screen, including through **Other user**. The central phone enrollment and
+AD QR SSH path already work. The desktop provider is a separate, incomplete
+prototype: it binds to Martin's cached SID and that account's TPM virtual
+smart-card container. It cannot yet accept an arbitrary AD username from
+**Other user**.
+
+Do not solve this by merely adding more SIDs to
+`ad_lab_vsc_config.h`. That would still need a separate TPM smart-card
+certificate/key for every account on every PC. It is useful only as a
+single-account lab bridge and does not meet the central-phone-key design.
+
+The intended desktop path must:
+
+1. Display a distinct Thessley AD tile for **Other user** and accept a
+   qualified AD account name. The provider must not trust that typed name as
+   authorization; it must resolve it against AD and check the machine and
+   configured access groups.
+2. Start the existing SID-bound phone approval against the central service.
+   The private phone key stays on the phone; the DC keeps only its public key.
+3. Complete a Windows-recognized AD logon without serializing an AD password
+   or leaving a persistent per-user key on each PC.
+4. Keep Windows password/Hello recovery and the local-account Thessley tile
+   available. Do not change the installed provider until a separate test build
+   has passed on Clone 1 and has a verified rollback.
+
+The phone approval signature is not itself a Kerberos/PKINIT credential. A
+candidate bridge that preserves the central-phone model is to generate a
+one-use signing key on the workstation for this login, have the phone approve
+the exact account/machine/request, and let a narrowly scoped AD CS Enrollment
+Agent issue a short-lived smart-card-logon certificate strongly mapped to
+that user's SID. The Credential Provider can then submit a Kerberos
+certificate-logon serialization using the ephemeral key. Delete the key and
+certificate after the attempt; the persistent phone key remains on the phone
+and its public key remains central. This is a **phone-authorized ephemeral
+certificate login**, not direct phone-key PKINIT.
+
+This bridge is a hypothesis to validate in the disposable lab, not yet an
+implemented or approved production design. Enrollment Agent certificates can
+act on behalf of other users, so the agent must be restricted to one dedicated
+logon template and the intended user population; every issuance and revocation
+must be audited. Before provider work, confirm that the issued certificate
+contains a strong SID mapping for the requested user, that the KDC accepts it,
+that the certificate-logon serialization can use a machine-held ephemeral
+key, and that key/certificate cleanup works on both success and failure. If
+any one of these checks fails, stop and retain the built-in password recovery
+path; do not fall back to per-user TPM certificates on every PC.
+
+For the immediate lab account, the phone is already enrolled centrally for
+`THESSLEYLAB\Administrator`. No additional phone enrollment is needed. The
+remaining work is the generic desktop credential and phone-key-to-PKINIT
+bridge; AD QR SSH success does not verify either one.
+
 ## Existing pieces
 
 | Area | Existing code | Reuse |
@@ -290,6 +346,24 @@ belongs to the libvirt NAT network and should remain dynamically assigned.
 - This is only certificate-template preparation. The phone-key smart-card
   signing bridge and an end-to-end AD sign-in are still required.
 
+## Configurable AD sign-in method policy (source implementation)
+
+- `infra/thessley_ad_service/login_policy.py` stores a domain default, priority
+  rules keyed by AD group SID, and overrides keyed by paired machine ID in the
+  protected AD state database. Resolution is machine override → highest-priority
+  matching nested group → domain default; ambiguous matching rules fail closed.
+- The Windows AD admin service now mounts `/admin/policy` and lets a domain
+  administrator configure those rules. The API returns the selected method and
+  policy source; the Windows agent/provider accepts only `tpm_smartcard` for
+  the existing TPM-backed approval tile. `windows_native` disables that QR
+  route while leaving Windows password/Hello recovery available.
+- The phone-issued ephemeral-certificate method is deliberately not selectable:
+  its AD CS/KDC proof is incomplete. Per-user effective-policy reporting and
+  client capability advertisement are still follow-up work.
+- This is source-only and has not been deployed to either lab VM. Before any
+  rollout, review the diff, build the Windows package, and verify both methods
+  plus group/machine precedence on a disposable snapshot.
+
 ## Safe implementation order
 
 1. (Complete for the TPM VSC baseline) The disposable Windows client is joined
@@ -307,9 +381,10 @@ belongs to the libvirt NAT network and should remain dynamically assigned.
    live login request, and receive the one-use result on the initiating client.
    Still exercise denial, expiry, revocation, and cross-machine result refusal.
 4. Prototype a distinct `Thessley AD Passkey` Credential Provider with its own
-   CLSID and AD-only account handling. Keep the current QR password tile,
-   existing TPM smart-card path, and built-in Windows PIN/password recovery
-   intact. Never route AD users into the Drupal client code.
+   CLSID and a generic qualified-AD-username tile for **Other user**. Keep the
+   current QR password tile, existing TPM smart-card path, and built-in Windows
+   PIN/password recovery intact. Never route AD users into the Drupal client
+   code.
 5. Keep these bridge milestones separate:
 
    - **Near-term lab bridge: phone approval + TPM virtual smart card.** The
@@ -319,11 +394,11 @@ belongs to the libvirt NAT network and should remain dynamically assigned.
      approval gate without sending or storing the AD password. The private
      key stays in the computer TPM; this is not phone-key PKINIT and must be
      labeled accordingly.
-   - **Target bridge: phone-held key + PKINIT.** Only call this passwordless
-     phone-key sign-in after a supported Windows smart-card/KSP bridge can
-     pass the actual fresh PKINIT signing operation to the Android Keystore
-     key and the KDC accepts it. A Thessley approval signature is not a
-     substitute for that KDC signature.
+   - **Target lab bridge: phone authorization + ephemeral, strongly mapped
+     certificate.** Validate the Enrollment Agent controls, actual KDC
+     authentication, and guaranteed cleanup before connecting it to LogonUI.
+     Do not claim the phone key itself performs PKINIT; it authorizes one
+     short-lived certificate for one account and machine.
 
    The VSC bridge is opt-in and does not replace or silently change the
    phone-held-key design. Stop before installation if it requires weakening

@@ -92,7 +92,7 @@ class AdminWeb:
     """Cookie-session management UI, mounted under /admin on the DC HTTPS API."""
 
     def __init__(self, *, directory, phones, challenges, allowed_group_sids, authority: str,
-                 public_host: str, certificate_fingerprint: str):
+                 public_host: str, certificate_fingerprint: str, login_policy=None, machines=None):
         self.directory = directory
         self.phones = phones
         self.challenges = challenges
@@ -100,6 +100,8 @@ class AdminWeb:
         self.authority = authority
         self.public_host = public_host
         self.certificate_fingerprint = certificate_fingerprint
+        self.login_policy = login_policy
+        self.machines = machines
         self._sessions: dict[str, dict] = {}
         self._preauth: dict[str, float] = {}
         self._login_attempts: dict[str, list[float]] = {}
@@ -211,6 +213,11 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             if not session:
                 return self._login_page(headers)
             return self._directory_page(session)
+        if path == "/admin/policy":
+            token, session = self._session(headers)
+            if not session:
+                return self._login_page(headers)
+            return self._policy_page(session)
         if path == "/admin/qr-login":
             params = parse_qs(query, keep_blank_values=True)
             request_ids = params.get("id", [])
@@ -404,6 +411,42 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 self._sessions.pop(token, None)
             return self._response(303, "", extra_headers=(("Location", "/admin/"),
                 ("Set-Cookie", f"{_SESSION_COOKIE}=; Path=/admin; Max-Age=0; Secure; HttpOnly; SameSite=Strict")))
+        if path in ("/admin/policy/default", "/admin/policy/group", "/admin/policy/group/remove",
+                    "/admin/policy/machine"):
+            if self.login_policy is None:
+                return self._response(503, self._page("Sign-in policy", '<section class="card error">The policy store is unavailable.</section>'))
+            try:
+                if path == "/admin/policy/default":
+                    self.login_policy.set_default(form.get("method", ""), actor=session["sid"], now=time.time())
+                    _LOG.warning("admin_login_policy_default_changed actor=%s method=%s", session["sid"], form.get("method", ""))
+                elif path == "/admin/policy/group":
+                    try:
+                        priority = int(form.get("priority", ""), 10)
+                    except ValueError as exc:
+                        raise ValueError("Enter a group priority between 0 and 1000.") from exc
+                    self.login_policy.set_group(form.get("group_sid", ""), form.get("method", ""), priority,
+                                                actor=session["sid"], now=time.time())
+                    _LOG.warning("admin_login_policy_group_changed actor=%s group_sid=%s method=%s priority=%d",
+                                 session["sid"], form.get("group_sid", ""), form.get("method", ""), priority)
+                elif path == "/admin/policy/group/remove":
+                    if not self.login_policy.remove_group(form.get("group_sid", "")):
+                        return self._response(404, self._policy_page(session, "No matching group rule was found."))
+                    _LOG.warning("admin_login_policy_group_removed actor=%s group_sid=%s",
+                                 session["sid"], form.get("group_sid", ""))
+                else:
+                    machine_id = form.get("machine_id", "")
+                    method = form.get("method", "")
+                    if self.machines is None or not any(
+                        item["machine_id"] == machine_id for item in self.machines.list_active()
+                    ):
+                        raise ValueError("Select a currently paired workstation.")
+                    self.login_policy.set_machine(machine_id, None if method == "inherit" else method,
+                                                  actor=session["sid"], now=time.time())
+                    _LOG.warning("admin_login_policy_machine_changed actor=%s machine_id=%s method=%s",
+                                 session["sid"], machine_id, method)
+            except (ValueError, TypeError) as exc:
+                return self._response(400, self._policy_page(session, str(exc)))
+            return self._response(303, "", extra_headers=(("Location", "/admin/policy"),))
         if path == "/admin/enroll":
             sid = form.get("sid", "")
             try:
@@ -470,7 +513,27 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             principal_id = form.get("principal_id", "")
             if not _CREDENTIAL_ID.fullmatch(credential) or not re.fullmatch(r"[a-f0-9]{64}", principal_id):
                 return self._response(400, self._page("Revoke key", '<section class="card error">Invalid key reference.</section>'))
-            matching = any(item["credential_id"] == credential for item in self.phones.list_for_principal(principal_id))
+            matching = next((item for item in self.phones.list_for_principal(principal_id)
+                             if item["credential_id"] == credential), None)
+            if not matching:
+                return self._response(404, self._page("Revoke key", '<section class="card error">No active matching phone key was found.</section>'))
+            label = html.escape(str(matching.get("label", "Phone")))
+            machine_name = html.escape(str(matching.get("machine_name", "")))
+            content = f'''<h1>Confirm phone revocation</h1>
+<section class="card error"><p>You are about to revoke <strong>{label}</strong> on <strong>{machine_name}</strong>.</p>
+<p>This phone will no longer be able to approve sign-ins for this AD account. This action cannot be undone.</p>
+<form method="post" action="/admin/confirm-revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
+<input type="hidden" name="credential_id" value="{html.escape(credential)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}">
+<button class="danger">Yes, revoke this phone</button> <a class="button" href="/admin/">Cancel</a></form></section>'''
+            return self._response(200, self._page("Confirm phone revocation", content))
+        if path == "/admin/confirm-revoke":
+            credential = form.get("credential_id", "")
+            principal_id = form.get("principal_id", "")
+            if (not _CREDENTIAL_ID.fullmatch(credential)
+                    or not re.fullmatch(r"[a-f0-9]{64}", principal_id)):
+                return self._response(400, self._page("Revoke key", '<section class="card error">Invalid key reference.</section>'))
+            matching = any(item["credential_id"] == credential
+                           for item in self.phones.list_for_principal(principal_id))
             if not matching or not self.phones.revoke(credential):
                 return self._response(404, self._page("Revoke key", '<section class="card error">No active matching phone key was found.</section>'))
             _LOG.warning("admin_phone_revoked actor=%s principal_id=%s credential_id=%s", session["sid"], principal_id, credential)
@@ -484,6 +547,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             return self._response(503, self._page("Directory unavailable", '<section class="card error">Active Directory could not be queried. Try again shortly.</section>'))
         content = f"""<div class="row" style="justify-content:space-between"><h1>AD accounts</h1>
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><button class="danger">Sign out</button></form></div>
+<p><a class="button" href="/admin/policy">Sign-in method policy</a></p>
 <p class="muted">Signed in as {html.escape(self.authority + chr(92) + session['user'])}. Enrollments are central to the AD account and work on every paired PC.</p>
 <section class="card small"><strong>Rights:</strong> Workstation QR shows membership in the configured Thessley sign-in group. DC admin shows membership in the domain controller's built-in Administrators group; that right is required for this management site. The indicators are independent and read-only.</section>"""
         for user in snapshot.get("users", []):
@@ -502,7 +566,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             if keys:
                 for key in keys:
                     content += '<div class="phone"><div><strong>' + html.escape(key["label"]) + '</strong> · ' + html.escape(key["machine_name"]) + '</div><div class="muted small">Enrolled ' + html.escape(time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(key["enrolled_at"]))) + '</div>'
-                    content += f'''<form method="post" action="/admin/revoke" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone</button></form></div>'''
+                    content += f'''<form method="post" action="/admin/revoke" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone…</button></form></div>'''
             else:
                 content += '<div class="muted">No phone enrolled.</div>'
             content += '</div><div>'
@@ -512,6 +576,65 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         if snapshot.get("truncated"):
             content += '<section class="card">Directory listing reached its 1,000-account limit.</section>'
         return self._response(200, self._page("AD accounts", content))
+
+    def _policy_page(self, session: dict, message: str = ""):
+        if self.login_policy is None:
+            return self._response(503, self._page("Sign-in policy", '<section class="card error">The policy store is unavailable.</section>'))
+        try:
+            snapshot = self.login_policy.snapshot()
+            machines = self.machines.list_active() if self.machines is not None else []
+        except Exception:
+            _LOG.exception("admin_login_policy_read_failed actor=%s", session["sid"])
+            return self._response(503, self._page("Sign-in policy", '<section class="card error">Could not load the current policy.</section>'))
+        def options(selected: str) -> str:
+            items = (
+                ("tpm_smartcard", "Phone approval + this PC TPM smart card"),
+                ("windows_native", "Windows password / Hello (Thessley QR off)"),
+            )
+            return "".join(
+                f'<option value="{value}"{" selected" if value == selected else ""}>{label}</option>'
+                for value, label in items
+            )
+        error = f'<section class="card error">{html.escape(message)}</section>' if message else ""
+        content = error + f'''<h1>AD sign-in method policy</h1>
+<p class="muted">Precedence: workstation override, then highest-priority matching AD group, then domain default. Windows password and Hello remain available as recovery.</p>
+<section class="card"><h2>Domain default</h2><form method="post" action="/admin/policy/default">
+<input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><label for="default-method">Method</label>
+<select id="default-method" name="method">{options(snapshot['default']['method'])}</select><p><button>Save domain default</button></p>
+<p class="muted small">Current: {html.escape(self._method_label(snapshot['default']['method']))}. The short-lived phone certificate method is unavailable until its KDC proof is complete.</p></form></section>
+<section class="card"><h2>AD group override</h2><p class="muted">Use the security group's SID. Higher priority wins; rules tied at the same priority must select the same method.</p>
+<form method="post" action="/admin/policy/group"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
+<label for="group-sid">Group SID</label><input id="group-sid" name="group_sid" maxlength="184" required placeholder="S-1-5-21-…">
+<label for="group-priority">Priority (0–1000)</label><input id="group-priority" name="priority" type="number" min="0" max="1000" value="100" required>
+<label for="group-method">Method</label><select id="group-method" name="method">{options('tpm_smartcard')}</select><p><button>Save group rule</button></p></form>'''
+        if snapshot["groups"]:
+            for rule in snapshot["groups"]:
+                content += f'''<div class="phone"><strong>{html.escape(rule['group_sid'])}</strong> · {html.escape(self._method_label(rule['method']))} · priority {rule['priority']}
+<form method="post" action="/admin/policy/group/remove"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="group_sid" value="{html.escape(rule['group_sid'])}"><button class="danger small">Remove rule</button></form></div>'''
+        else:
+            content += '<p class="muted">No group overrides.</p>'
+        content += '</section><section class="card"><h2>Workstation override</h2>'
+        if machines:
+            content += f'''<form method="post" action="/admin/policy/machine"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
+<label for="machine-id">Paired workstation</label><select id="machine-id" name="machine_id" required>'''
+            for machine in machines:
+                label = f"{machine['machine_name']} ({machine['machine_id'][:8]})"
+                content += f'<option value="{html.escape(machine["machine_id"])}">{html.escape(label)}</option>'
+            overrides = {rule["machine_id"]: rule["method"] for rule in snapshot["machines"]}
+            content += f'''</select><label for="machine-method">Method</label><select id="machine-method" name="method"><option value="inherit">Inherit group/default</option>{options("tpm_smartcard")}</select><p><button>Save workstation rule</button></p></form>'''
+            for machine in machines:
+                if machine["machine_id"] in overrides:
+                    label = f"{machine['machine_name']} ({machine['machine_id'][:8]})"
+                    content += f'<div class="phone"><strong>{html.escape(label)}</strong> · {html.escape(self._method_label(overrides[machine["machine_id"]]))}</div>'
+        else:
+            content += '<p class="muted">No paired workstations yet.</p>'
+        content += '</section><p><a class="button" href="/admin/">Back to accounts</a></p>'
+        return self._response(200, self._page("AD sign-in policy", content))
+
+    @staticmethod
+    def _method_label(method: str) -> str:
+        from .login_policy import METHOD_LABELS
+        return METHOD_LABELS.get(method, "Unknown method")
 
     def _enrollment_page(self, request_id: str, session: dict, *, qr_data: str = "", message: str = "", status_code: int = 200):
         if not qr_data:

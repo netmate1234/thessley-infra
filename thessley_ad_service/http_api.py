@@ -204,9 +204,10 @@ def phone_key_revoke_route(registry: "MachineRegistry", replay_guard: "ReplayGua
 
 
 def principal_resolve_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
-                            directory: "ActiveDirectory", allowed_group_sids: frozenset[str]):
+                            directory: "ActiveDirectory", allowed_group_sids: frozenset[str], login_policy=None):
     """Resolve a signed SID request using AD as the sole group authority."""
     from .directory import DirectoryUnavailable, PrincipalNotFound, validate_group_sid_allowlist
+    from .login_policy import PolicyError, METHOD_TPM
 
     allowed_group_sids = validate_group_sid_allowlist(allowed_group_sids)
 
@@ -229,8 +230,16 @@ def principal_resolve_route(registry: "MachineRegistry", replay_guard: "ReplayGu
         except DirectoryUnavailable:
             return 503, {"result": "error", "message": "Domain authorization is temporarily unavailable."}
         authorized = bool(principal.group_sids.intersection(allowed_group_sids))
+        try:
+            policy = login_policy.resolve(machine_id, principal.group_sids) if login_policy else {
+                "method": METHOD_TPM, "source": "domain-default"
+            }
+        except PolicyError:
+            return 503, {"result": "error", "message": "The workstation sign-in policy is unavailable."}
         return 200, {
             "result": "resolved",
+            "credential_method": policy["method"],
+            "policy_source": policy["source"],
             "principal": {
                 "sid": principal.sid,
                 "principal_id": principal.principal_id,
@@ -247,10 +256,11 @@ def principal_resolve_route(registry: "MachineRegistry", replay_guard: "ReplayGu
 def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                       directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                       challenges: "ChallengeStore", server_host: str,
-                      server_fingerprint: str | Callable[[], str]):
+                      server_fingerprint: str | Callable[[], str], login_policy=None):
     """Create a QR link only after the machine, SID, and AD group are verified."""
     from .directory import DirectoryUnavailable, PrincipalNotFound
     from .directory import validate_group_sid_allowlist
+    from .login_policy import METHOD_TPM, METHOD_WINDOWS, PolicyError
 
     allowed_group_sids = validate_group_sid_allowlist(allowed_group_sids)
     if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", server_host):
@@ -286,6 +296,16 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         if not principal.group_sids.intersection(allowed_group_sids):
             return 403, {"result": "error", "message": "This account is not authorized on this computer."}
         try:
+            policy = login_policy.resolve(machine_id, principal.group_sids) if login_policy else {
+                "method": METHOD_TPM, "source": "domain-default"
+            }
+        except PolicyError:
+            return 503, {"result": "error", "message": "The workstation sign-in policy is unavailable."}
+        if policy["method"] == METHOD_WINDOWS:
+            return 403, {"result": "disabled", "message": "Thessley phone sign-in is disabled for this account on this workstation."}
+        if policy["method"] != METHOD_TPM:
+            return 503, {"result": "unsupported", "message": "The selected Thessley sign-in method is not available yet."}
+        try:
             challenge = challenges.create(
                 machine_id=machine_id,
                 sid=principal.sid,
@@ -314,7 +334,8 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
             "ctx": body["context"],
             "api": "ad",
         })
-        return 201, {"result": "created", "request": challenge, "app_link": link}
+        return 201, {"result": "created", "credential_method": policy["method"],
+                     "policy_source": policy["source"], "request": challenge, "app_link": link}
 
     return RawBodyRoute(handle)
 
@@ -526,7 +547,8 @@ def phone_enrollment_cancel_route(registry: "MachineRegistry", replay_guard: "Re
 def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                   directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                   challenges: "ChallengeStore", server_host: str,
-                  server_fingerprint: str | Callable[[], str], phones: "PhoneRegistry") -> dict:
+                  server_fingerprint: str | Callable[[], str], phones: "PhoneRegistry",
+                  login_policy=None) -> dict:
     """Build routes without binding them to a particular HTTPS listener."""
     return {
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
@@ -534,9 +556,12 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         DIRECTORY_USERS_PATH: directory_users_route(registry, replay_guard, directory, allowed_group_sids),
         PHONE_KEYS_PATH: phone_keys_route(registry, replay_guard, phones),
         PHONE_KEY_REVOKE_PATH: phone_key_revoke_route(registry, replay_guard, phones),
-        PRINCIPAL_RESOLVE_PATH: principal_resolve_route(registry, replay_guard, directory, allowed_group_sids),
+        PRINCIPAL_RESOLVE_PATH: principal_resolve_route(
+            registry, replay_guard, directory, allowed_group_sids, login_policy
+        ),
         LOGIN_START_PATH: login_start_route(
-            registry, replay_guard, directory, allowed_group_sids, challenges, server_host, server_fingerprint
+            registry, replay_guard, directory, allowed_group_sids, challenges, server_host, server_fingerprint,
+            login_policy,
         ),
         PHONE_RESPONSE_PATH: phone_response_route(challenges),
         LOGIN_RESULT_PATH: login_result_route(registry, replay_guard, challenges),

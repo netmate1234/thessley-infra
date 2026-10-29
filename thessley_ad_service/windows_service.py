@@ -151,18 +151,20 @@ def main() -> int:
         from .http_api import create_routes
         from .machine_auth import ReplayGuard
         from .machine_registry import MachineRegistry
+        from .login_policy import LoginPolicyStore
         from .phone_registry import PhoneRegistry
         from .replay_store import SQLiteReplayStore
         from .admin_web import AdminWeb
 
         registry = MachineRegistry(STATE_PATH)
+        login_policy = LoginPolicyStore(STATE_PATH)
         phones = PhoneRegistry(STATE_PATH)
         challenges = ChallengeStore(STATE_PATH, phones.public_key_for)
         replay_store = SQLiteReplayStore(STATE_PATH)
         directory = WindowsActiveDirectory(WindowsDirectoryConfig(config["authority"]))
         routes = create_routes(
             registry, ReplayGuard(replay_store.claim), directory, config["allowed_group_sids"],
-            challenges, config["public_host"], certificate_pin, phones,
+            challenges, config["public_host"], certificate_pin, phones, login_policy,
         )
         admin_web = AdminWeb(
             directory=directory,
@@ -172,6 +174,8 @@ def main() -> int:
             authority=config["authority"],
             public_host=config["public_host"],
             certificate_fingerprint=certificate_pin,
+            login_policy=login_policy,
+            machines=registry,
         )
         api_server = make_server((config["bind_address"], API_PORT), str(CERT_PATH), str(KEY_PATH), routes)
         try:

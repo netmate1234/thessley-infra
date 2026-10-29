@@ -268,7 +268,11 @@ def check_domain_authorization(sid: str) -> dict:
     result = _signed_post("/thessley-ad/v1/principals/resolve", {"sid": sid})
     principal = result.get("principal")
     expected_id = hashlib.sha256(sid.encode("ascii")).hexdigest()
+    method = result.get("credential_method")
+    source = result.get("policy_source")
     if (result.get("result") != "resolved" or not isinstance(result.get("authorized"), bool)
+            or method not in ("tpm_smartcard", "windows_native")
+            or source not in ("workstation", "group", "domain-default")
             or not isinstance(principal, dict)
             or set(principal) != {"sid", "principal_id", "principal_type", "authority", "username"}
             or principal.get("sid") != sid or principal.get("principal_id") != expected_id
@@ -279,7 +283,8 @@ def check_domain_authorization(sid: str) -> dict:
             or not re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", principal["username"], re.IGNORECASE)):
         raise AgentError("The AD service returned an invalid authorization result.")
     return {"sid": sid, "authority": principal["authority"], "username": principal["username"],
-            "authorized": result["authorized"]}
+            "authorized": result["authorized"], "credential_method": method,
+            "policy_source": source}
 
 
 def _load() -> tuple[dict, ec.EllipticCurvePrivateKey, str, int, str]:
@@ -346,7 +351,12 @@ def start_login(sid: str, context: str) -> dict:
     result = _signed_post("/thessley-ad/v1/requests", {"sid": sid.upper(), "context": context})
     request = result.get("request")
     link = result.get("app_link")
-    if result.get("result") != "created" or not isinstance(request, dict) or not isinstance(link, str):
+    method = result.get("credential_method")
+    source = result.get("policy_source")
+    if method != "tpm_smartcard":
+        raise AgentError("The selected account policy does not allow the Thessley TPM sign-in tile.")
+    if (result.get("result") != "created" or not isinstance(request, dict) or not isinstance(link, str)
+            or source not in ("workstation", "group", "domain-default")):
         raise AgentError("The AD service did not return a valid phone request.")
     config, _key, host, port, pin = _load()
     request_id = request.get("request_id")
@@ -378,7 +388,8 @@ def start_login(sid: str, context: str) -> dict:
                        ("auth", request.get("authority")), ("scope", "domain")):
         if query.get(key) != [value]:
             raise AgentError("The AD service returned a phone link for a different account.")
-    return {"request_id": request_id, "link": link,
+    return {"request_id": request_id, "link": link, "credential_method": method,
+            "policy_source": source,
             "qr_matrix": "/".join(qr.bitmap_rows(link, border=2))}
 
 

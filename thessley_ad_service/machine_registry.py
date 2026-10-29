@@ -177,6 +177,17 @@ class MachineRegistry:
         finally:
             connection.close()
 
+    def list_active(self) -> list[dict[str, str]]:
+        """List paired workstation metadata without exposing public keys."""
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT machine_id,machine_name FROM machines WHERE revoked_at IS NULL ORDER BY machine_name COLLATE NOCASE,machine_id"
+            ).fetchall()
+            return [{"machine_id": str(row[0]), "machine_name": str(row[1])} for row in rows]
+        finally:
+            connection.close()
+
     def revoke(self, machine_id: str, *, now: float | None = None) -> bool:
         if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
             return False

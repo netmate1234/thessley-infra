@@ -27,12 +27,37 @@ account keys and offline behavior unchanged.
 
 ## Intended design
 
+## Sign-in method policy
+
+The AD service now stores sign-in method rules in the protected state database
+and exposes them under **Admin → Sign-in method policy**. Administrators can
+choose a domain default, add AD-group overrides with priorities, and set an
+override for a paired workstation. The effective rule order is workstation,
+then highest-priority matching nested AD group, then domain default. Equal
+priority group rules selecting different methods are rejected. Each rule stores
+the last administrator SID and timestamp; administrator actions are also
+written to the Windows service log with the target and new method.
+
+The available choices are `tpm_smartcard` (phone approval gates use of the
+existing per-user TPM virtual smart-card credential on that PC) and
+`windows_native` (the Thessley QR method is refused; Windows password/Hello
+remain available). The API returns the effective method and source with signed
+principal resolution and phone-request responses. The Windows agent checks
+those fields and fails closed if the response is missing, malformed, or asks
+the current TPM tile to use another method.
+
+`phone_ephemeral_certificate` remains intentionally unavailable. It is still
+blocked on proving strongly SID-mapped AD CS issuance and KDC logon. Windows
+password and Hello remain local recovery options outside the Thessley policy.
+An unavailable selected method must never silently downgrade to another
+credential path.
+
 The Python management website is hosted by the DC at
 `https://192.168.1.79:47820/admin/`, separate from the phone/workstation API at
 `https://192.168.1.79:47810`. The DC is the authority for AD-account
 enrollment, phone-key status, and the group policy used by AD QR sign-in.
 
-The site should let an authorized administrator:
+The site lets an authorized administrator:
 
 - Search/browse enabled AD users and show whether the configured sign-in group
   authorizes workstation QR sign-in, and whether they are members of the DC's
@@ -44,6 +69,15 @@ The site should let an authorized administrator:
   on the next approval attempt from any enrolled workstation.
 - Show the currently configured Thessley sign-in group. Mapping AD groups to
   workstation administrator rights remains a separate AD/GPO task.
+- Configure the Thessley credential method by domain default, AD group, and
+  paired workstation. A workstation override wins; otherwise the highest-
+  priority matching nested AD group rule wins; otherwise use the domain
+  default. Conflicting rules at the same priority must be rejected.
+- See stored rules and their precedence. Per-user effective-method reporting
+  for arbitrary user/workstation pairs is not yet shown in this UI. Keep
+  Windows password/Hello recovery available regardless of the Thessley method.
+  A failed phone approval or unavailable selected method must not silently
+  switch to a different credential.
 
 AD user and group creation/membership changes remain in Active Directory's
 normal management tools. The Thessley site manages Thessley enrollment and

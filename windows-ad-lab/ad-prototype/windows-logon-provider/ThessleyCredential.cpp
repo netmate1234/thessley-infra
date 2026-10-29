@@ -327,8 +327,12 @@ void CSampleCredential::_StartApproval()
                                                     _approvalCancelled, &started);
             std::string requestId = SUCCEEDED(agentHr)
                 ? JsonString(started, "\"request_id\"") : std::string();
+            std::string credentialMethod = SUCCEEDED(agentHr)
+                ? JsonString(started, "\"credential_method\"") : std::string();
             std::string matrix = SUCCEEDED(agentHr)
                 ? JsonString(started, "\"qr_matrix\"") : std::string();
+            if (SUCCEEDED(agentHr) && credentialMethod != "tpm_smartcard")
+                agentHr = E_ACCESSDENIED;
             ClearAdApprovalOutput(&started);
             ProviderDiag(L"ADApprovalStart", agentHr, 0);
 

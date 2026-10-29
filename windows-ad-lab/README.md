@@ -2,6 +2,10 @@
 
 This is a disposable Windows Server 2025 evaluation lab for validating QR-mediated, certificate-based Windows domain sign-in. It is not a production AD design.
 
+For the proposed school setup—central phone enrollments, one-time workstation pairing, separate student/staff and IT groups, and what the prototype still lacks—see [SCHOOL-ROLLOUT-MODEL.md](SCHOOL-ROLLOUT-MODEL.md).
+
+For the generic AD **Other user** sign-in target, its current blocker, and the proof gates before changing Windows logon, see [OTHER-USER-AD-TILE.md](OTHER-USER-AD-TILE.md).
+
 ## Lab layout
 
 For a concise map of the current management addresses, SSH commands, phone
@@ -100,6 +104,12 @@ ordinary domain sign-in tests.
 - The separate AD API is running on the DC as the `ThessleyADApi` LocalSystem startup task at `https://192.168.1.79:47810`. Its firewall rule allows TCP 47810 only from `192.168.1.0/24`. Its protected `service.json` allowlist now contains only `ThessleyQRWorkstationAdmins`. The client’s signed API check and group authorization check succeeded after this change. The existing standalone local-login service, the Thessley QR tile, and the TPM virtual smart-card template/card were left unchanged.
 - The Windows client is paired to the AD API with its own machine key. `authorization-check --user THESSLEYLAB\martin` confirmed the dedicated AD group policy allows that account. Martin’s phone is enrolled for this machine, and an AD QR approval test succeeded on 2026-10-28. This verifies phone approval only; the AD passwordless Credential Provider/PKINIT bridge is not installed.
 - A separate AD-account SSH QR gate is configured for the workstation administrator group on clone1. See [AD-SSH-QR-PROTOTYPE.md](AD-SSH-QR-PROTOTYPE.md) for the request flow, group policy, firewall restriction, and rollback process.
+- The source tree now has a configurable AD sign-in method policy at
+  `infra/thessley_ad_service/admin_web.py` and `login_policy.py`; it supports
+  domain, AD-group, and paired-workstation rules for the TPM-backed QR tile or
+  disabling Thessley QR in favor of Windows-native sign-in. This update is not
+  deployed to the lab. The phone-issued certificate option remains locked until
+  its KDC path is proven.
 - DC time: timezone `Romance Standard Time` (Paris); Windows Time uses `time.windows.com` and advertises the DC as reliable. The DC had been eight hours ahead on its local CMOS clock; correct and verify time before any future domain join.
 - Enterprise root CA: `THESSLEY-LAB-CA`.
 - CA templates enabled: `KerberosAuthentication` and `SmartcardLogon`.

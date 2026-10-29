@@ -62,11 +62,13 @@ def main() -> int:
     from .http_api import create_routes
     from .machine_auth import ReplayGuard
     from .machine_registry import MachineRegistry
+    from .login_policy import LoginPolicyStore
     from .phone_registry import PhoneRegistry
     from .replay_store import SQLiteReplayStore
 
     _ensure_state_dir()
     registry = MachineRegistry(STATE_DB)
+    login_policy = LoginPolicyStore(STATE_DB)
     phones = PhoneRegistry(STATE_DB)
     challenges = ChallengeStore(STATE_DB, phones.public_key_for)
     replay_store = SQLiteReplayStore(STATE_DB)
@@ -82,6 +84,7 @@ def main() -> int:
         service["public_host"],
         lambda: certificate_pin["value"],
         phones,
+        login_policy,
     )
     listener_routes = {
         path: ListenerRawBodyRoute(route.handler, response_wait=route.response_wait)
