@@ -65,7 +65,8 @@ SID, `DOMAIN\user` RequesterName, and configured template saved with that
 challenge. The raw SID is stored only for certificate-pilot challenges. A claim
 is consumed before returning the data; if an issuer crashes afterward, it must
 fail closed and require a fresh sign-in rather than replay the claim. This is a
-private Python method, not an API route, and no issuer worker calls it yet.
+private Python method, not an API route; the Windows-only admin CLI now invokes
+it for the documented manual handoff. There is still no automatic issuer worker.
 
 `complete_certificate_issuance` is the matching internal response gate. It only
 stores a CA response for a previously claimed challenge, and validates the exact
@@ -73,11 +74,12 @@ CSR public key, approved SID, configured template name/OID, and pinned direct
 issuer signature before persisting the DER certificate. It is also not exposed
 over HTTP. The machine-authenticated `certificate_result` route returns the
 stored certificate only to the originating machine; retries are safe for a
-short retention window. The `certificate-fetch` CLI invokes the Windows agent
-helper, independently checks the returned DER digest and CSR public-key match,
-and writes a new certificate file without overwriting an existing file. It
-does not install the certificate into the machine key container or perform
-logon.
+24-hour window from issuer claim. The `certificate-import` admin command
+invokes this gate after independently checking the protected one-use job. The
+`certificate-fetch` CLI invokes the Windows agent helper, checks the returned
+DER digest and CSR public-key match, and writes a new certificate file without
+overwriting an existing file. It does not install the certificate into the
+machine key container or perform logon.
 
 ## CMC/EOBO request construction (source-only)
 
@@ -100,8 +102,8 @@ returns either the CA request ID for a pending request or the issued leaf as
 base64 DER. The result labels the CA request as `ca_request_id` and repeats
 `thessley_request_id`, `machine_id`, and the CSR digest for correlation. These
 metadata fields are not authorization evidence: the future broker must bind
-the result back to its claimed challenge and independently run
-`complete_certificate_issuance`. The helper is not called by the AD service,
+the result back to its claimed challenge. The DC admin CLI does this through
+the protected issuer job and `complete_certificate_issuance`. The helper is not called by the AD service,
 has no default CA/template, and does not validate or store the returned
 certificate. Do not run it against a real CA until the
 Enrollment Agent restrictions, template permissions, and profile have been
@@ -124,9 +126,13 @@ CSR beneath the protected `%ProgramData%\ThessleyAD\certificate-issuance` tree.
 The job includes the approved SID and requester, so do not copy it to a
 workstation or shared folder. A crash after claim is fail-closed; start a fresh
 phone approval rather than replaying the job. The CSR and certificate result
-have a 10-minute retention window, so this manual path supports only a CA
-response issued immediately. Pending CA requests are not yet retrievable
-through this handoff.
+have a bounded 24-hour retention window starting at claim time. The unclaimed
+CSR upload still expires after ten minutes. If AD CS returns `pending`, record
+its request ID and CA config in the protected job immediately; later retrieval
+is supported during that 24-hour window. Microsoft's `RetrievePending` returns
+the current disposition, and an issued response can then be read with
+`GetCertificate` ([RetrievePending](https://learn.microsoft.com/en-us/windows/win32/api/certcli/nf-certcli-icertrequest-retrievepending),
+[GetCertificate](https://learn.microsoft.com/en-us/windows/win32/api/certcli/nf-certcli-icertrequest-getcertificate)).
 
 On the DC, use the claimed job values with `build-eobo-cmc.ps1`, then submit
 that output with `submit-eobo-cmc.ps1`. Supply the Enrollment Agent thumbprint,
@@ -138,10 +144,15 @@ leaf certificate to a new DER file:
 
 ```powershell
 $job = Get-Content -LiteralPath 'ISSUER-JOB.json' -Raw | ConvertFrom-Json
+$jobPath = 'ISSUER-JOB.json'
 $cmc = & '.\build-eobo-cmc.ps1' -CsrPath $job.csr_path -ExpectedCsrSha256 $job.certificate_request_sha256 -ThessleyRequestId $job.request_id -MachineId $job.machine_id -RequesterName $job.requester_name -TemplateName $job.certificate_template -EnrollmentAgentThumbprint 'ENROLLMENT-AGENT-THUMBPRINT'
 $result = $cmc | & '.\submit-eobo-cmc.ps1' -CAConfig 'COMPUTER\CA-NAME' -TemplateName $job.certificate_template | ConvertFrom-Json
-if ($result.result -ne 'issued') { throw "CA did not immediately issue the request (result: $($result.result), CA request: $($result.ca_request_id)). Do not import it." }
-$issuedPath = Join-Path (Split-Path -Parent 'ISSUER-JOB.json') 'issued.cer.der'
+if ($result.thessley_request_id -cne $job.request_id -or $result.machine_id -cne $job.machine_id -or $result.csr_sha256 -cne $job.certificate_request_sha256) { throw 'The CA response does not match the claimed Thessley job.' }
+if ($result.result -eq 'pending') {
+    & "$env:ProgramFiles\ThessleyAD\thessley-ad-admin.cmd" certificate-record-ca-request --machine-id $job.machine_id --request-id $job.request_id --ca-config 'COMPUTER\CA-NAME' --ca-request-id $result.ca_request_id
+    if ($LASTEXITCODE -ne 0) { throw 'Could not attach the pending CA request ID to the protected issuer job.' }
+} elseif ($result.result -ne 'issued') { throw "CA did not issue the request (result: $($result.result)). Do not import it." }
+$issuedPath = Join-Path (Split-Path -Parent $jobPath) 'issued.cer.der'
 $leaf = [Convert]::FromBase64String($result.certificate_der_b64)
 $stream = [IO.File]::Open($issuedPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
 try { $stream.Write($leaf, 0, $leaf.Length); $stream.Flush($true) } finally { $stream.Dispose() }
@@ -154,6 +165,25 @@ validation gate:
 & "$env:ProgramFiles\ThessleyAD\thessley-ad-admin.cmd" certificate-import --machine-id 'MACHINE-ID' --request-id 'REQUEST-ID' --certificate 'ISSUED-CERTIFICATE.der' --issuer-certificate 'PINNED-ISSUER.cer' --issuer-sha256 'ISSUER-DER-SHA256' --template-oid 'TEMPLATE-OID'
 ```
 
+If the submission returns `pending`, the previous snippet records the CA
+request ID in the protected job. Do not copy or edit `issuer-job.json`. Retrieve
+using the recorded CA config and ID, and verify the returned ID before writing
+the leaf:
+
+```powershell
+$jobPath = 'ISSUER-JOB.json'
+$job = Get-Content -LiteralPath $jobPath -Raw | ConvertFrom-Json
+$result = & '.\retrieve-eobo-cmc.ps1' -CAConfig $job.ca_config -RequestId $job.ca_request_id | ConvertFrom-Json
+if ($result.ca_request_id -ne $job.ca_request_id) { throw 'The CA response request ID does not match the protected job.' }
+if ($result.result -eq 'pending') { Write-Host 'Still pending; try again before the issuer job expires.' }
+elseif ($result.result -eq 'issued') {
+    $issuedPath = Join-Path (Split-Path -Parent $jobPath) 'issued.cer.der'
+    $leaf = [Convert]::FromBase64String($result.certificate_der_b64)
+    $stream = [IO.File]::Open($issuedPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try { $stream.Write($leaf, 0, $leaf.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+} else { throw 'The CA request was not issued.' }
+```
+
 The importer checks the protected job, CSR digest and profile, then calls
 `complete_certificate_issuance`, which independently verifies the certificate
 signature, CSR public key, SID extension, template OID, validity, and direct
@@ -161,6 +191,18 @@ issuer pin before making the result fetchable by that machine. A failed check
 does not store the certificate. A successful import removes the temporary
 issuer job. This remains manual lab plumbing: it does not automatically submit
 to AD CS, install the certificate on the workstation, or enable logon.
+
+If the job expires while its CA request is still pending, deny that request
+with `deny-pending-eobo-cmc.ps1` before cleaning up the local job. The helper
+uses Microsoft's `ICertAdmin::DenyRequest`, which only denies pending requests;
+it does not revoke a certificate that has already issued ([DenyRequest](https://learn.microsoft.com/en-us/windows/win32/api/certadm/nf-certadm-icertadmin-denyrequest)).
+If the CA issued after the job expired, use the CA's normal certificate
+revocation process. Remove expired local job files with the elevated command:
+
+```powershell
+& '.\deny-pending-eobo-cmc.ps1' -CAConfig 'COMPUTER\CA-NAME' -RequestId 123
+& "$env:ProgramFiles\ThessleyAD\thessley-ad-admin.cmd" certificate-cleanup --request-id 'REQUEST-ID' --ca-request-closed
+```
 
 The helpers' parameters are not an authorization mechanism. Never distribute
 the Enrollment Agent certificate or these issuer helpers to workstation

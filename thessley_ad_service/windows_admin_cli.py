@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -73,7 +74,7 @@ def _certificate_claim(machine_id: str, request_id: str) -> int:
         raise ValueError("The machine ID or request ID is malformed.")
     if not ROOT.is_dir() or not STATE_DB.is_file():
         raise RuntimeError("The protected AD service state is unavailable.")
-    from .challenges import ChallengeStore
+    from .challenges import CERTIFICATE_ISSUANCE_RETENTION_SECONDS, ChallengeStore
     from .phone_registry import PhoneRegistry
     from .state_permissions import verify_private_windows_paths
 
@@ -121,6 +122,7 @@ def _certificate_claim(machine_id: str, request_id: str) -> int:
             "certificate_request_sha256": claimed["certificate_request_sha256"],
             "public_key_spki_sha256": claimed["public_key_spki_sha256"],
             "claimed_at": claimed["claimed_at"],
+            "expires_at": claimed["claimed_at"] + CERTIFICATE_ISSUANCE_RETENTION_SECONDS,
             "csr_path": str(csr_path),
             "csr_der_b64": base64.b64encode(csr_der).decode("ascii"),
         }
@@ -137,6 +139,7 @@ def _certificate_claim(machine_id: str, request_id: str) -> int:
             "requester_name": claimed["requester_name"],
             "certificate_template": claimed["certificate_template"],
             "certificate_request_sha256": claimed["certificate_request_sha256"],
+            "expires_at": job["expires_at"],
             "job_json": str(job_path),
             "csr_der": str(csr_path),
             "claim_replayable": False,
@@ -163,7 +166,7 @@ def _certificate_import(machine_id: str, request_id: str, certificate_path: str,
     if not re.fullmatch(r"[0-2](?:\.[0-9]+)+", expected_template_oid):
         raise ValueError("The expected certificate template OID is malformed.")
     from .state_permissions import verify_private_windows_paths
-    from .challenges import ChallengeStore
+    from .challenges import CERTIFICATE_ISSUANCE_RETENTION_SECONDS, ChallengeStore
     from .phone_registry import PhoneRegistry
     from cryptography.exceptions import UnsupportedAlgorithm
     from cryptography import x509
@@ -181,9 +184,11 @@ def _certificate_import(machine_id: str, request_id: str, certificate_path: str,
     fields = {
         "version", "request_id", "machine_id", "sid", "requester_name",
         "certificate_template", "certificate_request_sha256", "public_key_spki_sha256",
-        "claimed_at", "csr_path", "csr_der_b64",
+        "claimed_at", "expires_at", "csr_path", "csr_der_b64",
     }
-    if (not isinstance(job, dict) or set(job) != fields
+    job_fields = set(job) if isinstance(job, dict) else set()
+    has_ca_request = {"ca_config", "ca_request_id"}.issubset(job_fields)
+    if (not isinstance(job, dict) or job_fields not in (fields, fields | {"ca_config", "ca_request_id"})
             or isinstance(job.get("version"), bool) or job.get("version") != 1
             or job.get("request_id") != request_id or job.get("machine_id") != machine_id
             or not isinstance(job.get("sid"), str) or not _SID.fullmatch(job["sid"])
@@ -198,6 +203,18 @@ def _certificate_import(machine_id: str, request_id: str, certificate_path: str,
             or isinstance(job.get("claimed_at"), bool)
             or not isinstance(job.get("claimed_at"), (int, float))
             or not math.isfinite(job["claimed_at"])
+            or isinstance(job.get("expires_at"), bool)
+            or not isinstance(job.get("expires_at"), (int, float))
+            or not math.isfinite(job["expires_at"])
+            or job["expires_at"] != job["claimed_at"] + CERTIFICATE_ISSUANCE_RETENTION_SECONDS
+            or time.time() > job["expires_at"]
+            or (has_ca_request and (
+                not isinstance(job.get("ca_config"), str)
+                or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}\\[A-Za-z0-9_. -]{1,64}", job["ca_config"])
+                or isinstance(job.get("ca_request_id"), bool)
+                or not isinstance(job.get("ca_request_id"), int)
+                or not 1 <= job["ca_request_id"] <= 2**31 - 1
+            ))
             or job.get("csr_path") != str(job_dir / "request.csr.der")
             or not isinstance(job.get("csr_der_b64"), str)):
         raise RuntimeError("The protected issuer job fields are invalid.")
@@ -259,6 +276,157 @@ def _certificate_import(machine_id: str, request_id: str, certificate_path: str,
     return 0
 
 
+def _certificate_record_ca_request(machine_id: str, request_id: str,
+                                   ca_config: str, ca_request_id: int) -> int:
+    from .challenges import CERTIFICATE_ISSUANCE_RETENTION_SECONDS
+    from .state_permissions import verify_private_windows_paths
+
+    if not _MACHINE_ID.fullmatch(machine_id) or not _REQUEST_ID.fullmatch(request_id):
+        raise ValueError("The Thessley machine ID or request ID is malformed.")
+    if (not isinstance(ca_config, str)
+            or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}\\[A-Za-z0-9_. -]{1,64}", ca_config)):
+        raise ValueError("CAConfig must be a configured CA name in ComputerName\\CAName form.")
+    if isinstance(ca_request_id, bool) or not isinstance(ca_request_id, int) or not 1 <= ca_request_id <= 2**31 - 1:
+        raise ValueError("The CA request ID must be a positive 32-bit integer.")
+
+    job_dir = ISSUANCE_ROOT / request_id
+    job_path = job_dir / "issuer-job.json"
+    verify_private_windows_paths([ROOT, STATE_DB, ISSUANCE_ROOT, job_dir, job_path])
+    try:
+        job = json.loads(_read_bounded(job_path, 64 * 1024).decode("ascii"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError("The protected issuer job is unreadable or malformed.") from exc
+    expected_fields = {
+        "version", "request_id", "machine_id", "sid", "requester_name",
+        "certificate_template", "certificate_request_sha256", "public_key_spki_sha256",
+        "claimed_at", "expires_at", "csr_path", "csr_der_b64",
+    }
+    if (not isinstance(job, dict) or job.get("version") != 1
+            or set(job) not in (expected_fields, expected_fields | {"ca_config", "ca_request_id"})
+            or job.get("request_id") != request_id or job.get("machine_id") != machine_id
+            or not isinstance(job.get("sid"), str) or not _SID.fullmatch(job["sid"])
+            or not isinstance(job.get("requester_name"), str)
+            or not isinstance(job.get("certificate_template"), str)
+            or not _TEMPLATE_NAME.fullmatch(job["certificate_template"])
+            or not isinstance(job.get("certificate_request_sha256"), str)
+            or not _SHA256.fullmatch(job["certificate_request_sha256"])
+            or not isinstance(job.get("public_key_spki_sha256"), str)
+            or not _SHA256.fullmatch(job["public_key_spki_sha256"])
+            or isinstance(job.get("claimed_at"), bool)
+            or not isinstance(job.get("claimed_at"), (int, float))
+            or not math.isfinite(job["claimed_at"])
+            or isinstance(job.get("expires_at"), bool)
+            or not isinstance(job.get("expires_at"), (int, float))
+            or not math.isfinite(job["expires_at"])
+            or job["expires_at"] != job["claimed_at"] + CERTIFICATE_ISSUANCE_RETENTION_SECONDS
+            or job.get("csr_path") != str(job_dir / "request.csr.der")
+            or not isinstance(job.get("csr_der_b64"), str)
+            or time.time() > job["claimed_at"] + CERTIFICATE_ISSUANCE_RETENTION_SECONDS):
+        raise RuntimeError("The protected issuer job is invalid or expired.")
+    existing_config = job.get("ca_config")
+    existing_id = job.get("ca_request_id")
+    if (existing_config is not None or existing_id is not None) and (
+            existing_config != ca_config or existing_id != ca_request_id):
+        raise RuntimeError("A different CA request is already recorded for this Thessley request.")
+    job["ca_config"] = ca_config
+    job["ca_request_id"] = ca_request_id
+    temporary_path = job_path.with_name("issuer-job.json.tmp")
+    _write_new_private_file(
+        temporary_path, (json.dumps(job, separators=(",", ":"), ensure_ascii=True) + "\n").encode("ascii"),
+    )
+    try:
+        os.replace(temporary_path, job_path)
+        verify_private_windows_paths([job_path])
+    except Exception:
+        # Keep a protected temporary copy for recovery; never replace with
+        # partially written metadata.
+        raise
+    print(json.dumps({
+        "status": "ca_request_recorded",
+        "request_id": request_id,
+        "ca_request_id": ca_request_id,
+        "ca_config": ca_config,
+    }, separators=(",", ":")), flush=True)
+    return 0
+
+
+def _certificate_cleanup(request_id: str | None = None, *, ca_request_closed: bool = False) -> int:
+    from .challenges import CERTIFICATE_ISSUANCE_RETENTION_SECONDS
+    from .state_permissions import verify_private_windows_paths
+
+    if request_id is not None and not _REQUEST_ID.fullmatch(request_id):
+        raise ValueError("The certificate request ID is malformed.")
+    if not ISSUANCE_ROOT.exists():
+        print("No certificate issuer jobs are present.")
+        return 0
+    verify_private_windows_paths([ROOT, STATE_DB, ISSUANCE_ROOT])
+    if request_id is None:
+        directories = sorted(ISSUANCE_ROOT.iterdir(), key=lambda item: item.name)
+    else:
+        selected = ISSUANCE_ROOT / request_id
+        if not selected.exists():
+            raise RuntimeError("No issuer job exists for that request ID.")
+        directories = [selected]
+
+    removed = 0
+    current = time.time()
+    for job_dir in directories:
+        verify_private_windows_paths([job_dir])
+        if not job_dir.is_dir() or not _REQUEST_ID.fullmatch(job_dir.name):
+            raise RuntimeError("The issuer job folder is unexpected; nothing in it was removed.")
+        job_path = job_dir / "issuer-job.json"
+        verify_private_windows_paths([job_path])
+        try:
+            job = json.loads(_read_bounded(job_path, 64 * 1024).decode("ascii"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError("The issuer job is unreadable; it was not removed.") from exc
+        if (not isinstance(job, dict) or isinstance(job.get("version"), bool)
+                or job.get("version") != 1
+                or job.get("request_id") != job_dir.name
+                or not isinstance(job.get("machine_id"), str)
+                or not _MACHINE_ID.fullmatch(job["machine_id"])
+                or isinstance(job.get("claimed_at"), bool)
+                or not isinstance(job.get("claimed_at"), (int, float))
+                or not math.isfinite(job["claimed_at"])
+                or isinstance(job.get("expires_at"), bool)
+                or not isinstance(job.get("expires_at"), (int, float))
+                or not math.isfinite(job["expires_at"])
+                or job["expires_at"] != job["claimed_at"] + CERTIFICATE_ISSUANCE_RETENTION_SECONDS):
+            raise RuntimeError("The issuer job metadata is invalid; it was not removed.")
+        has_ca_request = "ca_config" in job or "ca_request_id" in job
+        if has_ca_request and (
+                not isinstance(job.get("ca_config"), str)
+                or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}\\[A-Za-z0-9_. -]{1,64}", job["ca_config"])
+                or isinstance(job.get("ca_request_id"), bool)
+                or not isinstance(job.get("ca_request_id"), int)
+                or not 1 <= job["ca_request_id"] <= 2**31 - 1):
+            raise RuntimeError("The issuer job's CA request reference is invalid; it was not removed.")
+        if current <= job["expires_at"]:
+            continue
+        if has_ca_request and not ca_request_closed:
+            raise RuntimeError(
+                "This job has a CA request ID. Deny the pending request or revoke any issued certificate, "
+                "then rerun cleanup with --ca-request-closed."
+            )
+        allowed_names = {"issuer-job.json", "request.csr.der", "issued.cer.der"}
+        entries = list(job_dir.iterdir())
+        if any(entry.name not in allowed_names | {"issuer-job.json.tmp"} for entry in entries):
+            raise RuntimeError("The expired issuer job contains unexpected files; it was not removed.")
+        for entry in entries:
+            info = os.stat(entry, follow_symlinks=False)
+            if (not stat.S_ISREG(info.st_mode)
+                    or getattr(info, "st_file_attributes", 0) & 0x400):
+                raise RuntimeError("The expired issuer job contains a non-file entry; it was not removed.")
+            _protect_issuance_path(entry, directory=False)
+        verify_private_windows_paths(entries)
+        for name in allowed_names | {"issuer-job.json.tmp"}:
+            (job_dir / name).unlink(missing_ok=True)
+        job_dir.rmdir()
+        removed += 1
+    print(f"Removed {removed} expired certificate issuer job(s).")
+    return 0
+
+
 def _require_admin() -> bool:
     if os.name != "nt":
         return False
@@ -302,6 +470,21 @@ def main(argv: list[str] | None = None) -> int:
                                     help="SHA-256 of the issuer's canonical DER certificate")
     certificate_import.add_argument("--template-oid", required=True,
                                     help="expected AD CS certificate template OID")
+    certificate_record = commands.add_parser(
+        "certificate-record-ca-request", help="attach a CA pending-request ID to its protected issuer job",
+    )
+    certificate_record.add_argument("--machine-id", required=True)
+    certificate_record.add_argument("--request-id", required=True, help="Thessley approval request ID")
+    certificate_record.add_argument("--ca-config", required=True, help="CA in ComputerName\\CAName form")
+    certificate_record.add_argument("--ca-request-id", required=True, type=int)
+    certificate_cleanup = commands.add_parser(
+        "certificate-cleanup", help="remove protected issuer jobs after their 24-hour window expires",
+    )
+    certificate_cleanup.add_argument("--request-id", help="clean one expired issuer job instead of sweeping")
+    certificate_cleanup.add_argument(
+        "--ca-request-closed", action="store_true",
+        help="confirm any recorded CA request was denied or its issued certificate revoked",
+    )
     args = parser.parse_args(argv)
     if not STATE_DB.is_file():
         print("The AD API has not created its protected state database yet.", file=sys.stderr)
@@ -318,6 +501,20 @@ def main(argv: list[str] | None = None) -> int:
                 args.machine_id, args.request_id, args.certificate, args.issuer_certificate,
                 args.issuer_sha256, args.template_oid,
             )
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    if args.command == "certificate-record-ca-request":
+        try:
+            return _certificate_record_ca_request(
+                args.machine_id, args.request_id, args.ca_config, args.ca_request_id,
+            )
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    if args.command == "certificate-cleanup":
+        try:
+            return _certificate_cleanup(args.request_id, ca_request_closed=args.ca_request_closed)
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
             print(str(exc), file=sys.stderr)
             return 1

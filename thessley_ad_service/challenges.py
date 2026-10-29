@@ -26,6 +26,8 @@ _PRINCIPAL_ID = re.compile(r"^[a-f0-9]{64}$")
 _CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _CERTIFICATE_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _CERTIFICATE_TEMPLATE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+CERTIFICATE_ISSUANCE_RETENTION_SECONDS = 24 * 60 * 60
+_CERTIFICATE_UPLOAD_RETENTION_SECONDS = 10 * 60
 
 
 class ChallengeStore:
@@ -120,8 +122,11 @@ class ChallengeStore:
             cursor = connection.execute(
                 "DELETE FROM login_challenges WHERE "
                 "(certificate_request_der IS NULL AND expires_at <= ?) OR "
-                "(certificate_request_der IS NOT NULL AND certificate_request_received_at <= ?)",
-                (current, current - 600),
+                "(certificate_request_der IS NOT NULL AND certificate_request_received_at IS NOT NULL AND ("
+                "(certificate_issuance_claimed_at IS NULL AND certificate_request_received_at <= ?) OR "
+                "(certificate_issuance_claimed_at IS NOT NULL AND certificate_issuance_claimed_at <= ?)))",
+                (current, current - _CERTIFICATE_UPLOAD_RETENTION_SECONDS,
+                 current - CERTIFICATE_ISSUANCE_RETENTION_SECONDS),
             )
             connection.execute("COMMIT")
             return cursor.rowcount
@@ -177,8 +182,11 @@ class ChallengeStore:
             connection.execute(
                 "DELETE FROM login_challenges WHERE "
                 "(certificate_request_der IS NULL AND expires_at <= ?) OR "
-                "(certificate_request_der IS NOT NULL AND certificate_request_received_at <= ?)",
-                (current, current - 600),
+                "(certificate_request_der IS NOT NULL AND certificate_request_received_at IS NOT NULL AND ("
+                "(certificate_issuance_claimed_at IS NULL AND certificate_request_received_at <= ?) OR "
+                "(certificate_issuance_claimed_at IS NOT NULL AND certificate_issuance_claimed_at <= ?)))",
+                (current, current - _CERTIFICATE_UPLOAD_RETENTION_SECONDS,
+                 current - CERTIFICATE_ISSUANCE_RETENTION_SECONDS),
             )
             connection.execute(
                 """INSERT INTO login_challenges
@@ -338,8 +346,11 @@ class ChallengeStore:
             sid, csr_sha256, template, csr_der, csr_received_at, claimed_at, existing_certificate = row
             if (not isinstance(sid, str) or not isinstance(csr_sha256, str)
                     or not isinstance(template, str) or not isinstance(csr_der, bytes)
-                    or not isinstance(csr_received_at, (int, float)) or current > csr_received_at + 600
-                    or not isinstance(claimed_at, (int, float)) or existing_certificate is not None):
+                    or not isinstance(csr_received_at, (int, float))
+                    or not isinstance(claimed_at, (int, float))
+                    or not math.isfinite(claimed_at)
+                    or current > claimed_at + CERTIFICATE_ISSUANCE_RETENTION_SECONDS
+                    or existing_certificate is not None):
                 connection.execute("ROLLBACK")
                 return None
             if template != expected_template_name:
@@ -389,8 +400,8 @@ class ChallengeStore:
         """Return a validated certificate only to its originating machine.
 
         Reads are retry-safe: a dropped HTTPS response does not consume the
-        result. The challenge and certificate remain available only within the
-        existing short CSR-retention window.
+        result. The challenge and certificate remain available only until the
+        bounded issuer-job expiry recorded when the one-use claim is made.
         """
         if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
                 or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)):
@@ -402,15 +413,16 @@ class ChallengeStore:
         connection = self._connect()
         try:
             row = connection.execute(
-                "SELECT certificate_request_received_at, certificate_issued_der, "
+                "SELECT certificate_issuance_claimed_at, certificate_issued_der, "
                 "certificate_issued_sha256, certificate_issued_at FROM login_challenges "
                 "WHERE request_id = ? AND machine_id = ? AND status = 'approve' AND delivered_at IS NOT NULL",
                 (request_id, machine_id),
             ).fetchone()
             if row is None:
                 return None
-            received_at, certificate_der, certificate_sha256, issued_at = row
-            if (not isinstance(received_at, (int, float)) or current > received_at + 600
+            claimed_at, certificate_der, certificate_sha256, issued_at = row
+            if (not isinstance(claimed_at, (int, float)) or not math.isfinite(claimed_at)
+                    or current > claimed_at + CERTIFICATE_ISSUANCE_RETENTION_SECONDS
                     or not isinstance(certificate_der, bytes) or not 256 <= len(certificate_der) <= 64 * 1024
                     or not isinstance(certificate_sha256, str) or not _CERTIFICATE_SHA256.fullmatch(certificate_sha256)
                     or not isinstance(issued_at, (int, float))
