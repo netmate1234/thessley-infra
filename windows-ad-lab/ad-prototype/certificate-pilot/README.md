@@ -86,8 +86,35 @@ stored certificate only to the originating machine; retries are safe for a
 invokes this gate after independently checking the protected one-use job. The
 `certificate-fetch` CLI invokes the Windows agent helper, checks the returned
 DER digest and CSR public-key match, and writes a new certificate file without
-overwriting an existing file. It does not install the certificate into the
-machine key container or perform logon.
+overwriting an existing file. The optional elevated
+`accept-validated-certificate.ps1` helper verifies that fetch digest, the Smart
+Card Logon EKU, and the certificate public key against the exact pending
+machine request. It then runs `certreq -accept -machine` and verifies that
+Windows associated the private key. Microsoft documents that `certreq -accept`
+links an issued certificate to the previously generated key and `-machine`
+selects the machine context ([certreq](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/certreq_1)).
+The key remains a non-exportable **machine Software KSP key**, accessible to
+SYSTEM and local Administrators; it is not held by the phone or protected by
+the phone's TEE. This certificate-store step does not implement PKINIT or
+enable Windows sign-in.
+
+Use the SHA-256 printed by `certificate-fetch` as the expected digest:
+
+```powershell
+& '.\accept-validated-certificate.ps1' -RequestId 'REQUEST-GUID' -CertificatePath 'FETCHED-CERTIFICATE.der' -ExpectedSha256 'FETCH-RECEIPT-SHA256'
+```
+
+After acceptance, the CSR cleanup sweep preserves the manifest and key. First
+revoke the certificate at the CA, then explicitly remove the local certificate
+and key:
+
+```powershell
+& '.\remove-installed-certificate.ps1' -RequestId 'REQUEST-GUID' -ConfirmCertificateRevoked
+```
+
+The confirmation switch is an operator assertion; the helper cannot verify CA
+revocation status. Requests left in `installing` after an interrupted
+acceptance are deliberately preserved for manual recovery.
 
 ## CMC/EOBO request construction (source-only)
 

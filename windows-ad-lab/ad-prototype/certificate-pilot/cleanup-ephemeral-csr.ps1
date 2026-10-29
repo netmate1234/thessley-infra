@@ -36,7 +36,7 @@ $manifests = if ($SweepExpired) {
 foreach ($file in $manifests) {
     $manifest = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
     $id = [string]$manifest.request_id
-    if ($manifest.version -ne 1 -or $manifest.state -notin @('key-created', 'ready', 'key-deleted') -or
+    if ($manifest.version -ne 1 -or $manifest.state -notin @('key-created', 'ready', 'installing', 'certificate-installed', 'key-deleted') -or
         $id -notmatch '^[a-f0-9]{32}$' -or
         $file.FullName -ne (Join-Path $root "$id.json") -or
         $manifest.provider_name -ne $providerName -or $manifest.provider_type -ne 0 -or
@@ -50,6 +50,13 @@ foreach ($file in $manifests) {
         [string]$manifest.csr_sha256 -notmatch '^[a-f0-9]{64}$' -or
         [string]$manifest.request_thumbprint -notmatch '^[a-fA-F0-9]{40}$')) {
         throw "Refusing to clean an incomplete ready-state manifest: $($file.Name)"
+    }
+    if ($manifest.state -in @('installing', 'certificate-installed')) {
+        if ($SweepExpired) {
+            Write-Output "Preserved ${id}: certificate acceptance started; inspect it and revoke before removing its key."
+            continue
+        }
+        throw "Request $id has reached certificate acceptance. Do not remove its key with this cleanup command."
     }
     $csrPath = Join-Path $root "$id.csr.der"
     if ([IO.Path]::GetFullPath([string]$manifest.csr_path) -ne $csrPath) {
