@@ -255,6 +255,42 @@ class ActiveDirectory:
             except Exception:
                 pass
 
+    def resolve_username(self, username: str) -> DirectoryPrincipal:
+        """Resolve an exact, enabled SAM account name and its effective groups."""
+        if not isinstance(username, str) or not _USERNAME.fullmatch(username):
+            raise PrincipalNotFound("Account name is invalid")
+        connection = self._connect()
+        try:
+            from ldap3 import SUBTREE
+
+            # The accepted account-name alphabet excludes LDAP filter metacharacters.
+            connection.search(
+                search_base=self.config.base_dn,
+                search_filter=f"(&(objectCategory=person)(objectClass=user)(sAMAccountName={username}))",
+                search_scope=SUBTREE,
+                attributes=["objectSid"],
+                size_limit=2,
+                time_limit=self.config.timeout_seconds,
+            )
+            entries = connection.entries
+            if len(entries) != 1:
+                raise PrincipalNotFound("Account name does not resolve to exactly one AD user")
+            attrs = {str(name).lower(): values for name, values in entries[0].entry_raw_attributes.items()}
+            sid_values = attrs.get("objectsid", [])
+            if len(sid_values) != 1:
+                raise DirectoryUnavailable("AD did not return the account SID")
+            sid = sid_from_bytes(sid_values[0])
+        except (PrincipalNotFound, DirectoryUnavailable):
+            raise
+        except Exception as exc:
+            raise DirectoryUnavailable("AD username lookup failed") from exc
+        finally:
+            try:
+                connection.unbind()
+            except Exception:
+                pass
+        return self.resolve_user_sid(sid)
+
     def user_in_any_group(self, sid: str, allowed_group_sids: set[str] | frozenset[str]) -> bool:
         """Check configured group SIDs against AD's transitive tokenGroups result."""
         if not allowed_group_sids:

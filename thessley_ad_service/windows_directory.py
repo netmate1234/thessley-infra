@@ -181,6 +181,69 @@ $primarySearch.Dispose()
             group_sids=group_sids,
         )
 
+    def resolve_username(self, username: str) -> DirectoryPrincipal:
+        """Resolve an exact SAM account name without requiring RSAT/ADWS."""
+        if not isinstance(username, str) or not _USERNAME.fullmatch(username):
+            raise PrincipalNotFound("Account name is invalid")
+        encoded_username = base64.b64encode(username.encode("ascii")).decode("ascii")
+        script = rf"""
+$ErrorActionPreference = 'Stop'
+$username = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('{encoded_username}'))
+$timeoutSeconds = {self.timeout_seconds}
+Add-Type -AssemblyName System.DirectoryServices -ErrorAction Stop
+$root = [ADSI]'LDAP://RootDSE'
+$baseDn = [string]$root.Properties['defaultNamingContext'][0]
+if ([string]::IsNullOrWhiteSpace($baseDn)) {{ throw 'LDAP RootDSE did not return the domain naming context.' }}
+$base = [ADSI]"LDAP://$baseDn"
+$userSearch = [System.DirectoryServices.DirectorySearcher]::new($base)
+$userSearch.Filter = "(&(objectCategory=person)(objectClass=user)(sAMAccountName=$username))"
+$userSearch.SizeLimit = 2
+$userSearch.ServerTimeLimit = [TimeSpan]::FromSeconds($timeoutSeconds)
+[void]$userSearch.PropertiesToLoad.Add('objectSid')
+$results = $userSearch.FindAll()
+if ($results.Count -ne 1) {{
+    if ($results.Count -eq 0) {{ [Console]::Out.WriteLine('{{"not_found":true}}'); exit 0 }}
+    throw 'The account name did not resolve uniquely.'
+}}
+$sid = [Security.Principal.SecurityIdentifier]::new([byte[]]$results[0].Properties['objectsid'][0], 0).Value
+[Console]::Out.WriteLine((ConvertTo-Json -InputObject ([PSCustomObject]@{{ sid = $sid }}) -Compress))
+$results.Dispose()
+$userSearch.Dispose()
+$base.Dispose()
+$root.Dispose()
+"""
+        encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded_script],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.timeout_seconds + 3,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DirectoryUnavailable("Windows could not query Active Directory") from exc
+        if result.returncode:
+            raise DirectoryUnavailable("Windows could not query the AD account name")
+        try:
+            data = json.loads(result.stdout.strip())
+            if data == {"not_found": True}:
+                raise PrincipalNotFound("Account name does not resolve to an enabled AD user")
+            if not isinstance(data, dict) or set(data) != {"sid"}:
+                raise ValueError
+            sid = data["sid"]
+            if not isinstance(sid, str) or not _SID.fullmatch(sid):
+                raise ValueError
+            sid_to_bytes(sid)
+        except PrincipalNotFound:
+            raise
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise DirectoryUnavailable("Windows returned an invalid AD account lookup response") from exc
+        return self.resolve_user_sid(sid)
+
     def user_in_any_group(self, sid: str, allowed_group_sids: set[str] | frozenset[str]) -> bool:
         if not allowed_group_sids:
             return False
@@ -253,6 +316,39 @@ try {{
         $groupSearch.Dispose()
     }}
 
+    # Report DC administration separately from the configured workstation
+    # sign-in group. This is read-only and uses nested AD membership just like
+    # the configured policy group above.
+    $dcAdministratorSams = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $adminSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $adminSidBytes = New-Object byte[] $adminSid.BinaryLength
+    $adminSid.GetBinaryForm($adminSidBytes, 0)
+    $adminSidFilter = -join ($adminSidBytes | ForEach-Object {{ '\' + $_.ToString('X2') }})
+    $adminGroupSearch = [System.DirectoryServices.DirectorySearcher]::new($base)
+    $adminGroupSearch.Filter = "(&(objectCategory=group)(objectSid=$adminSidFilter))"
+    $adminGroupSearch.ServerTimeLimit = [TimeSpan]::FromSeconds($timeoutSeconds)
+    [void]$adminGroupSearch.PropertiesToLoad.Add('distinguishedName')
+    $adminGroup = $adminGroupSearch.FindOne()
+    if ($adminGroup) {{
+        $adminGroupDn = [string]$adminGroup.Properties['distinguishedname'][0]
+        $escapedAdminGroupDn = $adminGroupDn.Replace('\', '\5c').Replace('*', '\2a').Replace('(', '\28').Replace(')', '\29').Replace([string][char]0, '\00')
+        $adminMemberSearch = [System.DirectoryServices.DirectorySearcher]::new($base)
+        $adminMemberSearch.Filter = "(&(objectCategory=person)(objectClass=user)(memberOf:1.2.840.113556.1.4.1941:=$escapedAdminGroupDn))"
+        $adminMemberSearch.PageSize = 500
+        $adminMemberSearch.SizeLimit = 1001
+        $adminMemberSearch.ServerTimeLimit = [TimeSpan]::FromSeconds($timeoutSeconds)
+        [void]$adminMemberSearch.PropertiesToLoad.Add('sAMAccountName')
+        $adminMembers = $adminMemberSearch.FindAll()
+        foreach ($adminMember in $adminMembers) {{
+            if ($adminMember.Properties['samaccountname'].Count -gt 0) {{
+                [void]$dcAdministratorSams.Add([string]$adminMember.Properties['samaccountname'][0])
+            }}
+        }}
+        $adminMembers.Dispose()
+        $adminMemberSearch.Dispose()
+    }}
+    $adminGroupSearch.Dispose()
+
     $userSearch = [System.DirectoryServices.DirectorySearcher]::new($base)
     $userSearch.Filter = '(&(objectCategory=person)(objectClass=user))'
     $userSearch.PageSize = 500
@@ -281,6 +377,7 @@ try {{
                 upn = $upn
                 enabled = $enabled
                 authorized = ($enabled -and $authorizedSams.Contains($sam))
+                dc_administrator = ($enabled -and $dcAdministratorSams.Contains($sam))
             }}
         }}
     ) | Sort-Object sam
@@ -325,11 +422,13 @@ try {{
                         or not isinstance(name, str) or len(name) > 256
                         or not isinstance(upn, str) or len(upn) > 256
                         or not isinstance(user.get("enabled"), bool)
-                        or not isinstance(user.get("authorized"), bool)):
+                        or not isinstance(user.get("authorized"), bool)
+                        or not isinstance(user.get("dc_administrator"), bool)):
                     raise ValueError
                 sid_to_bytes(sid)
                 clean.append({"sam": sam, "sid": sid, "name": name, "upn": upn,
-                              "enabled": user["enabled"], "authorized": user["authorized"]})
+                              "enabled": user["enabled"], "authorized": user["authorized"],
+                              "dc_administrator": user["dc_administrator"]})
             return {"domain": domain[:256], "users": clean, "truncated": truncated}
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise DirectoryUnavailable("Windows returned an invalid AD user directory response") from exc

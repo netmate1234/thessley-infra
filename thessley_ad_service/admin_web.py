@@ -91,10 +91,11 @@ class WindowsAdminLogin:
 class AdminWeb:
     """Cookie-session management UI, mounted under /admin on the DC HTTPS API."""
 
-    def __init__(self, *, directory, phones, allowed_group_sids, authority: str,
+    def __init__(self, *, directory, phones, challenges, allowed_group_sids, authority: str,
                  public_host: str, certificate_fingerprint: str):
         self.directory = directory
         self.phones = phones
+        self.challenges = challenges
         self.allowed_group_sids = frozenset(allowed_group_sids)
         self.authority = authority
         self.public_host = public_host
@@ -103,6 +104,7 @@ class AdminWeb:
         self._preauth: dict[str, float] = {}
         self._login_attempts: dict[str, list[float]] = {}
         self._enrollment_qrs: dict[str, tuple[str, float]] = {}
+        self._qr_logins: dict[str, dict] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -134,6 +136,7 @@ h1{font-size:1.65rem;margin:.4rem 0 1.1rem}h2{font-size:1.2rem;margin:0 0 .7rem}
 .card{background:white;border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0;box-shadow:0 2px 8px #1627380b}
 .user{display:grid;grid-template-columns:minmax(220px,1fr) minmax(260px,1.2fr) auto;gap:12px;align-items:center}
 .phone{border-top:1px solid var(--line);margin-top:12px;padding-top:10px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.rights{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.badge{display:inline-block;border-radius:999px;padding:2px 9px;background:#eaf1f8;color:#26394c;font-size:.82rem;font-weight:650}.badge.yes{background:#e7f6eb;color:#155c2d}.badge.no{background:#f0f2f4;color:#58636e}
 label{display:block;font-weight:600;margin:8px 0 4px}input{font:inherit;padding:9px 10px;border:1px solid #9aa8b5;border-radius:7px;max-width:100%}
 button,.button{font:inherit;font-weight:650;background:var(--blue);color:white;border:0;border-radius:7px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-block}
 button.danger{background:#a32d35}.small{font-size:.9rem}.qr{width:min(310px,82vw);height:auto;background:white;border:1px solid var(--line);border-radius:8px;padding:8px}
@@ -192,7 +195,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
         if method not in ("GET", "POST"):
             return self._response(405, self._page("Method not allowed", "<section class=card>Method not allowed.</section>"))
         if method == "GET":
-            return self._get(parsed.path, parsed.query, headers)
+            return self._get(parsed.path, parsed.query, headers, client_ip)
         if headers.get_content_type() != "application/x-www-form-urlencoded":
             return self._response(415, self._page("Unsupported request", "<section class=card>Unsupported request.</section>"))
         form = self._form(body)
@@ -200,12 +203,18 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
             return self._response(400, self._page("Bad request", "<section class=card>Invalid form.</section>"))
         return self._post(parsed.path, form, headers, client_ip)
 
-    def _get(self, path: str, query: str, headers):
+    def _get(self, path: str, query: str, headers, client_ip: str):
         if path in ("/admin", "/admin/"):
             token, session = self._session(headers)
             if not session:
                 return self._login_page(headers)
             return self._directory_page(session)
+        if path == "/admin/qr-login":
+            params = parse_qs(query, keep_blank_values=True)
+            request_ids = params.get("id", [])
+            if len(request_ids) != 1 or not _REQUEST_ID.fullmatch(request_ids[0]):
+                return self._login_page(headers, "That phone sign-in request is invalid or expired.")
+            return self._qr_login_page(request_ids[0], headers, client_ip)
         token, session = self._session(headers)
         if not session:
             return self._login_page(headers)
@@ -234,21 +243,145 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
 <form method="post" action="/admin/login"><input type="hidden" name="preauth" value="{html.escape(nonce)}">
 <label for="user">Account name</label><input id="user" name="user" autocomplete="username" required maxlength="20">
 <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
-<p><button type="submit">Sign in</button></p></form></section>"""
+<p><button type="submit">Sign in with password</button></p></form></section>
+<section class="card"><h2>Sign in with Thessley Passkey</h2>
+<p class="muted">Use a phone already enrolled centrally for this AD account. The account must be an administrator on this domain controller.</p>
+<form method="post" action="/admin/qr-login"><input type="hidden" name="preauth" value="{html.escape(nonce)}">
+<label for="qr-user">Account name</label><input id="qr-user" name="user" autocomplete="username" required maxlength="20">
+<p><button type="submit">Continue with phone</button></p></form></section>"""
         return self._response(200, self._page("Administrator sign-in", body), extra_headers=(self._cookie_header(_PREAUTH_COOKIE, nonce, max_age=300),))
+
+    def _consume_login_preauth(self, form: dict[str, str], headers, client_ip: str) -> bool:
+        cookie_nonce = self._cookie(headers, _PREAUTH_COOKIE)
+        supplied_nonce = form.get("preauth", "")
+        with self._lock:
+            expiry = self._preauth.pop(cookie_nonce, 0)
+            attempts = [t for t in self._login_attempts.get(client_ip, []) if time.monotonic() - t < 60]
+            if cookie_nonce != supplied_nonce or not expiry or expiry <= time.monotonic() or len(attempts) >= 6:
+                self._login_attempts[client_ip] = attempts
+                return False
+            attempts.append(time.monotonic())
+            self._login_attempts[client_ip] = attempts
+        return True
+
+    def _new_admin_session(self, sid: str, username: str, client_ip: str, method: str):
+        token = secrets.token_urlsafe(32)
+        csrf = secrets.token_urlsafe(32)
+        with self._lock:
+            self._sessions[token] = {"sid": sid, "user": username, "csrf": csrf, "last": time.monotonic()}
+        _LOG.info("admin_login_ok method=%s sid=%s source=%s", method, sid, client_ip)
+        return self._response(303, "", extra_headers=(
+            ("Location", "/admin/"), self._cookie_header(_SESSION_COOKIE, token),
+            ("Set-Cookie", f"{_PREAUTH_COOKIE}=; Path=/admin; Max-Age=0; Secure; HttpOnly; SameSite=Strict"),
+        ))
+
+    def _qr_admin_principal(self, username: str):
+        if not isinstance(username, str) or not _SAM.fullmatch(username):
+            return None
+        try:
+            principal = self.directory.resolve_username(username)
+        except Exception:
+            return None
+        if (principal.username.casefold() != username.casefold()
+                or principal.authority.casefold() != self.authority.casefold()
+                or _ADMINISTRATORS_SID not in principal.group_sids):
+            return None
+        return principal
+
+    def _start_qr_admin_login(self, form: dict[str, str], headers, client_ip: str):
+        if not self._consume_login_preauth(form, headers, client_ip):
+            return self._login_page(headers, "Sign-in request expired or rate limit reached. Refresh and try again.")
+        now = time.time()
+        with self._lock:
+            self._qr_logins = {key: item for key, item in self._qr_logins.items() if item["expires_at"] > now}
+            per_ip = sum(item["client_ip"] == client_ip for item in self._qr_logins.values())
+            if per_ip >= 3 or len(self._qr_logins) >= 128:
+                return self._login_page(headers, "Too many phone sign-in requests are active. Wait briefly and retry.")
+        principal = self._qr_admin_principal(form.get("user", ""))
+        if principal is None:
+            _LOG.warning("admin_qr_login_rejected source=%s", client_ip)
+            return self._login_page(headers, "That account could not be authorized for phone sign-in.")
+        principal_id = principal_id_from_sid(principal.sid)
+        if not any(item.get("central") for item in self.phones.list_for_principal(principal_id)):
+            _LOG.warning("admin_qr_login_unenrolled sid=%s source=%s", principal.sid, client_ip)
+            return self._login_page(headers, "No centrally enrolled phone is available for that account.")
+        preauth_nonce = self._cookie(headers, _PREAUTH_COOKIE)
+        try:
+            challenge = self.challenges.create(
+                machine_id=CENTRAL_AD_MACHINE_ID, sid=principal.sid,
+                username=principal.username, authority=principal.authority,
+                context="admin-web", lifetime_seconds=180,
+            )
+            params = {
+                "h": self.public_host, "p": "47810", "fp": self.certificate_fingerprint,
+                "id": challenge["request_id"], "n": challenge["nonce"],
+                "m": CENTRAL_AD_MACHINE_ID, "hn": self.authority, "u": principal.username,
+                "pv": "2", "sid": principal_id, "scope": "domain", "auth": principal.authority,
+                "ctx": "admin-web", "api": "ad", "global": "1",
+            }
+            client_address = client_ip if re.fullmatch(r"[0-9A-Fa-f.:]{1,45}", client_ip) else ""
+            if client_address:
+                params["r"] = client_address
+            link = "thessleypam://login?" + urlencode(params)
+            qr_data = _qr_data_uri(link)
+        except Exception:
+            _LOG.exception("admin_qr_login_start_failed source=%s", client_ip)
+            return self._login_page(headers, "Could not start phone sign-in. Try again or use the password option.")
+        with self._lock:
+            self._qr_logins[challenge["request_id"]] = {
+                "sid": principal.sid, "principal_id": principal_id, "username": principal.username,
+                "client_ip": client_ip, "preauth": preauth_nonce,
+                "expires_at": challenge["expires_at"], "qr": qr_data, "link": link,
+            }
+        _LOG.info("admin_qr_login_started sid=%s source=%s", principal.sid, client_ip)
+        return self._response(303, "", extra_headers=(("Location", f"/admin/qr-login?id={challenge['request_id']}"),))
+
+    def _qr_login_page(self, request_id: str, headers, client_ip: str):
+        cookie_nonce = self._cookie(headers, _PREAUTH_COOKIE)
+        with self._lock:
+            pending = self._qr_logins.get(request_id)
+        if (not pending or not secrets.compare_digest(cookie_nonce, pending["preauth"])
+                or not secrets.compare_digest(client_ip, pending["client_ip"])
+                or pending["expires_at"] <= time.time()):
+            with self._lock:
+                self._qr_logins.pop(request_id, None)
+            return self._login_page(headers, "Phone sign-in expired. Start a new request.")
+        result = self.challenges.consume_result(
+            machine_id=CENTRAL_AD_MACHINE_ID, request_id=request_id,
+        )
+        if result and result.get("status") == "approved":
+            credential_id = result.get("credential_id")
+            active = any(item.get("central") and item.get("credential_id") == credential_id
+                         for item in self.phones.list_for_principal(pending["principal_id"]))
+            principal = self._qr_admin_principal(pending["username"])
+            if active and principal and principal.sid == pending["sid"]:
+                with self._lock:
+                    self._qr_logins.pop(request_id, None)
+                _LOG.info("admin_qr_login_ok sid=%s source=%s", principal.sid, pending["client_ip"])
+                return self._new_admin_session(principal.sid, principal.username, pending["client_ip"], "phone")
+            result = {"status": "denied"}
+        status = result.get("status") if result else "pending"
+        if status == "pending":
+            refresh = f'<meta http-equiv="refresh" content="2;url=/admin/qr-login?id={html.escape(request_id)}">'
+            link = html.escape(pending["link"], quote=True)
+            qr = html.escape(pending["qr"], quote=True)
+            account = html.escape(self.authority + chr(92) + pending["username"])
+            content = f"""{refresh}<h1>Approve admin sign-in</h1><section class="card">
+<p>Scan with Thessley Passkey for <strong>{account}</strong>. The phone must already be enrolled centrally for this account.</p>
+<img class="qr" alt="Thessley AD administrator sign-in QR code" src="{qr}">
+<p><a class="button" href="{link}">Open Thessley Passkey</a></p><p class="status">Waiting for phone approval…</p>
+<p class="muted small">This request expires shortly. Password sign-in remains available.</p></section>"""
+            return self._response(200, self._page("Approve admin sign-in", content))
+        with self._lock:
+            self._qr_logins.pop(request_id, None)
+        _LOG.warning("admin_qr_login_not_approved sid=%s source=%s status=%s",
+                     pending["sid"], pending["client_ip"], status)
+        return self._login_page(headers, "Phone sign-in expired or was denied. You can try again or use your password.")
 
     def _post(self, path: str, form: dict[str, str], headers, client_ip: str):
         if path == "/admin/login":
-            cookie_nonce = self._cookie(headers, _PREAUTH_COOKIE)
-            supplied_nonce = form.get("preauth", "")
-            with self._lock:
-                expiry = self._preauth.pop(cookie_nonce, 0)
-                attempts = [t for t in self._login_attempts.get(client_ip, []) if time.monotonic() - t < 60]
-                if cookie_nonce != supplied_nonce or not expiry or expiry <= time.monotonic() or len(attempts) >= 6:
-                    self._login_attempts[client_ip] = attempts
-                    return self._login_page(headers, "Sign-in failed. Refresh and try again.")
-                attempts.append(time.monotonic())
-                self._login_attempts[client_ip] = attempts
+            if not self._consume_login_preauth(form, headers, client_ip):
+                return self._login_page(headers, "Sign-in failed. Refresh and try again.")
             username = form.get("user", "")
             password = form.pop("password", "")
             sid = WindowsAdminLogin.authenticate(username, password, self.authority)
@@ -256,15 +389,10 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
             if not sid:
                 _LOG.warning("admin_login_failed source=%s", client_ip)
                 return self._login_page(headers, "Sign-in failed. Check the account and password, then try again.")
-            token = secrets.token_urlsafe(32)
-            csrf = secrets.token_urlsafe(32)
-            with self._lock:
-                self._sessions[token] = {"sid": sid, "user": username, "csrf": csrf, "last": time.monotonic()}
-            _LOG.info("admin_login_ok sid=%s source=%s", sid, client_ip)
-            return self._response(303, "", extra_headers=(
-                ("Location", "/admin/"), self._cookie_header(_SESSION_COOKIE, token),
-                ("Set-Cookie", f"{_PREAUTH_COOKIE}=; Path=/admin; Max-Age=0; Secure; HttpOnly; SameSite=Strict"),
-            ))
+            return self._new_admin_session(sid, username, client_ip, "password")
+
+        if path == "/admin/qr-login":
+            return self._start_qr_admin_login(form, headers, client_ip)
 
         token, session = self._session(headers)
         if not session or not secrets.compare_digest(form.get("csrf", ""), session["csrf"]):
@@ -346,7 +474,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
             return self._response(503, self._page("Directory unavailable", '<section class="card error">Active Directory could not be queried. Try again shortly.</section>'))
         content = f"""<div class="row" style="justify-content:space-between"><h1>AD accounts</h1>
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><button class="danger">Sign out</button></form></div>
-<p class="muted">Signed in as {html.escape(self.authority + chr(92) + session['user'])}. Enrollments are central to the AD account and work on every paired PC.</p>"""
+<p class="muted">Signed in as {html.escape(self.authority + chr(92) + session['user'])}. Enrollments are central to the AD account and work on every paired PC.</p>
+<section class="card small"><strong>Rights:</strong> Workstation QR shows membership in the configured Thessley sign-in group. DC admin shows membership in the domain controller's built-in Administrators group; that right is required for this management site. The indicators are independent and read-only.</section>"""
         for user in snapshot.get("users", []):
             if not user.get("enabled"):
                 continue
@@ -355,8 +484,10 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
             if not principal_id:
                 continue
             authorized = bool(user.get("authorized"))
+            dc_administrator = bool(user.get("dc_administrator"))
             content += '<section class="card user"><div><h2>' + html.escape(user.get("name") or user.get("sam", "")) + '</h2><div class="muted">' + html.escape(self.authority + chr(92) + user.get("sam", "")) + '</div>'
-            content += '<div class="small">' + ("QR sign-in permitted" if authorized else "Not in the allowed sign-in group") + '</div></div><div>'
+            content += '<div class="rights"><span class="badge ' + ("yes" if authorized else "no") + '">Workstation QR: ' + ("allowed" if authorized else "not allowed") + '</span>'
+            content += '<span class="badge ' + ("yes" if dc_administrator else "no") + '">DC admin: ' + ("yes" if dc_administrator else "no") + '</span></div></div><div>'
             keys = self.phones.list_for_principal(principal_id)
             if keys:
                 for key in keys:

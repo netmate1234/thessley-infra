@@ -167,6 +167,7 @@ def main() -> int:
         admin_web = AdminWeb(
             directory=directory,
             phones=phones,
+            challenges=challenges,
             allowed_group_sids=config["allowed_group_sids"],
             authority=config["authority"],
             public_host=config["public_host"],

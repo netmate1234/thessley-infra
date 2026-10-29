@@ -9,13 +9,12 @@ administration is on 47820 only. The service
 uses Windows LDAP/SSPI to read AD and stores machine registrations, login
 challenges, and phone public keys in the protected
 `C:\ProgramData\ThessleyAD\state.sqlite3` database. The new source hosts
-`/admin/` on its own port and supports SID-wide AD enrollments; the live DC
-still needs the split-port update. The
-signed Android 0.1.22 release has been installed on the connected phone and
-recognizes account-wide keys. The split-port service update is installed on
-the disposable DC: the admin listener returns `200 OK` on TCP 47820, while
-TCP 47810 remains API-only. Administrator login, central enrollment,
-cross-PC approval, and revocation still need interactive verification.
+`/admin/` on its own port and supports SID-wide AD enrollments. The signed
+Android 0.1.22 release recognizes account-wide keys. The split-port service
+update is installed on the disposable DC: the admin listener returns `200 OK`
+on TCP 47820, while TCP 47810 remains API-only. Source now adds QR as an
+alternative to password sign-in on `/admin/`; deploying and interactively
+verifying this new QR flow remains outstanding.
 
 No Clone 1 client update is needed for central key scope: it keeps using its
 existing machine-paired signed API on TCP 47810. SID-wide key lookup is handled
@@ -35,7 +34,8 @@ enrollment, phone-key status, and the group policy used by AD QR sign-in.
 The site should let an authorized administrator:
 
 - Search/browse enabled AD users and show whether the configured sign-in group
-  authorizes them.
+  authorizes workstation QR sign-in, and whether they are members of the DC's
+  built-in Administrators group. These are separate rights.
 - Start phone enrollment for a selected AD user, display the Thessley QR and
   matching short pairing code, and confirm the code after scanning.
 - List the enrolled phone labels and enrollment dates for that AD user.
@@ -74,10 +74,10 @@ a key at the DC blocks it for all PCs without visiting each PC.
 
 - Authenticate administrators with their domain identity; do not add a shared
   admin password or trust a username supplied by the browser.
-- The first implementation requires a domain account in the DC's built-in
-  Administrators group. A dedicated service-management group is a later
-  hardening option; the workstation QR sign-in group does not grant web-admin
-  access.
+- Both password and QR sign-in require an enabled domain account in the DC's
+  built-in Administrators group. QR sign-in additionally requires an active,
+  centrally enrolled phone key for that exact AD SID. The workstation QR
+  sign-in group does not grant web-admin access.
 - Serve HTTPS with the DC service certificate and restrict the management
   listener in Windows Firewall to approved management networks.
 - Use short idle sessions, secure/HTTP-only cookies, CSRF protection, output
@@ -95,15 +95,19 @@ a key at the DC blocks it for all PCs without visiting each PC.
    approval remains bound to its requesting machine.
 2. Source now adds a DC admin page for enabled-user listing, centrally scoped
    phone enrollment with QR/pairing confirmation, key listing, and revocation.
-   Login validates a domain account with Windows `LogonUser` and requires
-   membership in the DC Administrators group; the password is not stored.
+   Password login validates a domain account with Windows `LogonUser`; the
+   password is not stored. An alternative QR flow creates a short-lived,
+   single-use challenge for an exact AD username, signs it with that SID's
+   centrally enrolled phone key, and rechecks current DC Administrators-group
+   membership before creating the same short admin session. Password login
+   remains available as recovery.
 3. The Android 0.1.22 source recognizes central AD keys across paired PCs and
    labels their scope. It was built with the existing release signing setup
    and installed on the connected phone without clearing app data.
 4. The updated service is deployed to the disposable lab with separate API
-   (47810) and admin (47820) listeners. Verify administrator login,
-   enrollment, cross-PC approval, revocation, offline behavior, and recovery
-   before deploying to other PCs.
+   (47810) and admin (47820) listeners. Verify password and QR administrator
+   login, enrollment, cross-PC approval, revocation, offline behavior, and
+   recovery before deploying to other PCs.
 
 Do not install these changes on production PCs until the web login, enrollment,
 cross-PC approval, revocation, and local-account recovery paths are verified
