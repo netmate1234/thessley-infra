@@ -89,11 +89,14 @@ enrollment for another authorized domain account remains available.
 The isolated service and Android protocol support a separate v3 approval whose
 phone signature binds one exact CSR SHA-256 digest, the configured AD CS
 template, the machine, domain SID, and request expiry. The generic agent
-exposes `certificate-approval-start --sid SID --csr-sha256 DIGEST` and
+exposes `certificate-approval-start --sid SID --csr-file PATH` (or an already
+computed `--csr-sha256 DIGEST`) and
 `certificate-approval-poll --request-id ID --csr-sha256 DIGEST --template NAME`.
-The start command validates the service's complete v3 link before returning QR
-data. The poll command checks that the one-use response echoes the expected
-CSR digest and template.
+The file option accepts a bounded PEM or DER PKCS#10 request, verifies its
+self-signature, canonicalizes it to DER, and sends only the digest to the
+service. The start command validates the service's complete v3 link before
+returning QR data. The poll command checks that the one-use response echoes
+the expected CSR digest and template.
 This does not generate a CSR, submit an Enrollment Agent-signed request,
 receive a certificate, or perform PKINIT. The policy store still refuses to
 enable this method, so do not register a login tile from this scaffold. The

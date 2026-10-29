@@ -205,7 +205,7 @@ def _approval_poll(request_id: str, timeout: int) -> int:
 def _certificate_approval_poll(request_id: str, csr_sha256: str, template: str, timeout: int) -> int:
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
         raise ValueError("The approval request ID is malformed.")
-    if not re.fullmatch(r"[a-f0-9]{64}", csr_sha256):
+    if not isinstance(csr_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", csr_sha256):
         raise ValueError("The CSR SHA-256 must contain 64 lowercase hexadecimal characters.")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", template):
         raise ValueError("The configured certificate template name is malformed.")
@@ -217,10 +217,12 @@ def _certificate_approval_poll(request_id: str, csr_sha256: str, template: str, 
     return 0 if approved else 1
 
 
-def _certificate_approval_start(sid: str, csr_sha256: str) -> int:
+def _certificate_approval_start(sid: str, csr_sha256: str | None, csr_file: str | None) -> int:
     """Emit v3 approval metadata for a future certificate-logon client."""
     if not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid, re.IGNORECASE):
         raise ValueError("The selected account SID is malformed.")
+    if csr_file is not None:
+        csr_sha256 = ad_agent.certificate_request_sha256(csr_file)
     if not re.fullmatch(r"[a-f0-9]{64}", csr_sha256):
         raise ValueError("The CSR SHA-256 must contain 64 lowercase hexadecimal characters.")
     _require_domain_joined()
@@ -264,7 +266,9 @@ def main(argv: list[str] | None = None) -> int:
         help="start CSR-bound phone approval for the isolated certificate pilot",
     )
     certificate_start.add_argument("--sid", required=True)
-    certificate_start.add_argument("--csr-sha256", required=True)
+    certificate_csr = certificate_start.add_mutually_exclusive_group(required=True)
+    certificate_csr.add_argument("--csr-sha256", help="lowercase SHA-256 of the DER-encoded CSR")
+    certificate_csr.add_argument("--csr-file", help="local PEM/DER PKCS#10 request; only its DER digest is sent")
     poll = commands.add_parser("approval-poll", help="poll an AD sign-in approval and return JSON for the native tile")
     poll.add_argument("--request-id", required=True)
     poll.add_argument("--timeout", type=int, default=175, choices=range(1, 176))
@@ -321,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "approval-start":
             return _approval_start(args.sid, args.context)
         if args.command == "certificate-approval-start":
-            return _certificate_approval_start(args.sid, args.csr_sha256)
+            return _certificate_approval_start(args.sid, args.csr_sha256, args.csr_file)
         if args.command == "approval-poll":
             return _approval_poll(args.request_id, args.timeout)
         if args.command == "certificate-approval-poll":

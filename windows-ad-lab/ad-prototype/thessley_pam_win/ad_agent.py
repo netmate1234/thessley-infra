@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography import x509
 
 from . import qr
 
@@ -501,6 +502,34 @@ def start_certificate_login(sid: str, certificate_request_sha256: str) -> dict:
     }
 
 
+def certificate_request_sha256(path: str) -> str:
+    """Validate a local PEM/DER PKCS#10 CSR and return its canonical DER digest."""
+    if not isinstance(path, str) or not path or len(path) > 4096:
+        raise AgentError("Select a local certificate request file.")
+    try:
+        with open(path, "rb") as stream:
+            data = stream.read(64 * 1024 + 1)
+    except OSError as exc:
+        raise AgentError("The certificate request file could not be read.") from exc
+    if not data or len(data) > 64 * 1024:
+        raise AgentError("The certificate request file is empty or too large.")
+    try:
+        if data.lstrip().startswith(b"-----BEGIN CERTIFICATE REQUEST-----"):
+            request = x509.load_pem_x509_csr(data)
+        else:
+            request = x509.load_der_x509_csr(data)
+        if not request.is_signature_valid:
+            raise AgentError("The certificate request signature is invalid.")
+        der = request.public_bytes(serialization.Encoding.DER)
+    except AgentError:
+        raise
+    except (ValueError, TypeError) as exc:
+        raise AgentError("The file is not a valid PKCS#10 certificate request.") from exc
+    if not der or len(der) > 64 * 1024:
+        raise AgentError("The encoded certificate request is invalid or too large.")
+    return hashlib.sha256(der).hexdigest()
+
+
 def poll_login(request_id: str, cancel, say=lambda _message: None, timeout: int = 95,
                certificate_request_sha256: str | None = None,
                certificate_template: str | None = None) -> bool:
@@ -509,7 +538,8 @@ def poll_login(request_id: str, cancel, say=lambda _message: None, timeout: int 
         raise AgentError("Invalid AD sign-in request id.")
     if ((certificate_request_sha256 is None) != (certificate_template is None)
             or (certificate_request_sha256 is not None
-                and (not _SHA256.fullmatch(certificate_request_sha256)
+                and (not isinstance(certificate_request_sha256, str)
+                     or not _SHA256.fullmatch(certificate_request_sha256)
                      or not isinstance(certificate_template, str)
                      or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", certificate_template)))):
         raise AgentError("Invalid certificate approval binding.")
