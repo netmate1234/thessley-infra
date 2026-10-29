@@ -245,3 +245,13 @@ certificates, install the tile, or attempt a user sign-in based on this
 scaffold. The unproven CA restrictions,
 strong SID mapping, certificate validation, cleanup-after-crash, and fresh KDC
 logon gates above still have to be proved independently in the disposable lab.
+
+The paired-machine API also has a generic account-resolution operation for a
+Windows **Other user** tile. It accepts a SAM account name (optionally
+`DOMAIN\\name`), resolves it through AD, checks the configured workstation
+group, and returns the canonical SID and per-account policy. It returns no
+identity details for users outside that group. The isolated CLI can inspect
+this stage with `thessley-ad-test resolve-user --account DOMAIN\\name`; this
+resolves identity only and does not request a phone approval or perform a
+Windows sign-in. The native provider still has its lab-only Martin SID and TPM
+container, so generic certificate sign-in is not wired to LogonUI yet.

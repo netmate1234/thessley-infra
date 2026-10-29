@@ -22,6 +22,7 @@ DIRECTORY_USERS_PATH = "/thessley-ad/v1/directory/users"
 PHONE_KEYS_PATH = "/thessley-ad/v1/directory/phone-keys"
 PHONE_KEY_REVOKE_PATH = "/thessley-ad/v1/directory/phone-keys/revoke"
 PRINCIPAL_RESOLVE_PATH = "/thessley-ad/v1/principals/resolve"
+PRINCIPAL_RESOLVE_NAME_PATH = "/thessley-ad/v1/principals/resolve-name"
 LOGIN_START_PATH = "/thessley-ad/v1/requests"
 PHONE_RESPONSE_PATH = "/thessley-ad/v1/requests/respond"
 LOGIN_RESULT_PATH = "/thessley-ad/v1/requests/result"
@@ -248,6 +249,69 @@ def principal_resolve_route(registry: "MachineRegistry", replay_guard: "ReplayGu
                 "username": principal.username,
             },
             "authorized": authorized,
+        }
+
+    return RawBodyRoute(handle)
+
+
+def principal_resolve_name_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                                 directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
+                                 login_policy=None):
+    """Resolve a generic Other-user SAM name; AD remains the identity and group authority."""
+    from .directory import DirectoryUnavailable, PrincipalNotFound, validate_group_sid_allowlist
+    from .login_policy import PolicyError, METHOD_TPM
+
+    allowed_group_sids = validate_group_sid_allowlist(allowed_group_sids)
+
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        account = body.get("account")
+        if (set(auth_headers) != expected or set(body) != {"account"}
+                or not isinstance(account, str)
+                or len(account) > 160):
+            return 400, {"result": "error", "message": "Invalid domain-account request."}
+        username = account
+        if "\\" in account:
+            domain, username = account.split("\\", 1)
+            configured_authority = getattr(getattr(directory, "config", None), "authority", "")
+            if not configured_authority or domain.casefold() != configured_authority.casefold():
+                return 404, {"result": "error", "message": "This domain account is unavailable for sign-in."}
+        if not re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", username, re.IGNORECASE):
+            return 400, {"result": "error", "message": "Invalid domain-account request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(
+            machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
+            auth_headers["x-thessley-signature"], PRINCIPAL_RESOLVE_NAME_PATH, raw_body, registry, replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        try:
+            principal = directory.resolve_username(username)
+        except PrincipalNotFound:
+            return 404, {"result": "error", "message": "This domain account is unavailable for sign-in."}
+        except DirectoryUnavailable:
+            return 503, {"result": "error", "message": "Domain authorization is temporarily unavailable."}
+        if not principal.group_sids.intersection(allowed_group_sids):
+            # Do not return identity details for users outside the configured sign-in population.
+            return 404, {"result": "error", "message": "This domain account is unavailable for sign-in."}
+        try:
+            policy = login_policy.resolve(machine_id, principal.group_sids) if login_policy else {
+                "method": METHOD_TPM, "source": "domain-default"
+            }
+        except PolicyError:
+            return 503, {"result": "error", "message": "The workstation sign-in policy is unavailable."}
+        return 200, {
+            "result": "resolved",
+            "credential_method": policy["method"],
+            "policy_source": policy["source"],
+            "principal": {
+                "sid": principal.sid,
+                "principal_id": principal.principal_id,
+                "principal_type": "domain",
+                "authority": principal.authority,
+                "username": principal.username,
+            },
         }
 
     return RawBodyRoute(handle)
@@ -588,6 +652,9 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         PHONE_KEYS_PATH: phone_keys_route(registry, replay_guard, phones),
         PHONE_KEY_REVOKE_PATH: phone_key_revoke_route(registry, replay_guard, phones),
         PRINCIPAL_RESOLVE_PATH: principal_resolve_route(
+            registry, replay_guard, directory, allowed_group_sids, login_policy
+        ),
+        PRINCIPAL_RESOLVE_NAME_PATH: principal_resolve_name_route(
             registry, replay_guard, directory, allowed_group_sids, login_policy
         ),
         LOGIN_START_PATH: login_start_route(

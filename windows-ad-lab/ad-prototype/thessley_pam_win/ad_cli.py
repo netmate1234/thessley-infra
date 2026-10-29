@@ -212,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("check", help="check the pinned machine-authenticated service connection")
     authorize = commands.add_parser("authorization-check", help="check the selected domain account against the AD group policy")
     authorize.add_argument("--user", required=True, help="qualified domain account")
+    resolve = commands.add_parser("resolve-user", help="resolve one authorized AD account for the generic sign-in tile")
+    resolve.add_argument("--account", required=True, help="SAM account name, optionally DOMAIN\\name")
     enroll = commands.add_parser("enroll-phone", help="admin-assisted phone enrollment for a domain account")
     enroll.add_argument("--user", required=True, help="qualified domain account, e.g. THESSLEYLAB\\martin")
     commands.add_parser("enroll-current-user", help="enroll a phone for the currently signed-in AD account")
@@ -254,6 +256,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"AD policy: {result['authority']}\\{result['username']} is {state} on this prototype; "
                   f"sign-in method is {result['credential_method']} ({result['policy_source']}).")
             return 0 if result["authorized"] else 1
+        if args.command == "resolve-user":
+            _require_domain_joined()
+            result = ad_agent.resolve_domain_account(args.account)
+            print(f"Resolved {result['authority']}\\{result['username']} (SID {result['sid']}); "
+                  f"policy {result['credential_method']} ({result['policy_source']}).")
+            return 0
         if args.command == "enroll-phone":
             return _phone_enroll(args.user)
         if args.command == "enroll-current-user":

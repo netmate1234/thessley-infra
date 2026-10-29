@@ -287,6 +287,37 @@ def check_domain_authorization(sid: str) -> dict:
             "policy_source": source}
 
 
+def resolve_domain_account(account: str) -> dict:
+    """Resolve an exact AD SAM name without embedding a lab account in the tile."""
+    if not isinstance(account, str) or len(account) > 160:
+        raise AgentError("Enter a valid domain account name.")
+    username = account.split("\\", 1)[-1]
+    if not re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", username, re.IGNORECASE):
+        raise AgentError("Enter a valid domain SAM account name.")
+    result = _signed_post("/thessley-ad/v1/principals/resolve-name", {"account": account})
+    principal = result.get("principal")
+    method = result.get("credential_method")
+    source = result.get("policy_source")
+    sid = principal.get("sid") if isinstance(principal, dict) else None
+    principal_id = principal.get("principal_id") if isinstance(principal, dict) else None
+    if (result.get("result") != "resolved" or method not in ("tpm_smartcard", "windows_native")
+            or source not in ("workstation", "group", "domain-default")
+            or not isinstance(principal, dict)
+            or set(principal) != {"sid", "principal_id", "principal_type", "authority", "username"}
+            or not isinstance(sid, str) or not _SID.fullmatch(sid)
+            or not isinstance(principal_id, str)
+            or principal_id != hashlib.sha256(sid.upper().encode("ascii")).hexdigest()
+            or principal.get("principal_type") != "domain"
+            or not isinstance(principal.get("authority"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}", principal["authority"])
+            or not isinstance(principal.get("username"), str)
+            or principal["username"].casefold() != username.casefold()
+            or ("\\" in account and principal["authority"].casefold() != account.split("\\", 1)[0].casefold())):
+        raise AgentError("The AD service did not resolve an authorized account for this PC.")
+    return {"sid": sid.upper(), "principal_id": principal_id, "authority": principal["authority"],
+            "username": principal["username"], "credential_method": method, "policy_source": source}
+
+
 def _load() -> tuple[dict, ec.EllipticCurvePrivateKey, str, int, str]:
     folder = _folder()
     config_path = os.path.join(folder, "machine.json")
