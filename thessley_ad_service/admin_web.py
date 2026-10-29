@@ -129,18 +129,18 @@ class AdminWeb:
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>""" + html.escape(title) + """ · Thessley AD</title>
 <style>
-:root{color-scheme:light;--ink:#17212b;--muted:#526170;--line:#d7dee5;--blue:#1459a6;--bg:#f3f6f8}
+:root{color-scheme:dark;--ink:#edf3f8;--muted:#b2bfcc;--line:#344555;--blue:#77b7ff;--bg:#0c131a;--surface:#151f29;--field:#0e1720}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:1100px;margin:28px auto;padding:0 18px}.brand{font-weight:750;color:var(--blue);font-size:1.25rem}
 h1{font-size:1.65rem;margin:.4rem 0 1.1rem}h2{font-size:1.2rem;margin:0 0 .7rem}.muted{color:var(--muted)}
-.card{background:white;border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0;box-shadow:0 2px 8px #1627380b}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0;box-shadow:0 8px 24px #0004}
 .user{display:grid;grid-template-columns:minmax(220px,1fr) minmax(260px,1.2fr) auto;gap:12px;align-items:center}
 .phone{border-top:1px solid var(--line);margin-top:12px;padding-top:10px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.rights{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.badge{display:inline-block;border-radius:999px;padding:2px 9px;background:#eaf1f8;color:#26394c;font-size:.82rem;font-weight:650}.badge.yes{background:#e7f6eb;color:#155c2d}.badge.no{background:#f0f2f4;color:#58636e}
-label{display:block;font-weight:600;margin:8px 0 4px}input{font:inherit;padding:9px 10px;border:1px solid #9aa8b5;border-radius:7px;max-width:100%}
-button,.button{font:inherit;font-weight:650;background:var(--blue);color:white;border:0;border-radius:7px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-block}
-button.danger{background:#a32d35}.small{font-size:.9rem}.qr{width:min(310px,82vw);height:auto;background:white;border:1px solid var(--line);border-radius:8px;padding:8px}
-code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;border-color:#e8b6b6}.success{background:#effaf1;border-color:#b8dfbf}
+.rights{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.badge{display:inline-block;border-radius:999px;padding:2px 9px;background:#283847;color:#e1ebf4;font-size:.82rem;font-weight:650}.badge.yes{background:#173a27;color:#a8e6b8}.badge.no{background:#2a3037;color:#c1cbd4}
+label{display:block;font-weight:600;margin:8px 0 4px}input{font:inherit;padding:9px 10px;border:1px solid #526475;border-radius:7px;max-width:100%;background:var(--field);color:var(--ink)}input:focus-visible,button:focus-visible,.button:focus-visible{outline:3px solid #9acbff;outline-offset:2px}
+button,.button{font:inherit;font-weight:700;background:var(--blue);color:#091522;border:0;border-radius:7px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-block}
+button.danger{background:#d46a73;color:#210b0d}.small{font-size:.9rem}.qr{width:min(310px,82vw);height:auto;background:white;border:1px solid var(--line);border-radius:8px;padding:8px}
+code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;border-color:#7b343e}.success{background:#183324;border-color:#35714b}
 @media(max-width:720px){main{margin:14px auto}.user{grid-template-columns:1fr}.card{padding:14px}}
 </style></head><body><main><div class="brand">Thessley · Active Directory</div>""" + content + "</main></body></html>"
 
@@ -438,9 +438,16 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
             return self._response(303, "", extra_headers=((
                 "Location", f"/admin/enrollment?id={enrollment['request_id']}"),))
         if path == "/admin/confirm-enrollment":
-            request_id, pairing = form.get("id", ""), form.get("pairing", "")
-            if not _REQUEST_ID.fullmatch(request_id) or not re.fullmatch(r"[0-9]{3} [0-9]{3}", pairing):
+            request_id = form.get("id", "")
+            if not _REQUEST_ID.fullmatch(request_id) or form.get("confirm") != "match":
                 return self._response(400, self._page("Enrollment", '<section class="card error">Invalid confirmation.</section>'))
+            enrollment_state = self.phones.enrollment_status(
+                machine_id=CENTRAL_AD_MACHINE_ID, request_id=request_id,
+            )
+            pairing = enrollment_state.get("pairing_code", "") if enrollment_state else ""
+            if (not enrollment_state or enrollment_state.get("status") != "ready"
+                    or not re.fullmatch(r"[0-9]{3} [0-9]{3}", pairing)):
+                return self._enrollment_page(request_id, session, message="The enrollment is not ready to confirm or has expired.")
             if not self.phones.confirm_enrollment(machine_id=CENTRAL_AD_MACHINE_ID,
                                                   request_id=request_id, pairing_code=pairing):
                 _LOG.warning("admin_enrollment_confirmation_failed actor=%s request=%s", session["sid"], request_id)
@@ -524,12 +531,12 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
             qr = f'<img class="qr" alt="Thessley phone enrollment QR code" src="{qr_data}">' if qr_data else ""
             error = f'<section class="card error">{html.escape(message)}</section>' if message else ""
             content = refresh + '<h1>Enroll ' + html.escape(self.authority + chr(92) + state["username"]) + '</h1>' + error
-            content += '<section class="card"><p>Scan this QR with Thessley Passkey. Confirm the same six-digit code shown by the phone before activating the key.</p>' + qr
+            content += '<section class="card"><p>Scan this QR with Thessley Passkey. Compare the six-digit code below with the phone; only confirm when both match.</p>' + qr
             if state["status"] == "pending":
                 content += '<p class="status">Waiting for phone approval…</p>'
             elif pairing:
                 content += '<p class="status">Pairing code: <strong>' + html.escape(pairing) + '</strong></p>'
-                content += f'''<form method="post" action="/admin/confirm-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><label for="pairing">Enter the matching code</label><input id="pairing" name="pairing" inputmode="numeric" pattern="[0-9]{{3}} [0-9]{{3}}" maxlength="7" required><button>Confirm enrollment</button></form>'''
+                content += f'''<form method="post" action="/admin/confirm-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button name="confirm" value="match">The codes match — confirm enrollment</button></form>'''
             content += f'''</section><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button> <a class="button" href="/admin/">Return to accounts</a></form>'''
         return self._response(status_code, self._page("Phone enrollment", content))
 
