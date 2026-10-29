@@ -164,6 +164,7 @@ def main() -> int:
         login_policy = LoginPolicyStore(STATE_PATH)
         phones = PhoneRegistry(STATE_PATH)
         challenges = ChallengeStore(STATE_PATH, phones.public_key_for)
+        challenges.purge_expired()
         replay_store = SQLiteReplayStore(STATE_PATH)
         directory = WindowsActiveDirectory(WindowsDirectoryConfig(config["authority"]))
         routes = create_routes(
@@ -202,16 +203,29 @@ def main() -> int:
             threading.Thread(target=server.serve_forever, name=name, daemon=True)
             for server, name in zip(servers, ("thessley-ad-api", "thessley-ad-admin"), strict=True)
         ]
+        def cleanup_expired_challenges() -> None:
+            while not stopped.wait(60):
+                try:
+                    challenges.purge_expired()
+                except Exception:
+                    logging.exception("Could not purge expired AD challenge state")
+
+        cleanup_thread = threading.Thread(
+            target=cleanup_expired_challenges, name="thessley-ad-state-cleanup", daemon=True,
+        )
         for thread in threads:
             thread.start()
+        cleanup_thread.start()
         try:
             stopped.wait()
         finally:
+            stopped.set()
             for server in servers:
                 server.shutdown()
                 server.server_close()
             for thread in threads:
                 thread.join(timeout=5)
+            cleanup_thread.join(timeout=5)
         return 0
     except Exception:
         logging.exception("AD API startup or runtime failure")

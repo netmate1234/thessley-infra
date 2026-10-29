@@ -73,6 +73,7 @@ def main() -> int:
     login_policy = LoginPolicyStore(STATE_DB)
     phones = PhoneRegistry(STATE_DB)
     challenges = ChallengeStore(STATE_DB, phones.public_key_for)
+    challenges.purge_expired()
     replay_store = SQLiteReplayStore(STATE_DB)
     directory = ActiveDirectory(DirectoryConfig(**directory_config))
     group_sids = validate_group_sid_allowlist(allowed_group_sids)
@@ -103,7 +104,22 @@ def main() -> int:
     with listening(machine.lan_ip(), listener_routes, SHARED_PORT) as listener:
         certificate_pin["value"] = listener.fingerprint.lower()
         print(f"Thessley AD API registered at https://{service['public_host']}:{listener.port}/", flush=True)
-        stop.wait()
+        def cleanup_expired_challenges() -> None:
+            while not stop.wait(60):
+                try:
+                    challenges.purge_expired()
+                except Exception as exc:
+                    print(f"Could not purge expired AD challenge state: {exc}", flush=True)
+
+        cleanup_thread = threading.Thread(
+            target=cleanup_expired_challenges, name="thessley-ad-state-cleanup", daemon=True,
+        )
+        cleanup_thread.start()
+        try:
+            stop.wait()
+        finally:
+            stop.set()
+            cleanup_thread.join(timeout=5)
     return 0
 
 

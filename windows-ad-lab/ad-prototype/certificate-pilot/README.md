@@ -52,7 +52,8 @@ stores it once with the challenge record. An exact retry returns the same
 verification receipt; a different CSR is rejected. The CSR is public material, but
 the service database remains service-owned and ACL-protected. No endpoint can
 retrieve it or submit it to AD CS yet; this upload currently ends with a
-validation receipt.
+validation receipt. Both service runtimes purge expired challenge and CSR rows
+at startup and every 60 seconds.
 Certificate issuance and Windows logon remain unavailable.
 
 ## Broker-side request validation

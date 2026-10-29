@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import secrets
@@ -90,6 +91,32 @@ class ChallengeStore:
         finally:
             connection.close()
         finish_private_sqlite(self.path)
+
+    def purge_expired(self, *, now: float | None = None) -> int:
+        """Remove expired challenges and retained CSR blobs; return removed rows."""
+        current = time.time() if now is None else now
+        if (isinstance(current, bool) or not isinstance(current, (int, float))
+                or not math.isfinite(current)):
+            raise ValueError("invalid cleanup time")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                "DELETE FROM login_challenges WHERE "
+                "(certificate_request_der IS NULL AND expires_at <= ?) OR "
+                "(certificate_request_der IS NOT NULL AND certificate_request_received_at <= ?)",
+                (current, current - 600),
+            )
+            connection.execute("COMMIT")
+            return cursor.rowcount
+        except sqlite3.Error as exc:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise RuntimeError("Could not purge expired AD challenges") from exc
+        finally:
+            connection.close()
 
     def create(self, *, machine_id: str, sid: str, username: str, authority: str,
                context: str, lifetime_seconds: int = 90, now: float | None = None,
@@ -314,7 +341,8 @@ class ChallengeStore:
         """Store one exact CSR only after its phone approval was delivered.
 
         The caller must authenticate the enrolled machine. This operation only
-        validates and retains the public CSR briefly; it never contacts AD CS.
+        validates and retains the public CSR; it never contacts AD CS. The
+        service purges expired CSR rows during its periodic state cleanup.
         """
         if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
                 or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
