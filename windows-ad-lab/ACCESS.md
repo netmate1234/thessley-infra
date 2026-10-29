@@ -76,10 +76,23 @@ authentication, but not a completed interactive SSH login.
   independently by the DC service installer.
 
 The Ubuntu hypervisor has `192.168.1.111` on `enp1s0`, while the DC's LAN
-adapter is attached through `macvtap0` on that same physical NIC. In this
-layout, the hypervisor host cannot directly reach the macvtap guest at
-`192.168.1.79`; other LAN devices can use the address. From this host, use the
-DC management SSH path or open the admin URL from a phone/other LAN machine.
+adapter MAC (`52-54-00-B4-8C-15`) is attached through `macvtap0` on that same
+physical NIC. In this layout, the hypervisor host cannot directly reach the
+macvtap guest at `192.168.1.79`; its packets get `Destination Host
+Unreachable` at ARP. Other LAN devices can use the address. A temporary SSH
+tunnel is available from the Ubuntu host:
+
+```bash
+ssh -NT -F /dev/null -i ~/.ssh/thessley-vm-debug \
+  -L 127.0.0.1:14780:192.168.1.79:47820 \
+  Administrator@192.168.122.98
+```
+
+With the tunnel running, browse to `https://127.0.0.1:14780/admin/`. The
+browser will warn because the DC's certificate is self-signed and names
+`192.168.1.79`, not localhost. The tunnel was verified to return HTTP 200.
+From a phone or another LAN device, use `https://192.168.1.79:47820/admin/`
+directly.
 
 The AD API and the standalone local-account Thessley service are separate
 services. Do not use the local-account service's port or enrollment records as
@@ -117,13 +130,14 @@ AD API; retain the PIN/password recovery method when testing the tile.
 
 ## Current deployment status
 
-On 2026-10-29, the first central AD management update was installed on
-`THESSLEY-DC1` from the rollback-capable service installer. The existing
-`service.json`, allow-group SID, TLS certificate, firewall scope, and SQLite
-database were retained. The installer saved a pre-update state snapshot at
-`C:\ProgramData\ThessleyAD\backups\pre-update-20261029-154949`. The API at
-`192.168.1.79:47810` is running; the subsequent change that moves the admin
-site to separate port 47820 is pending deployment. Administrator
+On 2026-10-29, the central AD service was updated on `THESSLEY-DC1` using the
+rollback-capable installer. The existing `service.json`, allow-group SID,
+TLS certificate, firewall scope, and SQLite database were retained. State
+snapshots are under `C:\ProgramData\ThessleyAD\backups`, including
+`pre-update-20261029-154949` and the later split-port update snapshot. The API
+listens on TCP 47810; the separate admin site listens on TCP 47820. From the
+DC, `/admin/` returned HTTP 200 on 47820 and the same path returned 405 on
+47810. Both firewall rules are scoped to `192.168.1.0/24`. Administrator
 authentication, phone enrollment, cross-PC use, and revocation remain to be
 verified interactively.
 

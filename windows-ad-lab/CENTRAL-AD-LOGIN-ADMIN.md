@@ -12,10 +12,10 @@ challenges, and phone public keys in the protected
 `/admin/` on its own port and supports SID-wide AD enrollments; the live DC
 still needs the split-port update. The
 signed Android 0.1.22 release has been installed on the connected phone and
-recognizes account-wide keys. The earlier service build is installed on the
-disposable DC; the separate 47820 admin listener is awaiting deployment.
-Administrator login, central enrollment, cross-PC approval, and revocation
-still need interactive verification.
+recognizes account-wide keys. The split-port service update is installed on
+the disposable DC: the admin listener returns `200 OK` on TCP 47820, while
+TCP 47810 remains API-only. Administrator login, central enrollment,
+cross-PC approval, and revocation still need interactive verification.
 
 The local Thessley Windows sign-in provider is a separate path. Keep its local
 account keys and offline behavior unchanged.

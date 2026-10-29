@@ -266,11 +266,11 @@ Phone and client TCP access to port `47810` was verified. The Windows firewall
 allows only `192.168.1.0/24` on that port. The installer does not register or
 modify any Windows sign-in tile.
 
-The admin page is being moved to `https://192.168.1.79:47820/admin/`; the
-phone/workstation approval API remains at `https://192.168.1.79:47810/`. Until
-the split-port update is deployed, the live admin page is still at
-`https://192.168.1.79:47810/admin/`. An unauthenticated HTTPS GET from the DC
-was verified to return the sign-in page. Sign in with a domain username and
+The admin page is at `https://192.168.1.79:47820/admin/`; the
+phone/workstation approval API remains at `https://192.168.1.79:47810/`. The
+split-port update is installed on the lab DC. An unauthenticated HTTPS GET
+from the DC returns the sign-in page on 47820 and the admin path is not served
+on 47810. Sign in with a domain username and
 password for an account in the DC's built-in Administrators group (normally
 Domain Admins). It lists enabled AD accounts and sign-in eligibility, starts
 centrally scoped phone enrollment, shows pairing codes for confirmation, and
