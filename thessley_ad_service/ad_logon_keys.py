@@ -1,9 +1,9 @@
-"""Account-bound public keys reserved for the future phone-held AD logon flow.
+"""Account-bound public keys for the phone-held AD logon prototype.
 
 This registry is deliberately separate from phone approval credentials. It
-stores public material only and never treats Android key-attestation evidence
-as verified; certificate issuance and Windows sign-in must remain disabled
-until a trusted attestation verifier and phone signing bridge exist.
+stores public material only and records verified Android key-attestation
+levels. Windows sign-in remains a separate provider integration; software or
+unverifiable keys remain usable only with the app's explicit warning.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from .android_attestation import verify_android_key_attestation
 from .phone_registry import CENTRAL_AD_MACHINE_ID
 from .protocol import timestamp_is_fresh, verify_phone_signature
 from .state_permissions import finish_private_sqlite, prepare_private_sqlite
@@ -41,8 +42,9 @@ class AdLogonKeyRegistry:
 
     A registration must be signed by an active, centrally enrolled AD phone
     credential and by the new key itself. A short-lived timestamp plus unique
-    request ID prevents a captured registration from being replayed. Android
-    attestation is retained as evidence but always reported as unverified.
+    request ID prevents a captured registration from being replayed. The
+    attestation status is recorded for transparency; the user's policy allows
+    a software-backed key to sign in after an explicit warning in the app.
     """
 
     def __init__(self, path: str | Path):
@@ -178,6 +180,12 @@ class AdLogonKeyRegistry:
         if (not verify_phone_signature(approval_public_key_spki_b64, approval_signature_b64, message)
                 or not verify_phone_signature(public_key_spki_b64, proof_signature_b64, message)):
             return None
+        attestation = verify_android_key_attestation(
+            attestation_chain,
+            expected_challenge=request_id.encode("ascii"),
+            expected_public_key_spki=new_key[0],
+        )
+        attestation_status = attestation["status"]
         key_id = secrets.token_urlsafe(24)
         if not _KEY_ID.fullmatch(key_id):
             return None
@@ -186,33 +194,54 @@ class AdLogonKeyRegistry:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 """SELECT key_id, principal_id, approval_credential_id,
-                          public_key_sha256, label, attestation_status, created_at, revoked_at
+                          public_key_sha256, label, attestation_chain_json,
+                          attestation_status, created_at, revoked_at
                    FROM ad_logon_keys WHERE request_id = ?""",
                 (request_id,),
             ).fetchone()
             if existing is not None:
                 (existing_id, existing_principal, existing_credential, existing_digest,
-                 existing_label, attestation_status, created_at, revoked_at) = existing
+                 existing_label, existing_chain_json, existing_status, created_at, revoked_at) = existing
                 if (existing_principal != principal_id or existing_credential != credential_id
                         or existing_digest != key_digest or existing_label != label or revoked_at is not None):
                     connection.execute("ROLLBACK")
                     return None
+                # Allow a retry of an older registration to improve an empty
+                # or previously unverified evidence record, but never permit
+                # a changed chain to replace non-empty evidence.
+                if existing_chain_json != chain_json:
+                    if existing_chain_json != "[]" or attestation_status not in {
+                        "verified_tee", "verified_strongbox", "verified_software"
+                    }:
+                        connection.execute("ROLLBACK")
+                        return None
+                    connection.execute(
+                        "UPDATE ad_logon_keys SET attestation_chain_json = ?, attestation_status = ? "
+                        "WHERE key_id = ?",
+                        (chain_json, attestation_status, existing_id),
+                    )
+                elif existing_status == "unverified" and attestation_status != "unverified":
+                    connection.execute(
+                        "UPDATE ad_logon_keys SET attestation_status = ? WHERE key_id = ?",
+                        (attestation_status, existing_id),
+                    )
                 connection.execute("COMMIT")
                 return {"key_id": existing_id, "public_key_sha256": key_digest,
-                        "attestation_status": attestation_status, "created_at": created_at,
+                        "attestation_status": attestation_status if attestation_status != "unverified" else existing_status,
+                        "created_at": created_at,
                         "already_recorded": True}
             connection.execute(
                 """INSERT INTO ad_logon_keys
                    (key_id, request_id, principal_id, approval_credential_id,
                     public_key_spki_b64, public_key_sha256, label,
                     attestation_chain_json, attestation_status, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unverified', ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (key_id, request_id, principal_id, credential_id, public_key_spki_b64,
-                 key_digest, label, chain_json, current),
+                 key_digest, label, chain_json, attestation_status, current),
             )
             connection.execute("COMMIT")
             return {"key_id": key_id, "public_key_sha256": key_digest,
-                    "attestation_status": "unverified", "created_at": current,
+                    "attestation_status": attestation_status, "created_at": current,
                     "already_recorded": False}
         except sqlite3.IntegrityError:
             try:
@@ -274,8 +303,7 @@ class AdLogonKeyRegistry:
         try:
             row = connection.execute(
                 "SELECT public_key_spki_b64 FROM ad_logon_keys "
-                "WHERE key_id = ? AND principal_id = ? AND revoked_at IS NULL "
-                "AND attestation_status = 'verified'",
+                "WHERE key_id = ? AND principal_id = ? AND revoked_at IS NULL",
                 (key_id, principal_id),
             ).fetchone()
             return row[0] if row else None

@@ -769,11 +769,21 @@ def ad_logon_key_enroll_route(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRe
             )
             return 409, {"result": "error", "message": "The key proof was invalid, duplicated, or expired."}
         logging.getLogger("thessley.ad.api").info(
-            "ad_logon_key_recorded principal_id=%s key_id=%s already_recorded=%s",
-            body["principal_id"], registered["key_id"], registered["already_recorded"],
+            "ad_logon_key_recorded principal_id=%s key_id=%s attestation=%s already_recorded=%s",
+            body["principal_id"], registered["key_id"], registered["attestation_status"],
+            registered["already_recorded"],
         )
+        status = registered["attestation_status"]
+        if status == "verified_tee":
+            message = "Key recorded; Android attestation verified TEE protection. Windows sign-in still needs its separate provider integration."
+        elif status == "verified_strongbox":
+            message = "Key recorded; Android attestation verified StrongBox protection. Windows sign-in still needs its separate provider integration."
+        elif status == "verified_software":
+            message = "Warning: Android attestation reports software-only key protection. It can be used, but has less protection if the phone is compromised."
+        else:
+            message = "Warning: hardware protection could not be verified. The key can be used, but treat it as software-backed."
         return 201, {"result": "recorded", **registered,
-                     "message": "Key recorded; hardware attestation is unverified and sign-in is not enabled."}
+                     "message": message}
 
     return RawBodyRoute(handle)
 
