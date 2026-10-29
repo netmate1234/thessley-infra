@@ -82,8 +82,11 @@ certificate into the machine key container, or performs logon yet.
 `build-eobo-cmc.ps1` is an isolated issuer-side primitive. It is restricted to a
 domain controller, requires an explicitly configured Enrollment Agent
 thumbprint and certificate template name, validates that the CSR digest matches
-the phone-approved digest supplied by its caller, verifies the Enrollment Agent
-certificate chain and revocation status, and creates a signed CMC/EOBO request.
+the phone-approved digest supplied by its caller, and requires the originating
+Thessley request ID and paired machine ID. Those IDs are carried into the
+submission result so an operator can correlate it with the approval record. The
+helper verifies the Enrollment Agent certificate chain and revocation status,
+and creates a signed CMC/EOBO request.
 It does **not** submit the request, install a certificate, or export the
 Enrollment Agent private key. Its JSON output contains the signed CMC request;
 handle it as an enrollment artifact and keep it out of shared logs.
@@ -92,9 +95,13 @@ handle it as an enrollment artifact and keep it out of shared logs.
 by an administrator, it submits one builder JSON object to the caller-selected
 `ComputerName\CAName` with the explicitly selected template attribute. It
 returns either the CA request ID for a pending request or the issued leaf as
-base64 DER. It is not called by the AD service, has no default CA/template, and
-does not validate or store the returned certificate; that must go through
-`complete_certificate_issuance`. Do not run it against a real CA until the
+base64 DER. The result labels the CA request as `ca_request_id` and repeats
+`thessley_request_id`, `machine_id`, and the CSR digest for correlation. These
+metadata fields are not authorization evidence: the future broker must bind
+the result back to its claimed challenge and independently run
+`complete_certificate_issuance`. The helper is not called by the AD service,
+has no default CA/template, and does not validate or store the returned
+certificate. Do not run it against a real CA until the
 Enrollment Agent restrictions, template permissions, and profile have been
 reviewed on a disposable CA.
 It uses Microsoft's `ICertRequest::Submit` CMC/base64 flags and accepts only

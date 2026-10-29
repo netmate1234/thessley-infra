@@ -30,13 +30,18 @@ end {
 
         $bundle = ConvertFrom-Json -InputObject $inputLines[0]
         $expectedFields = @(
-            'result', 'submitted', 'csr_sha256', 'requester', 'template',
+            'result', 'submitted', 'thessley_request_id', 'machine_id',
+            'csr_sha256', 'requester', 'template',
             'enrollment_agent_thumbprint', 'cmc_base64'
         )
         if ($null -eq $bundle -or $bundle -isnot [System.Management.Automation.PSCustomObject]
                 -or (@($bundle.PSObject.Properties.Name | Sort-Object) -join ',') -ne
                    (@($expectedFields | Sort-Object) -join ',')
                 -or $bundle.result -ne 'eobo_cmc_prepared' -or $bundle.submitted -ne $false
+                -or $bundle.thessley_request_id -isnot [string]
+                -or $bundle.thessley_request_id -notmatch '^[A-Za-z0-9_-]{8,128}$'
+                -or $bundle.machine_id -isnot [string]
+                -or $bundle.machine_id -notmatch '^[a-f0-9]{32}$'
                 -or $bundle.template -cne $TemplateName
                 -or $bundle.csr_sha256 -notmatch '^[a-f0-9]{64}$'
                 -or $bundle.requester -notmatch '^[A-Za-z0-9_.@-]{1,128}\\[A-Za-z0-9_.-]{1,64}$'
@@ -74,7 +79,9 @@ end {
             }
             [ordered]@{
                 result = 'issued'
-                request_id = $requestId
+                ca_request_id = $requestId
+                thessley_request_id = $bundle.thessley_request_id
+                machine_id = $bundle.machine_id
                 csr_sha256 = $bundle.csr_sha256
                 requester = $bundle.requester
                 template = $TemplateName
@@ -84,7 +91,9 @@ end {
         } elseif ($disposition -eq 5) { # CR_DISP_UNDER_SUBMISSION
             [ordered]@{
                 result = 'pending'
-                request_id = $requestId
+                ca_request_id = $requestId
+                thessley_request_id = $bundle.thessley_request_id
+                machine_id = $bundle.machine_id
                 csr_sha256 = $bundle.csr_sha256
                 requester = $bundle.requester
                 template = $TemplateName

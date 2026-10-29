@@ -3,6 +3,8 @@
 param(
     [Parameter(Mandatory = $true)][string] $CsrPath,
     [Parameter(Mandatory = $true)][string] $ExpectedCsrSha256,
+    [Parameter(Mandatory = $true)][string] $ThessleyRequestId,
+    [Parameter(Mandatory = $true)][string] $MachineId,
     [Parameter(Mandatory = $true)][string] $RequesterName,
     [Parameter(Mandatory = $true)][string] $TemplateName,
     [Parameter(Mandatory = $true)][string] $EnrollmentAgentThumbprint
@@ -28,6 +30,12 @@ try {
     }
     if ($ExpectedCsrSha256 -cnotmatch '^[a-f0-9]{64}$') {
         throw 'The approved CSR digest must be 64 lowercase hexadecimal characters.'
+    }
+    if ($ThessleyRequestId -cnotmatch '^[A-Za-z0-9_-]{8,128}$') {
+        throw 'The Thessley request ID is invalid.'
+    }
+    if ($MachineId -cnotmatch '^[a-f0-9]{32}$') {
+        throw 'The paired machine ID is invalid.'
     }
     if ($RequesterName -notmatch '^[A-Za-z0-9_.@-]{1,128}\\[A-Za-z0-9_.-]{1,64}$') {
         throw 'RequesterName must be a qualified AD account name.'
@@ -126,6 +134,8 @@ try {
     [ordered]@{
         result = 'eobo_cmc_prepared'
         submitted = $false
+        thessley_request_id = $ThessleyRequestId
+        machine_id = $MachineId
         csr_sha256 = $actualDigest
         requester = $RequesterName
         template = $TemplateName
