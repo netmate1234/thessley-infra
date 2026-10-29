@@ -130,6 +130,24 @@ AD API; retain the PIN/password recovery method when testing the tile.
 
 ## Current deployment status
 
+On 2026-10-29, the AD API was upgraded with server-side Android key
+attestation verification. The installer retained the existing `service.json`,
+TLS identity, firewall scope, and SQLite enrollment/key database, and saved a
+pre-update snapshot at
+`C:\ProgramData\ThessleyAD\backups\pre-update-20261029-224220`. The API
+task is running and both `192.168.1.79:47810` and `:47820` are listening. The
+TLS pin remains
+`49a95d5ab0710aa9c6d822d0263a753e195e717aa2947377784c3a8a7f37bc99`.
+The installed verifier hash matches the source package. The Android app
+`0.1.25` was installed on the Samsung A52s with the same signing certificate
+as the prior build, preserving its app data and Keystore entries. It now
+requests StrongBox first, falls back to TEE, and warns before registering a
+software-backed or unverified AD logon key. No new AD logon key has yet been
+created to confirm this phone's hardware attestation. Use **Add AD logon key**
+in the app; the server records and displays the verified protection level.
+This key enrollment is still a prototype and does not yet enable Windows
+passwordless sign-in.
+
 On 2026-10-29, the central AD service was updated on `THESSLEY-DC1` using the
 rollback-capable installer. The existing `service.json`, allow-group SID,
 TLS certificate, firewall scope, and SQLite database were retained. State
