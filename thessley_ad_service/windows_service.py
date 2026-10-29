@@ -165,6 +165,11 @@ def main() -> int:
         login_policy = LoginPolicyStore(STATE_PATH)
         phones = PhoneRegistry(STATE_PATH)
         ad_logon_keys = AdLogonKeyRegistry(STATE_PATH)
+        reconciled_ad_keys = ad_logon_keys.revoke_without_active_approval_key()
+        if reconciled_ad_keys is None:
+            raise RuntimeError("Could not reconcile AD logon keys against active phone credentials")
+        if reconciled_ad_keys:
+            logging.warning("revoked_orphaned_ad_logon_keys count=%d", reconciled_ad_keys)
         challenges = ChallengeStore(STATE_PATH, phones.public_key_for)
         challenges.purge_expired()
         replay_store = SQLiteReplayStore(STATE_PATH)

@@ -430,6 +430,55 @@ class AdLogonKeyRegistry:
         finally:
             connection.close()
 
+    def revoke_without_active_approval_key(self, *, administrator: str = "system:startup-reconcile",
+                                           now: float | None = None) -> int | None:
+        """Repair historical AD keys left active after their phone key was revoked.
+
+        Revoked records remain for audit. Central AD phones use the reserved
+        machine ID; workstation-scoped keys require their originating machine
+        to remain active as well.
+        """
+        if (not isinstance(administrator, str) or not administrator or len(administrator) > 256
+                or any(ord(char) < 32 for char in administrator)):
+            return None
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            current = time.time() if now is None else now
+            cursor = connection.execute(
+                """UPDATE ad_logon_keys SET revoked_at = ?, revoked_by = ?
+                   WHERE revoked_at IS NULL AND NOT EXISTS (
+                       SELECT 1 FROM phone_credentials AS p
+                       LEFT JOIN machines AS m ON m.machine_id = p.machine_id
+                       WHERE p.credential_id = ad_logon_keys.approval_credential_id
+                         AND p.revoked_at IS NULL
+                         AND (p.machine_id = ? OR (m.machine_id IS NOT NULL AND m.revoked_at IS NULL))
+                   )""",
+                (current, administrator, CENTRAL_AD_MACHINE_ID),
+            )
+            revoked = cursor.rowcount
+            connection.execute(
+                """UPDATE ad_logon_key_enrollments SET status='cancelled', pairing_code='', credential_id=''
+                   WHERE status IN ('pending','ready') AND credential_id <> '' AND NOT EXISTS (
+                       SELECT 1 FROM phone_credentials AS p
+                       LEFT JOIN machines AS m ON m.machine_id = p.machine_id
+                       WHERE p.credential_id = ad_logon_key_enrollments.credential_id
+                         AND p.revoked_at IS NULL
+                         AND (p.machine_id = ? OR (m.machine_id IS NOT NULL AND m.revoked_at IS NULL))
+                   )""",
+                (CENTRAL_AD_MACHINE_ID,),
+            )
+            connection.execute("COMMIT")
+            return revoked
+        except sqlite3.Error:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            return None
+        finally:
+            connection.close()
+
     def active_public_key(self, *, principal_id: str, key_id: str) -> str | None:
         if (not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id)
                 or not isinstance(key_id, str) or not _KEY_ID.fullmatch(key_id)):
