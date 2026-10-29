@@ -799,7 +799,7 @@ def ad_logon_key_status_route(logon_keys: "AdLogonKeyRegistry"):
     def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
         if auth_headers or set(body) != {"request_id"} or not isinstance(body.get("request_id"), str):
             return 400, {"result": "error", "message": "Invalid AD key status request."}
-        state = logon_keys.enrollment_status(body["request_id"])
+        state = logon_keys.phone_status(body["request_id"])
         if state is None:
             return 404, {"result": "error", "message": "AD key request was not found."}
         return 200, {"result": state["status"], "attestation_status": state["attestation_status"],

@@ -312,6 +312,38 @@ class AdLogonKeyRegistry:
         finally:
             connection.close()
 
+    def phone_status(self, request_id: str, *, now: float | None = None) -> dict | None:
+        """Report whether a phone-held key is still active, including revocation."""
+        if not isinstance(request_id, str) or not _REQUEST_ID.fullmatch(request_id):
+            return None
+        current = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """SELECT e.expires_at, e.status, e.attestation_status, e.key_id,
+                          k.revoked_at, k.key_id
+                   FROM ad_logon_key_enrollments AS e
+                   LEFT JOIN ad_logon_keys AS k ON k.request_id = e.request_id
+                   WHERE e.request_id = ?""",
+                (request_id,),
+            ).fetchone()
+            if not row:
+                return None
+            status = row[1]
+            if row[0] <= current and status not in ("confirmed", "cancelled"):
+                status = "expired"
+            elif status == "confirmed" and row[5] is not None and row[4] is not None:
+                status = "revoked"
+            return {
+                "status": status,
+                "attestation_status": row[2],
+                "key_id": row[3] if status == "confirmed" else "",
+            }
+        except sqlite3.Error:
+            return None
+        finally:
+            connection.close()
+
     def confirm_enrollment(self, *, request_id: str, pairing_code: str,
                            administrator: str, now: float | None = None) -> bool:
         if (not isinstance(request_id, str) or not _REQUEST_ID.fullmatch(request_id)
