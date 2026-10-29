@@ -235,11 +235,13 @@ name, not a display label or CA name. Leave it absent until a dedicated
 template has passed the CA restrictions and SID-mapping checks. This setting
 does not publish the template or enable the sign-in method.
 
-This is only a protocol scaffold. The Windows agent still accepts only the
-TPM method and does not create a CNG key/CSR, submit an Enrollment-on-Behalf-of
-request, validate an issued certificate, or perform a PKINIT logon with the
-temporary key. The certificate template is optional in service configuration;
-without it, certificate challenges fail closed. The method remains deliberately
+The Windows agent now has a disabled v3 client path that validates a local
+PEM/DER PKCS#10 request, starts CSR-bound phone approval, and checks the
+one-use result against the expected CSR digest and template. It does not create
+the CNG key/CSR, submit an Enrollment-on-Behalf-of request, validate an issued
+certificate, or perform a PKINIT logon with the temporary key. The certificate
+template is optional in service configuration; without it, certificate
+challenges fail closed. The method remains deliberately
 absent from the selectable policy set. Do not publish a template, issue
 certificates, install the tile, or attempt a user sign-in based on this
 scaffold. The unproven CA restrictions,
@@ -253,5 +255,7 @@ group, and returns the canonical SID and per-account policy. It returns no
 identity details for users outside that group. The isolated CLI can inspect
 this stage with `thessley-ad-test resolve-user --account DOMAIN\\name`; this
 resolves identity only and does not request a phone approval or perform a
-Windows sign-in. The native provider still has its lab-only Martin SID and TPM
-container, so generic certificate sign-in is not wired to LogonUI yet.
+Windows sign-in. The separate legacy TPM provider keeps one lab SID and TPM
+container in `ad-prototype/windows-logon-provider/ad_lab_vsc_config.h`; that
+setting is not used by the generic certificate path. Generic certificate
+sign-in is not wired to LogonUI yet.
