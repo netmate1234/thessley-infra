@@ -29,6 +29,7 @@ LOGIN_START_PATH = "/thessley-ad/v1/requests"
 PHONE_RESPONSE_PATH = "/thessley-ad/v1/requests/respond"
 LOGIN_RESULT_PATH = "/thessley-ad/v1/requests/result"
 CERTIFICATE_CSR_SUBMIT_PATH = "/thessley-ad/v1/requests/certificate_csr"
+CERTIFICATE_RESULT_PATH = "/thessley-ad/v1/requests/certificate_result"
 PHONE_ENROLL_START_PATH = "/thessley-ad/v1/enrollments"
 PHONE_ENROLL_RESPONSE_PATH = "/thessley-ad/v1/enrollments/respond"
 PHONE_ENROLL_STATUS_PATH = "/thessley-ad/v1/enrollments/status"
@@ -532,6 +533,37 @@ def certificate_csr_submit_route(registry: "MachineRegistry", replay_guard: "Rep
     return RawBodyRoute(handle)
 
 
+def certificate_result_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                             challenges: "ChallengeStore"):
+    """Deliver the validated public certificate to its originating machine."""
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        request_id = body.get("request_id")
+        if (set(auth_headers) != expected or set(body) != {"request_id"}
+                or not isinstance(request_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)):
+            return 400, {"result": "error", "message": "Invalid certificate result request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(
+            machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
+            auth_headers["x-thessley-signature"], CERTIFICATE_RESULT_PATH, raw_body, registry, replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        issued = challenges.get_issued_certificate(machine_id=machine_id, request_id=request_id)
+        if issued is None:
+            return 404, {"result": "error", "message": "No validated certificate is ready for this request."}
+        return 200, {
+            "result": "certificate_ready",
+            "request_id": request_id,
+            "certificate_der_b64": base64.b64encode(issued["certificate_der"]).decode("ascii"),
+            "certificate_sha256": issued["certificate_sha256"],
+        }
+
+    return RawBodyRoute(handle)
+
+
 def phone_enrollment_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                                  directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                                  phones: "PhoneRegistry", server_host: str,
@@ -715,6 +747,7 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         PHONE_RESPONSE_PATH: phone_response_route(challenges),
         LOGIN_RESULT_PATH: login_result_route(registry, replay_guard, challenges),
         CERTIFICATE_CSR_SUBMIT_PATH: certificate_csr_submit_route(registry, replay_guard, challenges),
+        CERTIFICATE_RESULT_PATH: certificate_result_route(registry, replay_guard, challenges),
         PHONE_ENROLL_START_PATH: phone_enrollment_start_route(
             registry, replay_guard, directory, allowed_group_sids, phones, server_host, server_fingerprint
         ),

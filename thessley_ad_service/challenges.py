@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
@@ -379,6 +380,49 @@ class ChallengeStore:
                 connection.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+            return None
+        finally:
+            connection.close()
+
+    def get_issued_certificate(self, *, machine_id: str, request_id: str,
+                               now: float | None = None) -> dict | None:
+        """Return a validated certificate only to its originating machine.
+
+        Reads are retry-safe: a dropped HTTPS response does not consume the
+        result. The challenge and certificate remain available only within the
+        existing short CSR-retention window.
+        """
+        if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
+                or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)):
+            return None
+        current = time.time() if now is None else now
+        if (isinstance(current, bool) or not isinstance(current, (int, float))
+                or not math.isfinite(current)):
+            return None
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT certificate_request_received_at, certificate_issued_der, "
+                "certificate_issued_sha256, certificate_issued_at FROM login_challenges "
+                "WHERE request_id = ? AND machine_id = ? AND status = 'approve' AND delivered_at IS NOT NULL",
+                (request_id, machine_id),
+            ).fetchone()
+            if row is None:
+                return None
+            received_at, certificate_der, certificate_sha256, issued_at = row
+            if (not isinstance(received_at, (int, float)) or current > received_at + 600
+                    or not isinstance(certificate_der, bytes) or not 256 <= len(certificate_der) <= 64 * 1024
+                    or not isinstance(certificate_sha256, str) or not _CERTIFICATE_SHA256.fullmatch(certificate_sha256)
+                    or not isinstance(issued_at, (int, float))
+                    or not secrets.compare_digest(hashlib.sha256(certificate_der).hexdigest(), certificate_sha256)):
+                return None
+            return {
+                "request_id": request_id,
+                "certificate_der": certificate_der,
+                "certificate_sha256": certificate_sha256,
+                "issued_at": issued_at,
+            }
+        except sqlite3.Error:
             return None
         finally:
             connection.close()

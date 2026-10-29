@@ -11,6 +11,7 @@ KDC exchange.
 from __future__ import annotations
 
 import base64
+import binascii
 import ctypes
 import hashlib
 import http.client
@@ -33,11 +34,13 @@ from cryptography import x509
 from . import qr
 
 SERVICE_PORT = 47810
+CERTIFICATE_RESULT_PATH = "/thessley-ad/v1/requests/certificate_result"
 # Avoid flashing console windows when the graphical enrollment app updates
 # ACLs on the protected machine key directory.
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MACHINE_SIGNATURE_DOMAIN = "thessley_ad_machine_v1"
 MAX_BODY = 64 * 1024
+MAX_RESPONSE_BODY = 128 * 1024
 _MACHINE_ID = re.compile(r"^[a-f0-9]{32}$")
 _PIN = re.compile(r"^[a-f0-9]{64}$")
 _SID = re.compile(r"^S-1-(?:[0-9]+-)+[0-9]+$", re.IGNORECASE)
@@ -162,8 +165,8 @@ def _post(host: str, port: int, pin: str, path: str, body: dict,
     try:
         conn.request("POST", path, body=raw, headers=request_headers)
         response = conn.getresponse()
-        payload = response.read(MAX_BODY + 1)
-        if len(payload) > MAX_BODY:
+        payload = response.read(MAX_RESPONSE_BODY + 1)
+        if len(payload) > MAX_RESPONSE_BODY:
             raise AgentError("The AD service response is too large.")
         if response.status < 200 or response.status >= 300:
             try:
@@ -583,6 +586,73 @@ def submit_approved_certificate_request(request_id: str, path: str, expected_sha
             or result.get("issuer_status") != "not_configured"):
         raise AgentError("The AD service did not confirm the approved CSR.")
     return result
+
+
+def fetch_issued_certificate(request_id: str, csr_path: str, expected_sha256: str) -> dict:
+    """Fetch and locally bind the CA certificate to the original CSR key.
+
+    The service performs the issuer, template, and SID checks before storage.
+    This client-side check ensures the response belongs to the locally retained
+    CSR before a future CertEnroll step associates it with the machine key.
+    It does not install the certificate or perform Windows logon.
+    """
+    if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+        raise AgentError("Invalid AD certificate request ID.")
+    if not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256):
+        raise AgentError("Invalid approved CSR digest.")
+    if not isinstance(csr_path, str) or not csr_path or len(csr_path) > 4096:
+        raise AgentError("Select the local CSR used to start this approval.")
+    try:
+        with open(csr_path, "rb") as stream:
+            csr_data = stream.read(64 * 1024 + 1)
+    except OSError as exc:
+        raise AgentError("The original local CSR is unavailable.") from exc
+    if not csr_data or len(csr_data) > 64 * 1024:
+        raise AgentError("The original local CSR is empty or too large.")
+    try:
+        csr = (x509.load_pem_x509_csr(csr_data)
+               if csr_data.lstrip().startswith(b"-----BEGIN CERTIFICATE REQUEST-----")
+               else x509.load_der_x509_csr(csr_data))
+        csr_der = csr.public_bytes(serialization.Encoding.DER)
+    except (ValueError, TypeError) as exc:
+        raise AgentError("The original local CSR is invalid.") from exc
+    actual_csr_sha256 = hashlib.sha256(csr_der).hexdigest()
+    if (not csr.is_signature_valid
+            or not secrets.compare_digest(actual_csr_sha256, expected_sha256)):
+        raise AgentError("The original CSR does not match the approved request.")
+
+    result = _signed_post(CERTIFICATE_RESULT_PATH, {"request_id": request_id})
+    if (result.get("result") != "certificate_ready" or result.get("request_id") != request_id
+            or not isinstance(result.get("certificate_sha256"), str)
+            or not _SHA256.fullmatch(result["certificate_sha256"])
+            or not isinstance(result.get("certificate_der_b64"), str)
+            or not 344 <= len(result["certificate_der_b64"]) <= 87384):
+        raise AgentError("The AD service returned an invalid certificate result.")
+    try:
+        encoded = result["certificate_der_b64"].encode("ascii")
+        certificate_der = base64.b64decode(encoded, validate=True)
+        if base64.b64encode(certificate_der) != encoded:
+            raise ValueError("noncanonical base64")
+        certificate = x509.load_der_x509_certificate(certificate_der)
+        csr_spki = csr.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        certificate_spki = certificate.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise AgentError("The AD service returned an invalid DER certificate.") from exc
+    if (not 256 <= len(certificate_der) <= 64 * 1024
+            or certificate.public_bytes(serialization.Encoding.DER) != certificate_der
+            or not secrets.compare_digest(hashlib.sha256(certificate_der).hexdigest(), result["certificate_sha256"])
+            or not secrets.compare_digest(csr_spki, certificate_spki)):
+        raise AgentError("The returned certificate does not match the approved local key and response digest.")
+    return {
+        "request_id": request_id,
+        "certificate_der": certificate_der,
+        "certificate_sha256": result["certificate_sha256"],
+        "csr_sha256": actual_csr_sha256,
+    }
 
 
 def poll_login(request_id: str, cancel, say=lambda _message: None, timeout: int = 95,
