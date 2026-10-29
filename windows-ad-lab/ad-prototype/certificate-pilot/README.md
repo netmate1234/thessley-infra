@@ -1,8 +1,10 @@
 # Isolated AD certificate sign-in pilot
 
-This folder contains an unintegrated proof step for a generic, phone-approved
-AD certificate login. It does not register a Windows Credential Provider,
-change a sign-in policy, contact a CA, or perform PKINIT.
+This folder contains unintegrated proof steps for a generic, phone-approved AD
+certificate login. They do not register a Windows Credential Provider, change a
+sign-in policy, or perform PKINIT. The manual CA submit helper only contacts a
+CA if an administrator explicitly runs it with a selected CA and template; no
+service or login flow invokes it.
 
 ## Fresh local key and CSR
 
@@ -85,6 +87,18 @@ certificate chain and revocation status, and creates a signed CMC/EOBO request.
 It does **not** submit the request, install a certificate, or export the
 Enrollment Agent private key. Its JSON output contains the signed CMC request;
 handle it as an enrollment artifact and keep it out of shared logs.
+
+`submit-eobo-cmc.ps1` is a separate, manual transport proof. If explicitly run
+by an administrator, it submits one builder JSON object to the caller-selected
+`ComputerName\CAName` with the explicitly selected template attribute. It
+returns either the CA request ID for a pending request or the issued leaf as
+base64 DER. It is not called by the AD service, has no default CA/template, and
+does not validate or store the returned certificate; that must go through
+`complete_certificate_issuance`. Do not run it against a real CA until the
+Enrollment Agent restrictions, template permissions, and profile have been
+reviewed on a disposable CA.
+It uses Microsoft's `ICertRequest::Submit` CMC/base64 flags and accepts only
+the issued or under-submission dispositions ([API reference](https://learn.microsoft.com/en-us/windows/win32/api/certcli/nf-certcli-icertrequest-submit)).
 
 The surrounding broker is not wired to call this helper yet. Before integration,
 the broker must itself prove the approval is still valid, bind the exact CSR
