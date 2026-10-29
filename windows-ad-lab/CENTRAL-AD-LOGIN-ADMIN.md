@@ -12,9 +12,10 @@ challenges, and phone public keys in the protected
 `/admin/` on its own port and supports SID-wide AD enrollments. The signed
 Android 0.1.22 release recognizes account-wide keys. The split-port service
 update is installed on the disposable DC: the admin listener returns `200 OK`
-on TCP 47820, while TCP 47810 remains API-only. Source now adds QR as an
-alternative to password sign-in on `/admin/`; deploying and interactively
-verifying this new QR flow remains outstanding.
+on TCP 47820, while TCP 47810 remains API-only. The DC admin page now offers QR
+phone sign-in alongside password sign-in. The updated service was deployed
+with a pre-update state backup; interactive QR approval and rights-display
+verification remain outstanding.
 
 No Clone 1 client update is needed for central key scope: it keeps using its
 existing machine-paired signed API on TCP 47810. SID-wide key lookup is handled
