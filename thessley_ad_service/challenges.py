@@ -59,6 +59,7 @@ class ChallengeStore:
                        request_id TEXT PRIMARY KEY,
                        machine_id TEXT NOT NULL,
                        principal_id TEXT NOT NULL,
+                       principal_sid TEXT,
                        principal_type TEXT NOT NULL,
                        authority TEXT NOT NULL,
                        username TEXT NOT NULL,
@@ -72,11 +73,14 @@ class ChallengeStore:
                        certificate_template TEXT,
                        certificate_request_der BLOB,
                        certificate_request_received_at REAL,
+                       certificate_issuance_claimed_at REAL,
                        response_at REAL,
                        delivered_at REAL
                    ) WITHOUT ROWID"""
             )
             columns = {row[1] for row in connection.execute("PRAGMA table_info(login_challenges)")}
+            if "principal_sid" not in columns:
+                connection.execute("ALTER TABLE login_challenges ADD COLUMN principal_sid TEXT")
             if "certificate_request_sha256" not in columns:
                 connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_request_sha256 TEXT")
             if "certificate_template" not in columns:
@@ -85,6 +89,8 @@ class ChallengeStore:
                 connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_request_der BLOB")
             if "certificate_request_received_at" not in columns:
                 connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_request_received_at REAL")
+            if "certificate_issuance_claimed_at" not in columns:
+                connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_issuance_claimed_at REAL")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS login_challenges_expiry ON login_challenges(expires_at)"
             )
@@ -166,11 +172,13 @@ class ChallengeStore:
             )
             connection.execute(
                 """INSERT INTO login_challenges
-                   (request_id, machine_id, principal_id, principal_type, authority, username,
+                   (request_id, machine_id, principal_id, principal_sid, principal_type, authority, username,
                     context, nonce, created_at, expires_at, status,
                     certificate_request_sha256, certificate_template)
-                   VALUES (?, ?, ?, 'domain', ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
-                (request_id, machine_id, principal_id, authority, username, context, nonce, current, expires,
+                   VALUES (?, ?, ?, ?, 'domain', ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+                (request_id, machine_id, principal_id,
+                 sid if certificate_request_sha256 is not None else None,
+                 authority, username, context, nonce, current, expires,
                  certificate_request_sha256, certificate_template),
             )
             connection.execute("COMMIT")
@@ -197,6 +205,83 @@ class ChallengeStore:
             except sqlite3.Error:
                 pass
             raise RuntimeError("Could not create login challenge") from exc
+        finally:
+            connection.close()
+
+    def claim_certificate_issuance(self, *, machine_id: str, request_id: str,
+                                   now: float | None = None) -> dict | None:
+        """Atomically hand one approved CSR to the trusted issuer process.
+
+        This is an internal store operation, not an HTTP route. It returns the
+        original AD SID and requester identity only for a delivered approval,
+        after the machine uploaded the exact CSR bound to that approval. A
+        claim is one-use; recovery after a crash must start a fresh sign-in.
+        """
+        if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
+                or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)):
+            return None
+        current = time.time() if now is None else now
+        if (isinstance(current, bool) or not isinstance(current, (int, float))
+                or not math.isfinite(current)):
+            return None
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT principal_id, principal_sid, authority, username, context, status, delivered_at, response_at, "
+                "certificate_request_sha256, certificate_template, certificate_request_der, "
+                "certificate_request_received_at, certificate_issuance_claimed_at "
+                "FROM login_challenges WHERE request_id = ? AND machine_id = ?",
+                (request_id, machine_id),
+            ).fetchone()
+            if row is None:
+                connection.execute("ROLLBACK")
+                return None
+            (principal_id, sid, authority, username, context, status, delivered_at, response_at, expected_digest,
+             template, csr_der, csr_received_at, claimed_at) = row
+            if (not isinstance(sid, str) or not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid)
+                    or not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id)
+                    or not secrets.compare_digest(principal_id_from_sid(sid), principal_id)
+                    or not isinstance(authority, str) or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}", authority)
+                    or not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username)
+                    or context != "interactive" or status != "approve" or delivered_at is None
+                    or not isinstance(response_at, (int, float)) or current > response_at + 180
+                    or not isinstance(expected_digest, str) or not _CERTIFICATE_SHA256.fullmatch(expected_digest)
+                    or not isinstance(template, str) or not _CERTIFICATE_TEMPLATE.fullmatch(template)
+                    or not isinstance(csr_der, bytes) or not 256 <= len(csr_der) <= 32 * 1024
+                    or not isinstance(csr_received_at, (int, float)) or current > csr_received_at + 600
+                    or claimed_at is not None):
+                connection.execute("ROLLBACK")
+                return None
+            from .certificate_requests import validate_approved_csr
+
+            metadata = validate_approved_csr(csr_der, expected_digest)
+            cursor = connection.execute(
+                "UPDATE login_challenges SET certificate_issuance_claimed_at = ? "
+                "WHERE request_id = ? AND machine_id = ? AND certificate_issuance_claimed_at IS NULL",
+                (current, request_id, machine_id),
+            )
+            if cursor.rowcount != 1:
+                connection.execute("ROLLBACK")
+                return None
+            connection.execute("COMMIT")
+            return {
+                "request_id": request_id,
+                "machine_id": machine_id,
+                "sid": sid,
+                "requester_name": f"{authority}\\{username}",
+                "certificate_template": template,
+                "certificate_request_sha256": expected_digest,
+                "certificate_request_der": csr_der,
+                "public_key_spki_sha256": metadata["public_key_spki_sha256"],
+                "claimed_at": current,
+            }
+        except (sqlite3.Error, TypeError, ValueError):
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            return None
         finally:
             connection.close()
 

@@ -56,6 +56,15 @@ validation receipt. Both service runtimes purge expired challenge and CSR rows
 at startup and every 60 seconds.
 Certificate issuance and Windows logon remain unavailable.
 
+The challenge store also has an internal, one-use `claim_certificate_issuance`
+handoff for the future issuer worker. It yields a CSR only after the matching
+machine uploaded it for a delivered phone approval, and binds it to the raw AD
+SID, `DOMAIN\user` RequesterName, and configured template saved with that
+challenge. The raw SID is stored only for certificate-pilot challenges. A claim
+is consumed before returning the data; if an issuer crashes afterward, it must
+fail closed and require a fresh sign-in rather than replay the claim. This is a
+private Python method, not an API route, and no issuer worker calls it yet.
+
 ## CMC/EOBO request construction (source-only)
 
 `build-eobo-cmc.ps1` is an isolated issuer-side primitive. It is restricted to a
