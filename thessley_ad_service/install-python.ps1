@@ -36,8 +36,11 @@ $cryptoVersion = & $python -I -c 'import cryptography; print(cryptography.__vers
 if ($LASTEXITCODE -ne 0 -or $cryptoVersion.Trim() -ne '46.0.5') {
     throw "Python dependency verification failed (cryptography $($cryptoVersion.Trim()))."
 }
-$qrVersion = & $python -I -c 'from importlib.metadata import version; print(version("qrcode"))'
-if ($LASTEXITCODE -ne 0 -or $qrVersion.Trim() -ne '8.2') {
-    throw "Python dependency verification failed (qrcode $($qrVersion.Trim()))."
+$qrMetadata = & $python -I -m pip show qrcode
+if ($LASTEXITCODE -ne 0) { throw 'Python dependency verification failed (qrcode metadata unavailable).' }
+$qrVersionLine = $qrMetadata | Where-Object { $_ -match '^Version:\s*' } | Select-Object -First 1
+$qrVersion = if ($qrVersionLine) { $qrVersionLine -replace '^Version:\s*', '' } else { '' }
+if ($qrVersion.Trim() -ne '8.2') {
+    throw "Python dependency verification failed (qrcode $qrVersion)."
 }
 Write-Host "Python $version, cryptography $($cryptoVersion.Trim()), and qrcode $($qrVersion.Trim()) verified."
