@@ -65,6 +65,13 @@ is consumed before returning the data; if an issuer crashes afterward, it must
 fail closed and require a fresh sign-in rather than replay the claim. This is a
 private Python method, not an API route, and no issuer worker calls it yet.
 
+`complete_certificate_issuance` is the matching internal response gate. It only
+stores a CA response for a previously claimed challenge, and validates the exact
+CSR public key, approved SID, configured template name/OID, and pinned direct
+issuer signature before persisting the DER certificate. It is also not exposed
+over HTTP; certificate retrieval, retry/acknowledgment, and client installation
+are still unimplemented.
+
 ## CMC/EOBO request construction (source-only)
 
 `build-eobo-cmc.ps1` is an isolated issuer-side primitive. It is restricted to a
