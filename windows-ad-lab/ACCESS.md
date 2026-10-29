@@ -148,6 +148,13 @@ in the app; the server records and displays the verified protection level.
 This key enrollment is still a prototype and does not yet enable Windows
 passwordless sign-in.
 
+At 22:50, the admin page was redeployed to label key status as TEE verified,
+StrongBox verified, software-backed, or not verified. The service installer
+created another state snapshot at
+`C:\ProgramData\ThessleyAD\backups\pre-update-20261029-225016`. The task is
+running and both listeners remain active; the TLS pin and firewall scopes are
+unchanged.
+
 On 2026-10-29, the central AD service was updated on `THESSLEY-DC1` using the
 rollback-capable installer. The existing `service.json`, allow-group SID,
 TLS certificate, firewall scope, and SQLite database were retained. State
