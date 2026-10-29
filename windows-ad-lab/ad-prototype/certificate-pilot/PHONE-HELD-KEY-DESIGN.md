@@ -123,26 +123,35 @@ Microsoft also points to the Windows Hardware Compatibility Program as the
 method for obtaining that driver signature. See [Smart Card Minidriver
 Overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview).
 
-That means a locally built Thessley minidriver is not yet a deployable bridge
-for normal machines with LSA protection. Disabling LSA protection just to load
-an unsigned prototype is not an acceptable installation default. Before
-building a real bridge, select and prove one of these routes on a disposable
-VM:
+### QR-only phone-key research route
 
-1. A Microsoft-signable smart-card minidriver backed by a supported device
-   transport. The Windows smart-card stack must be able to enumerate the
-   phone key and request its signature through that transport.
-2. A documented, supported Windows key-provider integration that can broker
-   the signature without putting an unsigned plug-in in protected LSA. This
-   route still needs a pre-logon transport and a provider lifecycle that
-   survives lock, unlock, cancellation, and network loss.
-3. If neither is available, keep the production behavior as phone approval
-   followed by the existing TPM virtual smart-card key. That is a different
-   security model: the private key is on the PC, and the phone approves each
-   use.
+The QR carries only a short-lived, single-use request locator and challenge;
+it never contains a private key or a reusable credential. The phone app uses
+the separately enrolled Android Keystore key. There is no NFC path. Current
+Android source contains a local test-CSR signing/export experiment, but it has
+not been built, installed, or tested on the phone in this work. It proves only
+that the phone key can sign a PKCS#10 request; it is not yet a QR-mediated
+Windows logon protocol or a Windows-usable certificate key.
 
-There is a second constraint on a custom CNG KSP route: Microsoft's [Key
-Storage and Retrieval](https://learn.microsoft.com/en-us/windows/desktop/SecCNG/key-storage-and-retrieval)
+The next proof must bind a fresh Windows sign-in challenge to the QR request,
+have the phone sign it after biometric approval, and demonstrate that the
+Windows Kerberos authentication path can consume that signature. A CSR or QR
+approval alone cannot do this. Do not label either as phone-key Windows sign-in.
+
+Without budget for Microsoft signing, keep the working Windows route as QR
+approval followed by the existing TPM virtual smart-card key while the phone
+certificate flow is proved separately. That retains the current UX but has a
+different key location: the private logon key stays in the PC TPM. A genuine
+phone-held Windows logon still requires a supported way for the Windows
+authentication path to request and receive the phone's signature.
+
+### Why the custom provider route is deferred
+
+Microsoft says protected LSA plug-ins need a Microsoft signature, and smart
+card drivers require WHQL signing. Disabling LSA protection just to load an
+unsigned Thessley minidriver is not an acceptable installation default. There
+is a second constraint on a custom CNG KSP route: Microsoft's [Key Storage and
+Retrieval](https://learn.microsoft.com/en-us/windows/desktop/SecCNG/key-storage-and-retrieval)
 documentation says third-party KSPs are not loaded in the key-isolation
 service. Since Windows certificate logon needs the system authentication path
 to reach the signing key, we must not assume a custom remote KSP can be called
@@ -160,10 +169,7 @@ returns keys after a separate verifier has marked them verified. Keep the
 certificate issuer and the Windows sign-in policy disabled until both the
 attestation verifier and signing bridge are implemented and reviewed.
 
-The lab provider's current SID and TPM container values are test fixtures, not
-product defaults. Keep them isolated under `windows-logon-provider/`; do not
-copy them into the general installer or use them to identify users. A future
-general provider must resolve the selected account by immutable SID and obtain
-its certificate/key-container mapping from protected machine configuration or
-the Windows certificate/card enumeration APIs, with no compiled-in lab SID,
-domain name, or container name.
+The lab provider's SID and TPM container values are now read from protected
+per-account configuration; they remain TPM VSC test mappings, not phone-key
+credentials or product defaults. Keep that provider isolated under
+`windows-logon-provider/`.
