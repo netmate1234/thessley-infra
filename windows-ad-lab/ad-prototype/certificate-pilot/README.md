@@ -67,6 +67,18 @@ does not contact AD CS, authorize a SID, consume approval, or issue a
 certificate. The upload route stores the public CSR once against its approved
 challenge. It has no retrieval endpoint and cannot issue certificates.
 
+`infra/thessley_ad_service/issued_certificates.py` is the next pure gate. Given
+an issued DER certificate, the approved CSR and SID, configured template OID,
+and pinned issuer certificate, it checks the certificate signature, time
+validity, subject and public-key match, template OID, Smart Card Logon EKU, and
+the AD SID security extension. It supports direct RSA/SHA-256 issuance by the
+pinned CA certificate only. It is not connected to issuance or Windows logon;
+it does not perform revocation checking or general certificate-chain building.
+The SID extension's DER form is defined in
+[MS-WCCE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/e563cff8-1af6-4e6f-a655-7571ca482e71),
+and SID matching is required for a strong KDC mapping under
+[MS-PKCA](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-pkca/e8fd2c1d-50d3-493a-9b58-5e453850c567).
+
 ## Still required
 
 - A CNG-backed Credential Provider path that can use the issued key for
@@ -77,8 +89,10 @@ challenge. It has no retrieval endpoint and cannot issue certificates.
   requester-name attribute; the signer certificate must have the Certificate
   Request Agent EKU. See [Microsoft's EOBO request format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/2d1cf183-2507-4026-bc05-7b6b65dfced9)
   and [EOBO processing rules](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/6becda04-e17f-46df-825a-cec64ed0a203).
-- Issued-certificate, EKU, template, issuer, validity, and strong SID mapping
-  checks on both broker and workstation.
+- Wire the issued-certificate validator into the future broker after CA
+  response, then independently validate the certificate on the workstation.
+- Define revocation handling, trust-chain rules, and fail-closed recovery for
+  issuance that succeeds after the client times out or reboots.
 - One-use delivery of the certificate to the originating machine, followed by
   PKINIT validation in a disposable domain-joined VM.
 - Cleanup after success, denial, timeout, crash, and reboot; recovery must not
