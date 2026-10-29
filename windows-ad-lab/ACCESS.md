@@ -106,6 +106,16 @@ AD API; retain the PIN/password recovery method when testing the tile.
 
 ## Current deployment status
 
+On 2026-10-29, the central AD management update was installed on
+`THESSLEY-DC1` from the rollback-capable service installer. The existing
+`service.json`, allow-group SID, TLS certificate, firewall scope, and SQLite
+database were retained. The installer saved a pre-update state snapshot at
+`C:\ProgramData\ThessleyAD\backups\pre-update-20261029-154949`. The
+`ThessleyADApi` task is running and listening on `192.168.1.79:47810`; a local
+HTTPS GET to `/admin/` returned `200 OK` and the administrator sign-in page.
+Administrator authentication, phone enrollment, cross-PC use, and revocation
+remain to be verified interactively.
+
 On 2026-10-29, the AD API and Windows service were both updated for AD SSH
 grace-pass support. The DC task `ThessleyADApi` is running and listening on
 `192.168.1.79:47810`; its existing `service.json`, AD allow group, and firewall

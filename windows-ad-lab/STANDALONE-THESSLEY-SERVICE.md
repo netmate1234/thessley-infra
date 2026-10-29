@@ -264,16 +264,17 @@ Phone and client TCP access to port `47810` was verified. The Windows firewall
 allows only `192.168.1.0/24` on that port. The installer does not register or
 modify any Windows sign-in tile.
 
-The updated DC admin page will be at `https://192.168.1.79:47810/admin/` after
-the updated service package is installed. Sign in with a domain username and
+The updated DC admin page is at `https://192.168.1.79:47810/admin/`. The
+updated service is installed on the lab DC; an unauthenticated HTTPS GET was
+verified to return the sign-in page. Sign in with a domain username and
 password for an account in the DC's built-in Administrators group (normally
 Domain Admins). It lists enabled AD accounts and sign-in eligibility, starts
 centrally scoped phone enrollment, shows pairing codes for confirmation, and
 revokes phone keys. The service does not store the administrator password.
 Use a certificate trusted by the admin workstation before entering
 credentials; the initial lab certificate is self-signed and its fingerprint
-is printed by the installer. The currently deployed instance must be updated
-before this page is available.
+is printed by the installer. Administrator login and the enrollment workflow
+still need interactive verification.
 
 Central AD enrollment creates a phone key tied to the user's SID, not one
 workstation. That key can approve the same AD account on every machine paired

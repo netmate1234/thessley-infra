@@ -1,6 +1,6 @@
 # Central AD login and DC management site
 
-## Current state and in-progress implementation
+## Current state
 
 The domain controller already runs a small Python HTTPS API on TCP 47810. It
 uses Windows LDAP/SSPI to read AD and stores machine registrations, login
@@ -8,9 +8,10 @@ challenges, and phone public keys in the protected
 `C:\ProgramData\ThessleyAD\state.sqlite3` database. The source now adds an
 `/admin/` page on the same TLS listener and SID-wide AD enrollments. The
 signed Android 0.1.22 release has been installed on the connected phone and
-recognizes account-wide keys. The updated DC service is committed, but has
-not yet been deployed; the new management page is not live until that update
-is installed on the disposable DC.
+recognizes account-wide keys. The updated DC service is installed on the
+disposable lab DC. A local HTTPS GET to `/admin/` returned the administrator
+sign-in page. Administrator login, central enrollment, cross-PC approval, and
+revocation still need interactive verification.
 
 The local Thessley Windows sign-in provider is a separate path. Keep its local
 account keys and offline behavior unchanged.
@@ -90,9 +91,9 @@ a key at the DC blocks it for all PCs without visiting each PC.
 3. The Android 0.1.22 source recognizes central AD keys across paired PCs and
    labels their scope. It was built with the existing release signing setup
    and installed on the connected phone without clearing app data.
-4. Deploy the updated service to the disposable lab, then verify enrollment,
-   cross-PC approval, revocation, offline behavior, and recovery before
-   deploying to other PCs.
+4. The updated service is deployed to the disposable lab. Verify administrator
+   login, enrollment, cross-PC approval, revocation, offline behavior, and
+   recovery before deploying to other PCs.
 
 Do not install these changes on production PCs until the web login, enrollment,
 cross-PC approval, revocation, and local-account recovery paths are verified
