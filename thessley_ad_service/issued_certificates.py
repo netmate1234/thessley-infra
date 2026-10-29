@@ -51,8 +51,8 @@ def _read_tlv(data: bytes, offset: int) -> tuple[int, bytes, int]:
 
 
 def _decode_oid(contents: bytes) -> str:
-    if not contents:
-        raise ValueError("empty DER object identifier")
+    if not contents or len(contents) > 256:
+        raise ValueError("invalid DER object identifier size")
     values: list[int] = []
     value = 0
     in_value = False
