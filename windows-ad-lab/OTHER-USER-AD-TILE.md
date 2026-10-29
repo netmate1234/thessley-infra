@@ -122,6 +122,61 @@ client and KDC proof is complete.
    registering it on Clone 1. Do not change the existing local tile or the
    Martin VSC baseline.
 
+## Live certificate-issuance checkpoint (2026-10-29)
+
+Read-only inspection of `THESSLEY-DC1` found the following state:
+
+- The CA is reachable. Its published list includes `ThessleyVscLogon` and the
+  built-in `SmartcardLogon` template; `Copy 2 of Smartcard Logon` is **not**
+  published.
+- `Copy 2 of Smartcard Logon` exists in AD as schema version 4. It has the
+  Smart Card Logon and Client Authentication EKUs, a 256-bit minimum key, and
+  `msPKI-RA-Signature = 0`. It therefore does **not** require an Enrollment
+  Agent signature and is not safe to publish for the phone-issued path.
+- The unpublished template has a direct Certificate-Enrollment ACE for
+  `THESSLEYLAB\martin` (extended-right GUID
+  `0e10c968-78fb-11d2-90d4-00c04f79dc55`). That right is inert while the
+  template is unpublished, but would let Martin enroll directly if this
+  template were published. Do not publish this copy or use it as the pilot.
+- No Enrollment Agent certificate was found in the DC's LocalMachine\My store
+  during the read-only check.
+
+Therefore the next lab step is to create a **new, separate, unpublished** pilot
+template and a dedicated Enrollment Agent identity, then configure CA
+Enrollment Agent Restrictions before publishing anything. The restriction
+must constrain both the one pilot template and a disposable AD test-account
+group. The agent key must be accessible only to the issuance broker identity;
+do not use a Domain Admin or the DC's general-purpose Administrator as the
+broker. Keep `Copy 2 of Smartcard Logon` untouched and unpublished until its
+ACL and RA-signature requirements are corrected or the object is retired.
+
+### Phone approval must bind the exact certificate request
+
+The current Windows v2 phone signature does not bind a CSR. It must not
+authorize certificate issuance. A certificate pilot needs a separate,
+versioned approval message that signs all of these fields in a fixed canonical
+encoding:
+
+```text
+protocol-domain | request-id | machine-id | account-SID-hash | authority |
+username | logon-context | nonce | expiry | SHA256(DER-CSR) | action
+```
+
+The client creates a fresh key for one attempt and sends the DER CSR to the
+broker over the machine-authenticated channel. The phone displays the
+canonical AD account, workstation, and sign-in context, then signs the CSR
+digest along with the request identity. The broker re-resolves the SID and
+current group policy, verifies that the CSR contains the exact approved public
+key, and only then submits the on-behalf request. Before returning a
+certificate, the broker must verify its public key against the approved CSR,
+Smart Card Logon EKU, exact strong SID mapping, template, issuer, and very short
+validity. The client must also validate those fields before attempting PKINIT.
+
+The phone's approval signature remains separate from the KDC's PKINIT proof.
+Do not reuse the v2 signature, accept a UPN-only mapping, or make the
+certificate method selectable until a fresh KDC sign-in and crash-safe key
+cleanup have both passed.
+
 For the generic credential, add a qualified-username edit field and bind the
 approval request to the canonical SID returned by the AD service, never to the
 unverified text. Keep logon and unlock separate until each has its own verified

@@ -217,6 +217,15 @@ Windows to perform PKINIT with the phone-protected private key.
    administrator membership. Keep PIN/password recovery available until the
    phone-backed certificate flow is proven through reboot and lock/unlock.
 
+The current phone-authorized ephemeral-certificate route is still unproven.
+The live DC inspection on 2026-10-29 found that `Copy 2 of Smartcard Logon`
+is unpublished but has no required Enrollment Agent signature (`RA-Signature
+is unpublished but has no required Enrollment Agent signature (`msPKI-RA-Signature=0`)
+and grants Martin the Certificate-Enrollment extended right. Do not
+publish that template. The exact checkpoint and the CSR-bound phone approval
+contract are documented in
+[`OTHER-USER-AD-TILE.md`](OTHER-USER-AD-TILE.md#live-certificate-issuance-checkpoint-2026-10-29).
+
 The detailed standalone service boundary and API plan is in
 [`STANDALONE-THESSLEY-SERVICE.md`](STANDALONE-THESSLEY-SERVICE.md).
 The current code boundaries and safe implementation order are mapped in
