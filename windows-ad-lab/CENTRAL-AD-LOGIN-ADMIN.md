@@ -78,7 +78,10 @@ a key at the DC blocks it for all PCs without visiting each PC.
 - Both password and QR sign-in require an enabled domain account in the DC's
   built-in Administrators group. QR sign-in additionally requires an active,
   centrally enrolled phone key for that exact AD SID. The workstation QR
-  sign-in group does not grant web-admin access.
+  sign-in group does not grant web-admin access. Phone enrollment is available
+  to users in either the configured workstation sign-in group or the DC's
+  built-in Administrators group. This lets an administrator enroll their own
+  AD account without changing workstation sign-in eligibility.
 - Serve HTTPS with the DC service certificate and restrict the management
   listener in Windows Firewall to approved management networks.
 - Use short idle sessions, secure/HTTP-only cookies, CSRF protection, output

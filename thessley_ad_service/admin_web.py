@@ -241,13 +241,13 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
         body = alert + f"""<h1>Administrator sign-in</h1><section class="card">
 <p class="muted">Sign in with a {html.escape(self.authority)} account that is an administrator on this domain controller.</p>
 <form method="post" action="/admin/login"><input type="hidden" name="preauth" value="{html.escape(nonce)}">
-<label for="user">Account name</label><input id="user" name="user" autocomplete="username" required maxlength="20">
+<label for="user">Account name (without the domain prefix)</label><input id="user" name="user" autocomplete="username" required maxlength="20">
 <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
 <p><button type="submit">Sign in with password</button></p></form></section>
 <section class="card"><h2>Sign in with Thessley Passkey</h2>
 <p class="muted">Use a phone already enrolled centrally for this AD account. The account must be an administrator on this domain controller.</p>
 <form method="post" action="/admin/qr-login"><input type="hidden" name="preauth" value="{html.escape(nonce)}">
-<label for="qr-user">Account name</label><input id="qr-user" name="user" autocomplete="username" required maxlength="20">
+<label for="qr-user">Account name (without the domain prefix)</label><input id="qr-user" name="user" autocomplete="username" required maxlength="20">
 <p><button type="submit">Continue with phone</button></p></form></section>"""
         return self._response(200, self._page("Administrator sign-in", body), extra_headers=(self._cookie_header(_PREAUTH_COOKIE, nonce, max_age=300),))
 
@@ -409,8 +409,9 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
             except Exception:
                 _LOG.warning("admin_enroll_lookup_failed actor=%s target_sid_hash=%s", session["sid"], principal_id_from_sid_safe(sid))
                 return self._response(503, self._page("Enrollment", '<section class="card error">Could not verify that AD account. Refresh and retry.</section>'))
-            if not principal.group_sids.intersection(self.allowed_group_sids):
-                return self._response(403, self._page("Enrollment", '<section class="card error">That account is not in the allowed Thessley sign-in group.</section>'))
+            if (not principal.group_sids.intersection(self.allowed_group_sids)
+                    and _ADMINISTRATORS_SID not in principal.group_sids):
+                return self._response(403, self._page("Enrollment", '<section class="card error">That account is neither in the configured workstation sign-in group nor a DC administrator.</section>'))
             enrollment = self.phones.create_central_ad_enrollment(
                 sid=principal.sid, username=principal.username, authority=principal.authority,
             )
@@ -496,7 +497,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#fff0f0;bo
             else:
                 content += '<div class="muted">No phone enrolled.</div>'
             content += '</div><div>'
-            if authorized:
+            if authorized or dc_administrator:
                 content += f'''<form method="post" action="/admin/enroll"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button>Enroll phone</button></form>'''
             content += '</div></section>'
         if snapshot.get("truncated"):
