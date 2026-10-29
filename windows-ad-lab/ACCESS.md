@@ -93,11 +93,11 @@ AD API; retain the PIN/password recovery method when testing the tile.
 - On `MARTIN-WM`, that group is mapped into local `Administrators`; membership
   grants workstation admin rights there, not Domain Admin rights.
 - SSH uses the domain account and a registered SSH key plus phone approval.
-  The normal Windows Thessley SSH gate has a configurable grace-pass feature
-  (typically four hours, scoped to the same client IP). **The AD SSH prototype
-  does not yet use that pass store**: `ad-ssh-gate` starts a new SID-bound
-  phone approval for every SSH connection. That is a current feature gap, not
-  a setting you can change in Admin today.
+  Local and AD SSH accounts share the configurable grace duration and IP scope.
+  AD passes are keyed by the domain SID hash (separate from a same-named local
+  account), and each reuse rechecks current AD group authorization plus the
+  approving phone key's active status. A pass expires at its original deadline
+  and is not extended by reuse.
 - The phone key and AD API machine key are distinct. The API holds metadata
   for enrolled phone keys and does not return their private key material.
 - Passwords and private keys are never documented here. Lab credentials are
@@ -112,7 +112,9 @@ enrollment, and revocation admin feature, but the corresponding Windows web
 GUI package has not yet been installed on `MARTIN-WM`. The latest interactive
 SSH request was reachable, but its phone response did not reach the AD API;
 the request remained `pending` in the API state database. It expired without
-opening a shell. AD SSH grace-pass reuse is also not implemented yet.
+opening a shell. Source now applies the configured Windows SSH grace pass to AD
+accounts too. Both the AD API and Windows service package must be updated before
+the fix is active on `MARTIN-WM`.
 
 For lab topology, AD service behavior, and the implementation map, see
 [`README.md`](README.md), [`STANDALONE-THESSLEY-SERVICE.md`](STANDALONE-THESSLEY-SERVICE.md),

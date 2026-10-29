@@ -23,6 +23,13 @@ opt-in script below.
    already-authenticated SSH session to continue; it does not replace the SSH
    key/password factor or create an AD credential.
 
+When the Windows service's global SSH grace duration is greater than zero, a
+successful AD approval creates a pass for that domain SID and configured IP
+scope. Reuse still checks the SID's current AD authorization and that the
+approving phone key remains active. Passes are separate from same-named local
+Windows accounts, expire at a fixed time, and are not extended by reuse. Set
+the duration to zero to require phone approval on every SSH connection.
+
 The phone does **not** connect to the Windows PC or talk to the domain
 controller directly. It talks to the AD approval API. The API, in turn, checks
 AD authorization. For this lab the API is hosted on the DC, but that is a lab

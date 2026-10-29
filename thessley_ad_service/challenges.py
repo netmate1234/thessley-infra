@@ -194,14 +194,14 @@ class ChallengeStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT status, expires_at, delivered_at FROM login_challenges "
+                "SELECT status, expires_at, delivered_at, credential_id FROM login_challenges "
                 "WHERE request_id = ? AND machine_id = ?",
                 (request_id, machine_id),
             ).fetchone()
             if row is None:
                 connection.execute("COMMIT")
                 return None
-            status, expires_at, delivered_at = row
+            status, expires_at, delivered_at, credential_id = row
             if status == "pending" and expires_at <= current:
                 connection.execute(
                     "UPDATE login_challenges SET status = 'expired' WHERE request_id = ? AND status = 'pending'",
@@ -217,7 +217,9 @@ class ChallengeStore:
                     (current, request_id),
                 )
                 connection.execute("COMMIT")
-                return {"status": "approved" if status == "approve" else "denied"}
+                if status == "approve":
+                    return {"status": "approved", "credential_id": credential_id}
+                return {"status": "denied"}
             connection.execute("COMMIT")
             return {"status": status}
         except sqlite3.Error:

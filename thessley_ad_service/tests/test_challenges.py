@@ -91,7 +91,7 @@ def test_login_approval_requires_phone_signature_and_is_delivered_once(tmp_path)
         now=now,
     )
     assert challenges.consume_result(machine_id=machine_id, request_id=request["request_id"], now=now) == {
-        "status": "approved"
+        "status": "approved", "credential_id": credential_id
     }
     assert challenges.consume_result(machine_id=machine_id, request_id=request["request_id"], now=now) == {
         "status": "consumed"
