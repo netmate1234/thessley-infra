@@ -106,15 +106,19 @@ AD API; retain the PIN/password recovery method when testing the tile.
 
 ## Current deployment status
 
-The AD API service on `THESSLEY-DC1` was updated and its scheduled task was
-verified running on 2026-10-29. The source includes the AD-user key inventory,
-enrollment, and revocation admin feature, but the corresponding Windows web
-GUI package has not yet been installed on `MARTIN-WM`. The latest interactive
-SSH request was reachable, but its phone response did not reach the AD API;
-the request remained `pending` in the API state database. It expired without
-opening a shell. Source now applies the configured Windows SSH grace pass to AD
-accounts too. Both the AD API and Windows service package must be updated before
-the fix is active on `MARTIN-WM`.
+On 2026-10-29, the AD API and Windows service were both updated for AD SSH
+grace-pass support. The DC task `ThessleyADApi` is running and listening on
+`192.168.1.79:47810`; its existing `service.json`, AD allow group, and firewall
+scope were retained. On `MARTIN-WM`, the approval task is running, local health
+check on port 47800 passed, and the existing SSH/firewall settings were
+preserved. The installed Windows package SHA-256 is
+`ce9e93fdeb3955547a49a8957bd205be90f31d7e2fc28d73744990d9ed25293f`.
+
+A live AD SSH check succeeded: the first login required phone approval and
+created a four-hour pass for source IP `192.168.122.1`; a second login from the
+same IP entered without another QR and reported 3 h 59 min remaining. The pass
+is SID-scoped and remains subject to current AD group authorization and active
+approver-key checks.
 
 For lab topology, AD service behavior, and the implementation map, see
 [`README.md`](README.md), [`STANDALONE-THESSLEY-SERVICE.md`](STANDALONE-THESSLEY-SERVICE.md),
