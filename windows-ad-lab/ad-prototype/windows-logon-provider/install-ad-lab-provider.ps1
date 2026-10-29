@@ -21,6 +21,7 @@ $dllSource = Join-Path $source 'ThessleyADCredentialProvider.dll'
 $viewerSource = Join-Path $source 'ThessleyADQrViewer.exe'
 $rollbackSource = Join-Path $source 'rollback-ad-lab-provider.ps1'
 $keepSource = Join-Path $source 'keep-ad-lab-provider.ps1'
+$configureSource = Join-Path $source 'configure-ad-lab-user.ps1'
 
 $registry = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
     [Microsoft.Win32.RegistryHive]::LocalMachine,
@@ -32,10 +33,42 @@ try {
 } finally {
     $registry.Dispose()
 }
+$registry = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+    [Microsoft.Win32.RegistryHive]::LocalMachine,
+    [Microsoft.Win32.RegistryView]::Registry64)
+$configRoot = $null
+try {
+    $configRoot = $registry.OpenSubKey('SOFTWARE\Thessley\ADCredentialProvider\Users', $false)
+    $configuredCount = 0
+    if ($configRoot) {
+        foreach ($sid in $configRoot.GetSubKeyNames()) {
+            $accountConfig = $configRoot.OpenSubKey($sid, $false)
+            if (-not $accountConfig) { continue }
+            try {
+                $container = $accountConfig.GetValue('ContainerName', '')
+                $providerName = $accountConfig.GetValue('ProviderName', '')
+                $keySpec = $accountConfig.GetValue('KeySpec', 0)
+                if (-not [string]::IsNullOrWhiteSpace([string]$container) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$providerName) -and
+                    [int]$keySpec -in @(1, 2)) {
+                    $configuredCount++
+                }
+            } finally {
+                $accountConfig.Dispose()
+            }
+        }
+    }
+    if ($configuredCount -lt 1) {
+        throw "No AD account is configured. Run configure-ad-lab-user.ps1 elevated with the account SID and that account's VSC container metadata before installing the tile."
+    }
+} finally {
+    if ($configRoot) { $configRoot.Dispose() }
+    $registry.Dispose()
+}
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     throw 'A previous AD lab provider rollback task exists. Resolve that setup before reinstalling.'
 }
-foreach ($file in @($dllSource, $viewerSource, $rollbackSource, $keepSource)) {
+foreach ($file in @($dllSource, $viewerSource, $rollbackSource, $keepSource, $configureSource)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required package file is missing: $file" }
 }
 if (Test-Path -LiteralPath $installDir) {
@@ -86,7 +119,7 @@ try {
         }
     }
 
-    Copy-Item -LiteralPath $dllSource, $viewerSource, $rollbackSource, $keepSource -Destination $installDir
+    Copy-Item -LiteralPath $dllSource, $viewerSource, $rollbackSource, $keepSource, $configureSource -Destination $installDir
     foreach ($file in Get-ChildItem -LiteralPath $installDir -File) {
         $fileAcl = Get-Acl -LiteralPath $file.FullName
         $allowedSids = @($fileAcl.Access | Where-Object {
@@ -146,7 +179,7 @@ try {
         $registry.Dispose()
     }
 
-    Write-Output "Experimental Thessley AD tile registered for the lab account only. Recovery is armed until $($taskInfo.NextRunTime)."
+    Write-Output "Experimental Thessley AD tile registered for $configuredCount configured account SID(s). Recovery is armed until $($taskInfo.NextRunTime)."
     Write-Output "To keep after verifying a successful domain sign-in, run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $installDir 'keep-ad-lab-provider.ps1')`""
     Write-Output "To roll back now: powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$rollbackPath`" -FromTimer"
     Write-Output 'Existing Thessley local tile, VSC smart-card tile, PIN, and password provider registrations were not modified.'

@@ -18,6 +18,7 @@ mkdir -p "$out_dir"
   "$provider_dir/CSampleProvider.cpp" "$provider_dir/Dll.cpp" \
   "$provider_dir/guid.cpp" "$provider_dir/helpers.cpp" \
   "$provider_dir/provider_diag.cpp" "$provider_dir/password_vault.cpp" "$provider_dir/pin_vault.cpp" \
+  "$provider_dir/ad_lab_vsc_config.cpp" \
   "$serialization_dir/kerb_certificate_serialization.cpp" \
   "$serialization_dir/ad_approval_client.cpp" \
   "$out_dir/provider-res.o" "$provider_dir/samplev2credentialprovider.def" \

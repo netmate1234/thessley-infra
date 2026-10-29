@@ -22,7 +22,6 @@
 #include "provider_diag.h"
 #include "ad_approval_client.h"
 #include "kerb_certificate_serialization.h"
-#include "ad_lab_vsc_config.h"
 #include "password_vault.h"
 
 // Releasing the worker's final COM reference on the worker itself can destroy
@@ -542,13 +541,10 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
     }
     if (SUCCEEDED(hr))
     {
-        // Restrict this provider to the one inspected AD lab SID. Windows can
-        // report Identity_LocalUserProvider for a domain profile too, so the
-        // provider ID is not a reliable local-vs-domain test here. Use the SID
-        // allowlist as the account boundary, then force the AD serialization
-        // path for that exact identity.
-        const bool isAllowedAdLabUser =
-            _pszUserSid && wcscmp(_pszUserSid, THESSLEY_AD_LAB_USER_SID) == 0;
+        // A configured account SID is the allowlist. Do not infer local vs
+        // domain identity from the provider ID: Windows may report a domain
+        // profile through Identity_LocalUserProvider.
+        const bool isAllowedAdLabUser = LoadAdLabVscConfig(_pszUserSid, &_adLabVscConfig);
         ProviderDiag(L"AdLabSidCheck", S_OK, isAllowedAdLabUser ? 1 : 0);
         ProviderDiag(L"IdentityLocalProvider", S_OK, _fIsLocalUser ? 1 : 0);
         if (!isAllowedAdLabUser)
@@ -1123,14 +1119,18 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         if (SUCCEEDED(hr))
         {
             LUID logonId{};
-            ProviderDiag(L"ADVscMetadata", S_OK, THESSLEY_AD_LAB_VSC_KEYSPEC,
-                L"provider=Microsoft Base Smart Card Crypto Provider;reader=Microsoft Virtual Smart Card 0;card=Identity Device (Microsoft Generic Profile);container=te-ThessleyVscLogon-0ef1969d-38db-09390");
+            wchar_t metadata[1024]{};
+            StringCchPrintfW(metadata, ARRAYSIZE(metadata),
+                L"Configured per-account VSC metadata; keySpec=%lu",
+                _adLabVscConfig.keySpec);
+            ProviderDiag(L"ADVscMetadata", S_OK, _adLabVscConfig.keySpec, metadata);
             hr = BuildKerbCertificateSerialization(
-                domain, user, protectedPin, THESSLEY_AD_LAB_VSC_CARD,
-                THESSLEY_AD_LAB_VSC_READER,
-                THESSLEY_AD_LAB_VSC_CONTAINER,
-                THESSLEY_AD_LAB_VSC_PROVIDER,
-                THESSLEY_AD_LAB_VSC_KEYSPEC,
+                domain, user, protectedPin,
+                _adLabVscConfig.cardName.c_str(),
+                _adLabVscConfig.readerName.c_str(),
+                _adLabVscConfig.containerName.c_str(),
+                _adLabVscConfig.providerName.c_str(),
+                _adLabVscConfig.keySpec,
                 _cpus == CPUS_UNLOCK_WORKSTATION, &logonId,
                 authPackage, CLSID_ThessleyAD, pcpcs);
             ProviderDiag(L"BuildADCertificateLogon", hr,

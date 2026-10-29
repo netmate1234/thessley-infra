@@ -24,6 +24,7 @@
 #include "resource.h"
 #include "password_vault.h"
 #include "pin_vault.h"
+#include "ad_lab_vsc_config.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -134,6 +135,7 @@ public:
     bool                                    _fShowControls;                                 // Tracks the state of our show/hide controls link.
     bool                                    _fIsLocalUser;                                  // If the cred prov is assosiating with a local user tile
     bool                                    _adLabUser;
+    AdLabVscConfig                          _adLabVscConfig;
     bool                                    _vaultAvailable;
     bool                                    _passwordEntryMode;
     bool                                    _savePasswordAfterSuccess;

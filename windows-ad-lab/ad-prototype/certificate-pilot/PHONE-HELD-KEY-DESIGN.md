@@ -111,3 +111,49 @@ as a sign-in policy.
 - [`KERB_SMARTCARD_CSP_INFO`](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info) describes the provider, container, card, and reader metadata passed with it.
 - [Smart Card Architecture](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-architecture) describes the Windows credential-provider and Base CSP/KSP/minidriver layers.
 - [Smart Card Minidriver Overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview) describes the card-specific interface a provider implementation must satisfy.
+
+## Windows bridge feasibility gate
+
+The Windows signing bridge is the remaining platform blocker, not CSR creation.
+The smart-card minidriver is a DLL below the Base CSP/KSP and is called through
+the Windows Smart Card Resource Manager. Microsoft documents that a plug-in
+loaded into a protected LSA process must carry a Microsoft signature; its
+examples explicitly include smart-card drivers and cryptographic plug-ins.
+Microsoft also points to the Windows Hardware Compatibility Program as the
+method for obtaining that driver signature. See [Smart Card Minidriver
+Overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview).
+
+That means a locally built Thessley minidriver is not yet a deployable bridge
+for normal machines with LSA protection. Disabling LSA protection just to load
+an unsigned prototype is not an acceptable installation default. Before
+building a real bridge, select and prove one of these routes on a disposable
+VM:
+
+1. A Microsoft-signable smart-card minidriver backed by a supported device
+   transport. The Windows smart-card stack must be able to enumerate the
+   phone key and request its signature through that transport.
+2. A documented, supported Windows key-provider integration that can broker
+   the signature without putting an unsigned plug-in in protected LSA. This
+   route still needs a pre-logon transport and a provider lifecycle that
+   survives lock, unlock, cancellation, and network loss.
+3. If neither is available, keep the production behavior as phone approval
+   followed by the existing TPM virtual smart-card key. That is a different
+   security model: the private key is on the PC, and the phone approves each
+   use.
+
+Do not issue or install a phone-key certificate as if it were a usable Windows
+credential before one route has passed the bridge gate. A certificate only
+contains the public key; it does not make Windows able to ask Android Keystore
+to sign the Kerberos challenge. The enrollment registry therefore continues
+to label phone-key attestation `unverified`, and `active_public_key()` only
+returns keys after a separate verifier has marked them verified. Keep the
+certificate issuer and the Windows sign-in policy disabled until both the
+attestation verifier and signing bridge are implemented and reviewed.
+
+The lab provider's current SID and TPM container values are test fixtures, not
+product defaults. Keep them isolated under `windows-logon-provider/`; do not
+copy them into the general installer or use them to identify users. A future
+general provider must resolve the selected account by immutable SID and obtain
+its certificate/key-container mapping from protected machine configuration or
+the Windows certificate/card enumeration APIs, with no compiled-in lab SID,
+domain name, or container name.

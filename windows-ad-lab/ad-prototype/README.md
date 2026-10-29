@@ -6,8 +6,8 @@ provider. It does not add or replace a Windows sign-in tile.
 
 The current prototype supports pairing the computer, requesting phone-key
 enrollment for an authorized AD account, and testing phone approval. A
-separate, build-only Credential Provider clone is a legacy proof tied to one
-lab TPM virtual smart-card certificate. It is not the phone-issued certificate
+separate, build-only Credential Provider clone is a legacy proof for configured
+TPM virtual smart-card certificates. It is not the phone-issued certificate
 path and is not registered or installed by the prototype setup scripts. The
 working local QR tile remains unchanged and continues to cover local accounts,
 including Windows Home.
@@ -46,10 +46,28 @@ bash infra/windows-ad-lab/ad-prototype/windows-logon-provider/build.sh
 
 The output goes to `/tmp/thessley-ad-provider-build` by default. This only
 compiles files; it does not register the provider, deploy it to the VM, or
-change any sign-in setting. The provider embeds one lab SID and VSC container
-from `windows-logon-provider/ad_lab_vsc_config.h`; do not treat this artifact
-as a general installer. A later deployment must first have a tested rollback
-path and a separate non-network recovery login.
+change any sign-in setting. The provider has no compiled-in account SID or
+VSC container. It reads each account mapping from the protected 64-bit
+registry path `HKLM\SOFTWARE\Thessley\ADCredentialProvider\Users\<SID>`;
+missing or invalid mappings make the AD lab tile refuse that account. The
+mapping contains `ContainerName`, `ProviderName`, optional `ReaderName` and
+`CardName`, and `KeySpec` (1 or 2). SYSTEM and local Administrators are the only
+registry ACL entries.
+
+Before the optional tile installer, configure one mapping for each AD account
+that already has its own tested VSC certificate/key. Run elevated PowerShell
+on the VM, using the values for that account (do not copy the example identity
+or container from another VM):
+
+```powershell
+& '.\configure-ad-lab-user.ps1' -Sid 'ACCOUNT-SID' -ContainerName 'VSC-CONTAINER' -ProviderName 'PROVIDER-NAME' -ReaderName 'READER-NAME' -CardName 'CARD-NAME' -KeySpec 1
+```
+
+Replace every placeholder with values read from that VM. Use `certutil
+-scinfo` and `certutil -key -csp SC` to inspect its reader, card, container,
+provider, and key spec. This config selects a PC TPM VSC key; it
+does not select or unlock the phone-held key. A later deployment must still
+have a tested rollback path and a separate non-network recovery login.
 
 The isolated provider directory also contains an opt-in lab installer and two
 recovery scripts. The installer arms and verifies a SYSTEM scheduled rollback
