@@ -2,25 +2,29 @@
 
 ## Current state
 
-The domain controller already runs a small Python HTTPS API on TCP 47810. It
+The domain controller runs a small Python HTTPS login API on TCP 47810 and a
+separate HTTPS administration site on TCP 47820. The login API on 47810 is
+reserved for phone approvals and signed workstation requests; browser
+administration is on 47820 only. The service
 uses Windows LDAP/SSPI to read AD and stores machine registrations, login
 challenges, and phone public keys in the protected
-`C:\ProgramData\ThessleyAD\state.sqlite3` database. The source now adds an
-`/admin/` page on the same TLS listener and SID-wide AD enrollments. The
+`C:\ProgramData\ThessleyAD\state.sqlite3` database. The new source hosts
+`/admin/` on its own port and supports SID-wide AD enrollments; the live DC
+still needs the split-port update. The
 signed Android 0.1.22 release has been installed on the connected phone and
-recognizes account-wide keys. The updated DC service is installed on the
-disposable lab DC. A local HTTPS GET to `/admin/` returned the administrator
-sign-in page. Administrator login, central enrollment, cross-PC approval, and
-revocation still need interactive verification.
+recognizes account-wide keys. The earlier service build is installed on the
+disposable DC; the separate 47820 admin listener is awaiting deployment.
+Administrator login, central enrollment, cross-PC approval, and revocation
+still need interactive verification.
 
 The local Thessley Windows sign-in provider is a separate path. Keep its local
 account keys and offline behavior unchanged.
 
 ## Intended design
 
-The Python management website is hosted by the DC at `/admin/`, separate from
-the machine API paths but on the same TLS listener and port. This avoids a
-second listener/firewall port. The DC is the authority for AD-account
+The Python management website is hosted by the DC at
+`https://192.168.1.79:47820/admin/`, separate from the phone/workstation API at
+`https://192.168.1.79:47810`. The DC is the authority for AD-account
 enrollment, phone-key status, and the group policy used by AD QR sign-in.
 
 The site should let an authorized administrator:
@@ -75,9 +79,9 @@ a key at the DC blocks it for all PCs without visiting each PC.
   escaping, request-size limits, and no-store caching for enrollment pages.
 - Audit administrator, target SID, action, timestamp, and result. Never log
   passwords, QR challenge secrets, phone signatures, or private key material.
-- Keep the existing signed machine API on TCP 47810 compatible. The admin UI
-  uses separate `/admin/` paths on that HTTPS server, sharing its existing
-  firewall scope and TLS certificate.
+- Keep the signed machine API on TCP 47810 compatible. Serve the admin UI on
+  its own TLS listener at TCP 47820 with an independently scoped firewall
+  rule; both listeners use the same DC certificate.
 
 ## Implementation sequence
 
@@ -91,9 +95,10 @@ a key at the DC blocks it for all PCs without visiting each PC.
 3. The Android 0.1.22 source recognizes central AD keys across paired PCs and
    labels their scope. It was built with the existing release signing setup
    and installed on the connected phone without clearing app data.
-4. The updated service is deployed to the disposable lab. Verify administrator
-   login, enrollment, cross-PC approval, revocation, offline behavior, and
-   recovery before deploying to other PCs.
+4. The updated service is deployed to the disposable lab with separate API
+   (47810) and admin (47820) listeners. Verify administrator login,
+   enrollment, cross-PC approval, revocation, offline behavior, and recovery
+   before deploying to other PCs.
 
 Do not install these changes on production PCs until the web login, enrollment,
 cross-PC approval, revocation, and local-account recovery paths are verified

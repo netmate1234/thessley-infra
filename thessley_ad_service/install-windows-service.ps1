@@ -3,7 +3,8 @@ param(
     [string] $StateRoot = "$env:ProgramData\ThessleyAD",
     [string] $BindAddress = '192.168.1.79',
     [string] $AllowedGroupSid = 'S-1-5-21-1719900462-4250469598-2954734011-1105',
-    [string[]] $AllowedRemoteAddresses = @()
+    [string[]] $AllowedRemoteAddresses = @(),
+    [string[]] $AdminAllowedRemoteAddresses = @()
 )
 $ErrorActionPreference = 'Stop'
 
@@ -20,19 +21,19 @@ if ($address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
     throw "Bind address $BindAddress is not assigned to this DC. No service changes were made."
 }
 if ($AllowedGroupSid -notmatch '^S-1-(?:\d+-)+\d+$') { throw 'AllowedGroupSid must be a canonical AD group SID.' }
-foreach ($source in $AllowedRemoteAddresses) {
+foreach ($source in (@($AllowedRemoteAddresses) + @($AdminAllowedRemoteAddresses))) {
     if ($source -match '^(.+)/(\d{1,2})$') {
         $sourceAddress = $null
         if (-not [Net.IPAddress]::TryParse($Matches[1], [ref]$sourceAddress) -or
             $sourceAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
             [int]$Matches[2] -lt 1 -or [int]$Matches[2] -gt 32) {
-            throw "AllowedRemoteAddresses contains an invalid IPv4 CIDR: $source"
+            throw "A remote-address setting contains an invalid IPv4 CIDR: $source"
         }
     } else {
         $sourceAddress = $null
         if (-not [Net.IPAddress]::TryParse($source, [ref]$sourceAddress) -or
             $sourceAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
-            throw "AllowedRemoteAddresses must contain IPv4 addresses or CIDRs: $source"
+            throw "Remote-address settings must contain IPv4 addresses or CIDRs: $source"
         }
     }
 }
@@ -112,9 +113,14 @@ $stateBackup = $null
 $movedPreviousApp = $false
 $createdFirewallRule = $false
 $modifiedFirewallRule = $false
+$createdAdminFirewallRule = $false
+$modifiedAdminFirewallRule = $false
 $oldFirewallRemoteAddresses = $null
 $oldFirewallProfiles = $null
+$oldAdminFirewallRemoteAddresses = $null
+$oldAdminFirewallProfiles = $null
 $ruleName = 'Thessley AD API TCP 47810 (LAN)'
+$adminRuleName = 'Thessley AD Admin TCP 47820 (LAN)'
 
 try {
     if ($previousTaskWasRunning) {
@@ -176,21 +182,51 @@ Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger
         $createdFirewallRule = $true
     }
 
+    # The browser admin page is a separate listener and firewall rule. On a
+    # first install it follows the API source scope unless an admin-specific
+    # list is supplied. On upgrades, preserve an existing admin rule unless
+    # its own scope is explicitly changed.
+    $adminFirewallRule = Get-NetFirewallRule -DisplayName $adminRuleName -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($adminFirewallRule) {
+        if ($AdminAllowedRemoteAddresses.Count -gt 0) {
+            $oldAdminFirewallRemoteAddresses = @(($adminFirewallRule | Get-NetFirewallAddressFilter).RemoteAddress)
+            $oldAdminFirewallProfiles = $adminFirewallRule.Profile
+            $modifiedAdminFirewallRule = $true
+            Set-NetFirewallRule -InputObject $adminFirewallRule -Profile Any | Out-Null
+            $adminFirewallRule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $AdminAllowedRemoteAddresses | Out-Null
+        }
+    } else {
+        if ($AdminAllowedRemoteAddresses.Count -gt 0) {
+            $adminRemoteAddresses = $AdminAllowedRemoteAddresses
+        } elseif ($AllowedRemoteAddresses.Count -gt 0) {
+            $adminRemoteAddresses = $AllowedRemoteAddresses
+        } elseif ($firewallRule) {
+            $adminRemoteAddresses = @(($firewallRule | Get-NetFirewallAddressFilter).RemoteAddress)
+        } else {
+            $adminRemoteAddresses = @('192.168.1.0/24')
+        }
+        New-NetFirewallRule -DisplayName $adminRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47820 `
+            -LocalAddress $BindAddress -RemoteAddress $adminRemoteAddresses -Profile Any | Out-Null
+        $createdAdminFirewallRule = $true
+    }
+
 Start-ScheduledTask -TaskName $taskName
     $listener = $null
+    $adminListener = $null
     $startDeadline = (Get-Date).AddSeconds(60)
     do {
         Start-Sleep -Milliseconds 500
         $listener = Get-NetTCPConnection -State Listen -LocalAddress $BindAddress -LocalPort 47810 -ErrorAction SilentlyContinue
+        $adminListener = Get-NetTCPConnection -State Listen -LocalAddress $BindAddress -LocalPort 47820 -ErrorAction SilentlyContinue
         $currentTask = Get-ScheduledTask -TaskName $taskName
-        if (-not $listener -and $currentTask.State -ne 'Running') { break }
-    } while (-not $listener -and (Get-Date) -lt $startDeadline)
-if (-not $listener) {
+        if ((-not $listener -or -not $adminListener) -and $currentTask.State -ne 'Running') { break }
+    } while ((-not $listener -or -not $adminListener) -and (Get-Date) -lt $startDeadline)
+if (-not $listener -or -not $adminListener) {
     $task = Get-ScheduledTask -TaskName $taskName
     $info = Get-ScheduledTaskInfo -TaskName $taskName
     $log = Join-Path $StateRoot 'service.log'
     $detail = if (Test-Path $log) { (Get-Content $log -Tail 20 -ErrorAction SilentlyContinue) -join "`n" } else { 'No service log was created.' }
-    throw "AD API did not listen on $BindAddress`:47810 (task $($task.State), result $($info.LastTaskResult)). $detail"
+    throw "AD service listeners did not start on $BindAddress`:47810 and :47820 (task $($task.State), result $($info.LastTaskResult)). $detail"
 }
 if (-not (Test-Path (Join-Path $StateRoot 'https-cert.pem'))) { throw 'The service listener started without creating its TLS identity.' }
 $certificatePin = & $python -I -c "import hashlib; from cryptography import x509; from cryptography.hazmat.primitives import serialization; print(hashlib.sha256(x509.load_pem_x509_certificate(open(r'$StateRoot\https-cert.pem','rb').read()).public_bytes(serialization.Encoding.DER)).hexdigest())"
@@ -231,10 +267,19 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the local admin command fil
             $firewallRule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $oldFirewallRemoteAddresses -ErrorAction SilentlyContinue | Out-Null
         }
     }
+    if ($createdAdminFirewallRule) {
+        Get-NetFirewallRule -DisplayName $adminRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    } elseif ($modifiedAdminFirewallRule) {
+        $adminFirewallRule = Get-NetFirewallRule -DisplayName $adminRuleName -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($adminFirewallRule) {
+            Set-NetFirewallRule -InputObject $adminFirewallRule -Profile $oldAdminFirewallProfiles -ErrorAction SilentlyContinue | Out-Null
+            $adminFirewallRule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $oldAdminFirewallRemoteAddresses -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
     throw $failure
 }
 Write-Host "Installed the Thessley AD API and management site. Test https://$BindAddress`:47810 from the phone and client."
-Write-Host "Administrator site: https://$BindAddress`:47810/admin/ (sign in as a domain controller administrator)."
+Write-Host "Administrator site: https://$BindAddress`:47820/admin/ (sign in as a domain controller administrator)."
 if ($stateBackup) { Write-Host "Pre-update service state backup: $stateBackup" }
 Write-Host "TLS certificate SHA-256: $($certificatePin.Trim())"
 Write-Host "Issue a machine code with: `"$adminCommand`" issue-machine-code"
@@ -243,5 +288,10 @@ if ($AllowedRemoteAddresses.Count -gt 0) {
     Write-Host "AD API TCP 47810 source filter set to: $($AllowedRemoteAddresses -join ', ')"
 } else {
     Write-Host 'AD API firewall source scope preserved (or defaults to 192.168.1.0/24 on first install).'
+}
+if ($AdminAllowedRemoteAddresses.Count -gt 0) {
+    Write-Host "Admin TCP 47820 source filter set to: $($AdminAllowedRemoteAddresses -join ', ')"
+} else {
+    Write-Host 'Admin TCP 47820 uses its existing scope or follows the AD API source scope on first install.'
 }
 Write-Host 'This does not install or change a Windows sign-in tile.'

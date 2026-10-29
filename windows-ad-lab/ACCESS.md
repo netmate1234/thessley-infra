@@ -10,15 +10,17 @@ VM network or router configuration changes; verify them before relying on them.
 | --- | --- | ---: | --- |
 | `THESSLEY-DC1` management NIC | `192.168.122.98` | TCP 22 | SSH administration from the Ubuntu hypervisor using the local debug key |
 | `THESSLEY-DC1` LAN NIC | `192.168.1.79` | TCP 47810 | Thessley AD approval API over HTTPS; phone and paired clients use this endpoint |
+| `THESSLEY-DC1` LAN NIC | `192.168.1.79` | TCP 47820 | Separate HTTPS admin page for central AD phone enrollment and revocation |
 | `MARTIN-WM` management NIC | `192.168.122.66` | TCP 22 | SSH to the Windows 11 Pro domain client from the Ubuntu hypervisor; Thessley AD approval is required |
 | `MARTIN-WM` LAN NIC | `192.168.1.103` | TCP 22 | Client SSH from the LAN; this address is documented from the lab setup and should be checked after VM/network changes |
 
 The `.122.x` addresses are the libvirt management network. They are for
 hypervisor-to-VM administration; they are not the phone-facing AD API address.
 The `.1.x` addresses are on the LAN and are used for phone/client connectivity.
-The AD API listens at `https://192.168.1.79:47810` and its Windows Firewall
-rule is scoped to the LAN subnet `192.168.1.0/24`. Do not expose it to the
-public internet.
+The AD approval API listens at `https://192.168.1.79:47810`; the separate
+admin page is at `https://192.168.1.79:47820/admin/`. Each has its own Windows
+Firewall rule scoped to the LAN subnet `192.168.1.0/24` by default. Do not
+expose either port to the public internet.
 
 ## SSH from the Ubuntu hypervisor
 
@@ -69,6 +71,15 @@ authentication, but not a completed interactive SSH login.
   on a different network needs an authorized route/VPN and a matching
   restricted firewall source range; changing the URL alone does not create
   that route.
+- The browser admin page uses separate TCP 47820; it does not share the
+  phone/workstation listener. Its firewall source range is configured
+  independently by the DC service installer.
+
+The Ubuntu hypervisor has `192.168.1.111` on `enp1s0`, while the DC's LAN
+adapter is attached through `macvtap0` on that same physical NIC. In this
+layout, the hypervisor host cannot directly reach the macvtap guest at
+`192.168.1.79`; other LAN devices can use the address. From this host, use the
+DC management SSH path or open the admin URL from a phone/other LAN machine.
 
 The AD API and the standalone local-account Thessley service are separate
 services. Do not use the local-account service's port or enrollment records as
@@ -106,15 +117,15 @@ AD API; retain the PIN/password recovery method when testing the tile.
 
 ## Current deployment status
 
-On 2026-10-29, the central AD management update was installed on
+On 2026-10-29, the first central AD management update was installed on
 `THESSLEY-DC1` from the rollback-capable service installer. The existing
 `service.json`, allow-group SID, TLS certificate, firewall scope, and SQLite
 database were retained. The installer saved a pre-update state snapshot at
-`C:\ProgramData\ThessleyAD\backups\pre-update-20261029-154949`. The
-`ThessleyADApi` task is running and listening on `192.168.1.79:47810`; a local
-HTTPS GET to `/admin/` returned `200 OK` and the administrator sign-in page.
-Administrator authentication, phone enrollment, cross-PC use, and revocation
-remain to be verified interactively.
+`C:\ProgramData\ThessleyAD\backups\pre-update-20261029-154949`. The API at
+`192.168.1.79:47810` is running; the subsequent change that moves the admin
+site to separate port 47820 is pending deployment. Administrator
+authentication, phone enrollment, cross-PC use, and revocation remain to be
+verified interactively.
 
 On 2026-10-29, the AD API and Windows service were both updated for AD SSH
 grace-pass support. The DC task `ThessleyADApi` is running and listening on

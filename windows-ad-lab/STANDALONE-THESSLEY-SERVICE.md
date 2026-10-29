@@ -17,10 +17,11 @@ path.
   the local-login PAM database. Its lab runtime queries AD through AD Web
   Services as LocalSystem on the DC.
 - **The DC-hosted Python admin page** manages central AD-account phone
-  enrollment and revocation. It is served under `/admin/` on the existing
-  HTTPS API listener (TCP 47810), requires a domain account that is a member
-  of the DC's built-in Administrators group, and does not create or edit AD
-  accounts or group membership.
+  enrollment and revocation. It is served at `/admin/` on its own HTTPS
+  listener (TCP 47820), separate from the phone/workstation API (TCP 47810).
+  It requires a domain account that is a member of the DC's built-in
+  Administrators group, and does not create or edit AD accounts or group
+  membership.
 - **Windows client agent and credential provider** identify the selected
   principal by SID, consult the Thessley service, and invoke a Windows
   certificate provider for the KDC logon. They do not send or cache the
@@ -40,8 +41,9 @@ account SID and must not serialize, cache, or release a domain password.
 ## Network and offline behavior
 
 The current lab deployment is LAN-only: the AD API listens on
-`192.168.1.79:47810`, and its firewall allows only `192.168.1.0/24`. It is not
-reachable from a home network or the public internet. Keep the domain
+`192.168.1.79:47810` and the admin page on `192.168.1.79:47820`; separate
+firewall rules allow only `192.168.1.0/24` by default. Neither is reachable
+from a home network or the public internet. Keep the domain
 controller and its AD/Kerberos services private; do not make the DC or its
 LDAP/Kerberos ports internet-accessible.
 
@@ -264,9 +266,11 @@ Phone and client TCP access to port `47810` was verified. The Windows firewall
 allows only `192.168.1.0/24` on that port. The installer does not register or
 modify any Windows sign-in tile.
 
-The updated DC admin page is at `https://192.168.1.79:47810/admin/`. The
-updated service is installed on the lab DC; an unauthenticated HTTPS GET was
-verified to return the sign-in page. Sign in with a domain username and
+The admin page is being moved to `https://192.168.1.79:47820/admin/`; the
+phone/workstation approval API remains at `https://192.168.1.79:47810/`. Until
+the split-port update is deployed, the live admin page is still at
+`https://192.168.1.79:47810/admin/`. An unauthenticated HTTPS GET from the DC
+was verified to return the sign-in page. Sign in with a domain username and
 password for an account in the DC's built-in Administrators group (normally
 Domain Admins). It lists enabled AD accounts and sign-in eligibility, starts
 centrally scoped phone enrollment, shows pairing codes for confirmation, and
@@ -287,11 +291,11 @@ From an elevated PowerShell session on the DC, run the package's
 `cryptography` and QR-rendering wheels, ACL-protects the service/config/database with SYSTEM and
 Administrators access, saves a timestamped copy of the database, service
 configuration, and TLS identity under `C:\ProgramData\ThessleyAD\backups`,
-installs a boot task, and adds the scoped firewall rule. It reconciles pinned
-Python dependencies on upgrades and retains any existing `service.json`;
-review its group SID and host before restarting after edits. The installer
-prints the certificate SHA-256 pin. Create a one-use machine-pairing code
-locally with:
+installs a boot task, and configures separate scoped firewall rules for the
+API and admin listeners. It reconciles pinned Python dependencies on upgrades
+and retains any existing `service.json`; review its group SID and host before
+restarting after edits. The installer prints the certificate SHA-256 pin.
+Create a one-use machine-pairing code locally with:
 
 ```powershell
 & "$env:ProgramFiles\ThessleyAD\thessley-ad-admin.cmd" issue-machine-code

@@ -29,7 +29,8 @@ STATE_PATH = ROOT / "state.sqlite3"
 CERT_PATH = ROOT / "https-cert.pem"
 KEY_PATH = ROOT / "https-key.pem"
 LOG_PATH = ROOT / "service.log"
-PORT = 47810
+API_PORT = 47810
+ADMIN_PORT = 47820
 
 
 def _read_config() -> dict:
@@ -171,22 +172,36 @@ def main() -> int:
             public_host=config["public_host"],
             certificate_fingerprint=certificate_pin,
         )
-        server = make_server((config["bind_address"], PORT), str(CERT_PATH), str(KEY_PATH), routes, admin_web)
+        api_server = make_server((config["bind_address"], API_PORT), str(CERT_PATH), str(KEY_PATH), routes)
+        try:
+            admin_server = make_server(
+                (config["bind_address"], ADMIN_PORT), str(CERT_PATH), str(KEY_PATH), {}, admin_web,
+            )
+        except Exception:
+            api_server.server_close()
+            raise
         stopped = threading.Event()
         for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
             if sig is not None:
                 signal.signal(sig, lambda _sig, _frame: stopped.set())
-        logging.info("AD API ready at https://%s:%d/ (TLS SHA-256 %s)",
-                     config["public_host"], PORT, certificate_pin)
-        logging.info("AD administrator site ready at https://%s:%d/admin/", config["public_host"], PORT)
-        thread = threading.Thread(target=server.serve_forever, name="thessley-ad-https", daemon=True)
-        thread.start()
+        logging.info("AD login API ready at https://%s:%d/ (TLS SHA-256 %s)",
+                     config["public_host"], API_PORT, certificate_pin)
+        logging.info("AD administrator site ready at https://%s:%d/admin/", config["public_host"], ADMIN_PORT)
+        servers = (api_server, admin_server)
+        threads = [
+            threading.Thread(target=server.serve_forever, name=name, daemon=True)
+            for server, name in zip(servers, ("thessley-ad-api", "thessley-ad-admin"), strict=True)
+        ]
+        for thread in threads:
+            thread.start()
         try:
             stopped.wait()
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
+            for server in servers:
+                server.shutdown()
+                server.server_close()
+            for thread in threads:
+                thread.join(timeout=5)
         return 0
     except Exception:
         logging.exception("AD API startup or runtime failure")

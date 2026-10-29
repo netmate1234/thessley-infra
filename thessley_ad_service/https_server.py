@@ -39,7 +39,7 @@ def _auth_headers(headers) -> dict[str, str]:
 
 def make_server(address: tuple[str, int], certfile: str, keyfile: str,
                 routes: dict[str, "RawBodyRoute"], admin_web=None) -> ThreadingHTTPServer:
-    """Create a bounded POST-only JSON server with TLS 1.2 or newer."""
+    """Create a bounded TLS server for the signed JSON API or separate admin UI."""
 
     class Handler(BaseHTTPRequestHandler):
         def _dispatch_admin(self, method: str, body: bytes):
