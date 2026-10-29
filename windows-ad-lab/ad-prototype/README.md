@@ -105,13 +105,16 @@ service at request start. The start command validates the service's complete
 v3 link before returning QR data. After approval, the poll command sends the
 same CSR over a machine-signed request; the service checks the approved digest
 and CSR profile, then accepts it once for that machine and challenge. The
-service has no CSR retrieval or CA issuance operation yet. This does not
-generate a certificate, submit an Enrollment Agent-signed request, or perform
-PKINIT. The policy store still refuses to enable this method, so do not
-register a login tile from this scaffold. Certificate issuance and actual KDC
-sign-in remain the next implementation work. The new v3 request does not
-embed a user, SID, machine, or template; the service resolves the user and reads the template
-from protected configuration.
+service now has a machine-authenticated certificate-result route, but it only
+returns a certificate after the internal issuance validator has accepted and
+stored it. The claim, CA-response validation, and storage operations are not
+wired to an issuer worker or HTTP endpoint. A separate DC-side PowerShell proof
+can build and manually submit CMC/EOBO, but it is not called by the service and
+has not been run against a CA. No component installs a returned certificate or
+performs PKINIT. The policy store still refuses to enable this method, so do
+not register a login tile from this scaffold. The v3 request does not embed a
+user, SID, machine, or template; the service resolves the user and reads the
+template from protected configuration.
 
 `activate.ps1` stages and validates a replacement before moving it into place,
 then installs the all-users Start menu shortcut and Thessley icon. The current
