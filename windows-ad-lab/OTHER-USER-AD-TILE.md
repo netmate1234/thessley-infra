@@ -145,6 +145,18 @@ Read-only inspection of `THESSLEY-DC1` found the following state:
   is a useful baseline, not proof that a future issued certificate will carry
   the correct SID extension; inspect the actual pilot certificate.
 
+The read-only inventory is repeatable from an elevated PowerShell on the DC:
+
+```powershell
+.\inspect-phone-certificate-readiness.ps1
+```
+
+It reports the selected template, publication state, RA-signature count,
+enrollment ACEs, EKUs, CA policy flags, and agent certificates in the current
+user and machine stores. It deliberately does not edit AD CS or inspect the
+CA's Enrollment Agent Restrictions; verify those in the Certification
+Authority console before any publication.
+
 Therefore the next lab step is to create a **new, separate, unpublished** pilot
 template and a dedicated Enrollment Agent identity, then configure CA
 Enrollment Agent Restrictions before publishing anything. The restriction
