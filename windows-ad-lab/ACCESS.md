@@ -155,15 +155,25 @@ created another state snapshot at
 running and both listeners remain active; the TLS pin and firewall scopes are
 unchanged.
 
-The planned AD key enrollment uses a separate admin-started flow: an authorized
-administrator starts a short-lived request from the target account card, the
-phone scans that QR and creates/signs its key, and both screens show the same
-six-digit pairing code. The server activates the key only after the admin
-confirms the match. Pending keys are not returned in the active-key list or
-usable for login. The enrollment QR is pinned to the already-enrolled AD
-service host, port, and certificate fingerprint. The active account card
-continues to show the verified StrongBox/TEE/software status. This remains a
-key-management prototype; it does not enable Windows passwordless sign-in.
+AD logon-key enrollment is now deployed as a separate admin-started flow. An
+authorized administrator starts a five-minute request from the target account
+card. The phone creates a dedicated Android Keystore P-256 key, signs the
+request with both the existing AD approval key and the new key, then shows a
+six-digit pairing code. The server validates the signatures and Android key
+attestation and stages the key; it remains inactive until the administrator
+confirms the matching code. The QR is pinned to the AD service host, port, and
+certificate fingerprint. The account card reports verified TEE, StrongBox,
+software-backed, or unverified protection. This enrollment/key-management
+prototype does not issue a Windows logon certificate or enable passwordless
+Windows sign-in; the phone-to-Kerberos signing bridge remains unimplemented.
+
+On 2026-10-29 at 23:22, the updated service and enrollment migration were
+verified on the DC: the `ad_logon_key_enrollments` table exists, the service
+task is running, both listeners are bound to `192.168.1.79`, and the admin page
+returns HTTP 200. The TLS pin and existing database were preserved. The
+rollback installer now waits for the listeners instead of treating a brief
+Task Scheduler `Ready` state as a startup failure. A fresh phone enrollment
+and pairing-code confirmation remain to be tested interactively.
 
 On 2026-10-29, the central AD service was updated on `THESSLEY-DC1` using the
 rollback-capable installer. The existing `service.json`, allow-group SID,
