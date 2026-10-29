@@ -237,8 +237,10 @@ does not publish the template or enable the sign-in method.
 
 The Windows agent now has a disabled v3 client path that validates a local
 PEM/DER PKCS#10 request, starts CSR-bound phone approval, and checks the
-one-use result against the expected CSR digest and template. It does not create
-the CNG key/CSR, submit an Enrollment-on-Behalf-of request, validate an issued
+one-use result against the expected CSR digest and template. A separate
+source-only helper now creates a non-exportable machine CNG key and CSR and
+records bounded cleanup metadata. Neither component has been run on a VM. The
+agent does not submit an Enrollment-on-Behalf-of request, validate an issued
 certificate, or perform a PKINIT logon with the temporary key. The certificate
 template is optional in service configuration; without it, certificate
 challenges fail closed. The method remains deliberately
@@ -247,6 +249,9 @@ certificates, install the tile, or attempt a user sign-in based on this
 scaffold. The unproven CA restrictions,
 strong SID mapping, certificate validation, cleanup-after-crash, and fresh KDC
 logon gates above still have to be proved independently in the disposable lab.
+The CSR helper uses the Windows software KSP and does not claim TPM/TEE
+protection. See `ad-prototype/certificate-pilot/README.md` for its cleanup
+contract and remaining CA/KDC work.
 
 The paired-machine API also has a generic account-resolution operation for a
 Windows **Other user** tile. It accepts a SAM account name (optionally

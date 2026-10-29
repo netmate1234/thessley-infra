@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography import x509
 
 from . import qr
@@ -518,8 +519,11 @@ def certificate_request_sha256(path: str) -> str:
             request = x509.load_pem_x509_csr(data)
         else:
             request = x509.load_der_x509_csr(data)
-        if not request.is_signature_valid:
-            raise AgentError("The certificate request signature is invalid.")
+        if (not request.is_signature_valid
+                or request.signature_algorithm_oid.dotted_string != "1.2.840.113549.1.1.11"
+                or not isinstance(request.public_key(), RSAPublicKey)
+                or request.public_key().key_size != 3072):
+            raise AgentError("The CSR must have a valid SHA-256 RSA signature and a 3072-bit RSA key.")
         der = request.public_bytes(serialization.Encoding.DER)
     except AgentError:
         raise
