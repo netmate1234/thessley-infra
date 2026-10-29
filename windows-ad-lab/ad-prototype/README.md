@@ -12,6 +12,13 @@ path and is not registered or installed by the prototype setup scripts. The
 working local QR tile remains unchanged and continues to cover local accounts,
 including Windows Home.
 
+The phone-approved certificate path is a separate, disabled proof of concept.
+Its isolated CSR, approval-binding, and certificate-validation stages are
+documented in `certificate-pilot/README.md`. The issuer-side EOBO helper is
+source-only, restricted to a domain controller, and does not submit requests;
+no Enrollment Agent key or helper belongs on workstation clients. No AD QR
+sign-in currently uses this certificate path.
+
 Two quiet JSON commands are available as the native AD tile's service
 adapter: `approval-start --sid SID --context interactive|unlock` returns a
 validated one-use request ID, phone link, and QR matrix; `approval-poll

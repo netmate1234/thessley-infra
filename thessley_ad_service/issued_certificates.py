@@ -129,9 +129,11 @@ def validate_issued_certificate(
 ) -> dict[str, str | int]:
     """Check an issued leaf against the approved CSR, SID, template, and CA pin.
 
-    Supports direct issuance by a configured RSA/SHA-256 CA certificate. This
-    function does not retrieve the certificate, alter AD, install a key, or
-    perform a Windows logon.
+    Supports direct issuance by a configured RSA/SHA-256 CA certificate. EOBO
+    builds the subject from its RequesterName, so subject is not compared to the
+    temporary CSR subject. The approved SID extension and CSR public key bind
+    the result. This function does not retrieve the certificate, alter AD,
+    install a key, or perform a Windows logon.
     """
     if (not isinstance(certificate_der, bytes) or not 256 <= len(certificate_der) <= 64 * 1024
             or not isinstance(issuer_certificate_der, bytes) or not 256 <= len(issuer_certificate_der) <= 64 * 1024
@@ -171,8 +173,11 @@ def validate_issued_certificate(
             raise IssuedCertificateError("The configured CA certificate is not currently valid.")
         if not certificate.not_valid_before_utc <= current <= certificate.not_valid_after_utc:
             raise IssuedCertificateError("The issued certificate is not currently valid.")
-        if certificate.subject != x509.load_der_x509_csr(csr_der).subject:
-            raise IssuedCertificateError("The issued certificate subject differs from the approved CSR.")
+        # EOBO's RequesterName is used by AD CS to construct the issued subject.
+        # The approved CSR deliberately has a random temporary subject, so it is
+        # incorrect to require the issued subject to equal the CSR subject. Bind
+        # identity using the independently approved SID extension and bind the
+        # proof-of-possession key using the CSR public key below.
         public_key = certificate.public_key()
         cert_spki = public_key.public_bytes(
             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,

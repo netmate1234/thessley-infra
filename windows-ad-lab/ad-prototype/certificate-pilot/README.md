@@ -56,6 +56,35 @@ validation receipt. Both service runtimes purge expired challenge and CSR rows
 at startup and every 60 seconds.
 Certificate issuance and Windows logon remain unavailable.
 
+## CMC/EOBO request construction (source-only)
+
+`build-eobo-cmc.ps1` is an isolated issuer-side primitive. It is restricted to a
+domain controller, requires an explicitly configured Enrollment Agent
+thumbprint and certificate template name, validates that the CSR digest matches
+the phone-approved digest supplied by its caller, verifies the Enrollment Agent
+certificate chain and revocation status, and creates a signed CMC/EOBO request.
+It does **not** submit the request, install a certificate, or export the
+Enrollment Agent private key. Its JSON output contains the signed CMC request;
+handle it as an enrollment artifact and keep it out of shared logs.
+
+The surrounding broker is not wired to call this helper yet. Before integration,
+the broker must itself prove the approval is still valid, bind the exact CSR
+digest to the approved account SID and `DOMAIN\user` RequesterName, enforce a
+single-use issuance transaction, and allow only an explicitly configured
+template. The helper's parameters are not an authorization mechanism. Never
+distribute the Enrollment Agent certificate or this helper to workstation
+clients.
+
+EOBO changes the subject semantics: the CA uses the CMC `RequesterName` value
+to construct the issued certificate subject. Because this pilot's PKCS#10 CSR
+uses a randomized temporary subject, the issued-certificate validator therefore
+binds the certificate to the CSR by public key and to the approved account by
+the AD SID extension; it does not compare the resulting subject to the temporary
+CSR subject. The requester name is not treated as the strong identity binding.
+See [Microsoft's EOBO request format](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/92a48c37-2928-4800-9e91-40aad6a9bc3b),
+[the CertEnroll EOBO sample](https://learn.microsoft.com/en-us/windows/win32/seccertenroll/enrolleobocmc),
+and [the `ISignerCertificate.Initialize` parameters](https://learn.microsoft.com/en-us/windows/win32/api/certenroll/nf-certenroll-isignercertificate-initialize).
+
 ## Broker-side request validation
 
 `infra/thessley_ad_service/certificate_requests.py` contains the broker's strict
