@@ -109,12 +109,61 @@ reviewed on a disposable CA.
 It uses Microsoft's `ICertRequest::Submit` CMC/base64 flags and accepts only
 the issued or under-submission dispositions ([API reference](https://learn.microsoft.com/en-us/windows/win32/api/certcli/nf-certcli-icertrequest-submit)).
 
-The surrounding broker is not wired to call this helper yet. Before integration,
-the broker must itself prove the approval is still valid, bind the exact CSR
-digest to the approved account SID and `DOMAIN\user` RequesterName, enforce a
-single-use issuance transaction, and allow only an explicitly configured
-template. The helper's parameters are not an authorization mechanism. Never
-distribute the Enrollment Agent certificate or this helper to workstation
+### Manual service handoff (Windows DC only)
+
+The Windows admin CLI exposes the private claim and response-validation gates
+for an operator-run lab transaction. Run these only in an elevated shell on
+the DC hosting the Thessley AD service:
+
+```powershell
+& "$env:ProgramFiles\ThessleyAD\thessley-ad-admin.cmd" certificate-claim --machine-id 'MACHINE-ID' --request-id 'REQUEST-ID'
+```
+
+This consumes the approval once and writes `issuer-job.json` plus the exact DER
+CSR beneath the protected `%ProgramData%\ThessleyAD\certificate-issuance` tree.
+The job includes the approved SID and requester, so do not copy it to a
+workstation or shared folder. A crash after claim is fail-closed; start a fresh
+phone approval rather than replaying the job. The CSR and certificate result
+have a 10-minute retention window, so this manual path supports only a CA
+response issued immediately. Pending CA requests are not yet retrievable
+through this handoff.
+
+On the DC, use the claimed job values with `build-eobo-cmc.ps1`, then submit
+that output with `submit-eobo-cmc.ps1`. Supply the Enrollment Agent thumbprint,
+CA configuration, issuer certificate, issuer SHA-256, and template OID from
+your reviewed lab configuration; no domain, CA, thumbprint, or OID is embedded
+in these commands. For a CA configured to issue immediately, this PowerShell
+snippet builds and submits the exact claimed CSR and writes only an issued
+leaf certificate to a new DER file:
+
+```powershell
+$job = Get-Content -LiteralPath 'ISSUER-JOB.json' -Raw | ConvertFrom-Json
+$cmc = & '.\build-eobo-cmc.ps1' -CsrPath $job.csr_path -ExpectedCsrSha256 $job.certificate_request_sha256 -ThessleyRequestId $job.request_id -MachineId $job.machine_id -RequesterName $job.requester_name -TemplateName $job.certificate_template -EnrollmentAgentThumbprint 'ENROLLMENT-AGENT-THUMBPRINT'
+$result = $cmc | & '.\submit-eobo-cmc.ps1' -CAConfig 'COMPUTER\CA-NAME' -TemplateName $job.certificate_template | ConvertFrom-Json
+if ($result.result -ne 'issued') { throw "CA did not immediately issue the request (result: $($result.result), CA request: $($result.ca_request_id)). Do not import it." }
+$issuedPath = Join-Path (Split-Path -Parent 'ISSUER-JOB.json') 'issued.cer.der'
+$leaf = [Convert]::FromBase64String($result.certificate_der_b64)
+$stream = [IO.File]::Open($issuedPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+try { $stream.Write($leaf, 0, $leaf.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+```
+
+Proceed only when the CA reports `issued`. Import the leaf through the
+validation gate:
+
+```powershell
+& "$env:ProgramFiles\ThessleyAD\thessley-ad-admin.cmd" certificate-import --machine-id 'MACHINE-ID' --request-id 'REQUEST-ID' --certificate 'ISSUED-CERTIFICATE.der' --issuer-certificate 'PINNED-ISSUER.cer' --issuer-sha256 'ISSUER-DER-SHA256' --template-oid 'TEMPLATE-OID'
+```
+
+The importer checks the protected job, CSR digest and profile, then calls
+`complete_certificate_issuance`, which independently verifies the certificate
+signature, CSR public key, SID extension, template OID, validity, and direct
+issuer pin before making the result fetchable by that machine. A failed check
+does not store the certificate. A successful import removes the temporary
+issuer job. This remains manual lab plumbing: it does not automatically submit
+to AD CS, install the certificate on the workstation, or enable logon.
+
+The helpers' parameters are not an authorization mechanism. Never distribute
+the Enrollment Agent certificate or these issuer helpers to workstation
 clients.
 
 EOBO changes the subject semantics: the CA uses the CMC `RequesterName` value
