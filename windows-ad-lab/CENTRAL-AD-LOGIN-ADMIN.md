@@ -1,33 +1,37 @@
 # Central AD login and DC management site
 
-## Current state
+## Current state and in-progress implementation
 
 The domain controller already runs a small Python HTTPS API on TCP 47810. It
 uses Windows LDAP/SSPI to read AD and stores machine registrations, login
 challenges, and phone public keys in the protected
-`C:\ProgramData\ThessleyAD\state.sqlite3` database. The API is not an admin
-website. Today, phone credentials are scoped to both a Windows machine and an
-AD SID, so an enrollment on one PC does not authorize the same account on
-another PC.
+`C:\ProgramData\ThessleyAD\state.sqlite3` database. The source now adds an
+`/admin/` page on the same TLS listener, SID-wide AD enrollments, and Android
+matching for account-wide keys. These changes still need a signed Android
+build and deployment to the disposable DC/client before they are active in
+the lab.
 
 The local Thessley Windows sign-in provider is a separate path. Keep its local
 account keys and offline behavior unchanged.
 
 ## Intended design
 
-Add a small Python management website hosted by the DC, separate from the
-machine API routes. The DC is the authority for AD-account enrollment, phone
-key status, and the group policy used by AD QR sign-in.
+The Python management website is hosted by the DC at `/admin/`, separate from
+the machine API paths but on the same TLS listener and port. This avoids a
+second listener/firewall port. The DC is the authority for AD-account
+enrollment, phone-key status, and the group policy used by AD QR sign-in.
 
 The site should let an authorized administrator:
 
-- Search/browse enabled AD users and show their relevant group memberships.
+- Search/browse enabled AD users and show whether the configured sign-in group
+  authorizes them.
 - Start phone enrollment for a selected AD user, display the Thessley QR and
   matching short pairing code, and confirm the code after scanning.
 - List the enrolled phone labels and enrollment dates for that AD user.
 - Revoke an AD user's phone credential centrally. Revocation must take effect
   on the next approval attempt from any enrolled workstation.
-- View which AD groups grant QR sign-in and workstation administrator rights.
+- Show the currently configured Thessley sign-in group. Mapping AD groups to
+  workstation administrator rights remains a separate AD/GPO task.
 
 AD user and group creation/membership changes remain in Active Directory's
 normal management tools. The Thessley site manages Thessley enrollment and
@@ -59,33 +63,36 @@ a key at the DC blocks it for all PCs without visiting each PC.
 
 - Authenticate administrators with their domain identity; do not add a shared
   admin password or trust a username supplied by the browser.
-- Require membership in a separately configured AD management group. Do not
-  assume that the workstation QR sign-in group is also allowed to administer
-  the DC service.
+- The first implementation requires a domain account in the DC's built-in
+  Administrators group. A dedicated service-management group is a later
+  hardening option; the workstation QR sign-in group does not grant web-admin
+  access.
 - Serve HTTPS with the DC service certificate and restrict the management
   listener in Windows Firewall to approved management networks.
 - Use short idle sessions, secure/HTTP-only cookies, CSRF protection, output
   escaping, request-size limits, and no-store caching for enrollment pages.
 - Audit administrator, target SID, action, timestamp, and result. Never log
   passwords, QR challenge secrets, phone signatures, or private key material.
-- Keep the existing signed machine API on TCP 47810 compatible while the admin
-  UI is added. Use a distinct listener/route and explicit firewall rule for
-  browser management.
+- Keep the existing signed machine API on TCP 47810 compatible. The admin UI
+  uses separate `/admin/` paths on that HTTPS server, sharing its existing
+  firewall scope and TLS certificate.
 
 ## Implementation sequence
 
-1. Add a SID-scoped central phone-key registry with a migration that preserves
-   existing machine-scoped records. Verify lookup precedence and revocation
-   behavior before enabling it for sign-in.
-2. Add DC-initiated enrollment routes using the existing Thessley phone
-   enrollment signature format and pairing-code confirmation. Keep enrollment
-   short-lived, single-use, and tied to the selected AD SID.
-3. Add the authenticated Python admin site for directory browsing, enrollment,
-   key listing/revocation, and group-policy visibility.
-4. Update the Windows AD tile client to request and poll the DC centrally;
-   leave the local account provider untouched.
-5. Test migration, approval, cross-PC use, revocation, offline behavior, and
-   rollback on the disposable Windows lab before deploying to other PCs.
+1. Source now supports a SID-scoped central phone-key binding while preserving
+   machine-scoped records. Central keys are accepted only for that SID; every
+   approval remains bound to its requesting machine.
+2. Source now adds a DC admin page for enabled-user listing, centrally scoped
+   phone enrollment with QR/pairing confirmation, key listing, and revocation.
+   Login validates a domain account with Windows `LogonUser` and requires
+   membership in the DC Administrators group; the password is not stored.
+3. The Android source now recognizes central AD keys across paired PCs and
+   labels their scope. The release version was incremented; build, install,
+   and cross-PC verification remain.
+4. Deploy the service and signed Android build to the disposable lab, then
+   verify migration, approval, cross-PC use, revocation, offline behavior, and
+   recovery before deploying to other PCs.
 
-Do not switch existing AD sign-in to global keys until the central enrollment
-and authorization paths are implemented and verified together.
+Do not install these changes on production PCs until the web login, enrollment,
+cross-PC approval, revocation, and local-account recovery paths are verified
+together in the disposable lab.

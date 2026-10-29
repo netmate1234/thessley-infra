@@ -29,11 +29,15 @@ $installed = & $python -I -c 'import platform; print(platform.python_version())'
 if ($LASTEXITCODE -ne 0 -or $installed.Trim() -ne $version) {
     throw "Expected Python $version; found '$($installed.Trim())'."
 }
-Write-Host 'Installing pinned cryptography dependency...'
-& $python -I -m pip install --disable-pip-version-check --no-warn-script-location --only-binary=:all: 'cryptography==46.0.5'
-if ($LASTEXITCODE -ne 0) { throw 'Pinned cryptography dependency installation failed.' }
+Write-Host 'Installing pinned Thessley AD service dependencies...'
+& $python -I -m pip install --disable-pip-version-check --no-warn-script-location --only-binary=:all: 'cryptography==46.0.5' 'qrcode==8.2'
+if ($LASTEXITCODE -ne 0) { throw 'Pinned Thessley AD service dependency installation failed.' }
 $cryptoVersion = & $python -I -c 'import cryptography; print(cryptography.__version__)'
 if ($LASTEXITCODE -ne 0 -or $cryptoVersion.Trim() -ne '46.0.5') {
     throw "Python dependency verification failed (cryptography $($cryptoVersion.Trim()))."
 }
-Write-Host "Python $version and cryptography $($cryptoVersion.Trim()) verified."
+$qrVersion = & $python -I -c 'from importlib.metadata import version; print(version("qrcode"))'
+if ($LASTEXITCODE -ne 0 -or $qrVersion.Trim() -ne '8.2') {
+    throw "Python dependency verification failed (qrcode $($qrVersion.Trim()))."
+}
+Write-Host "Python $version, cryptography $($cryptoVersion.Trim()), and qrcode $($qrVersion.Trim()) verified."

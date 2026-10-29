@@ -152,6 +152,7 @@ def main() -> int:
         from .machine_registry import MachineRegistry
         from .phone_registry import PhoneRegistry
         from .replay_store import SQLiteReplayStore
+        from .admin_web import AdminWeb
 
         registry = MachineRegistry(STATE_PATH)
         phones = PhoneRegistry(STATE_PATH)
@@ -162,13 +163,22 @@ def main() -> int:
             registry, ReplayGuard(replay_store.claim), directory, config["allowed_group_sids"],
             challenges, config["public_host"], certificate_pin, phones,
         )
-        server = make_server((config["bind_address"], PORT), str(CERT_PATH), str(KEY_PATH), routes)
+        admin_web = AdminWeb(
+            directory=directory,
+            phones=phones,
+            allowed_group_sids=config["allowed_group_sids"],
+            authority=config["authority"],
+            public_host=config["public_host"],
+            certificate_fingerprint=certificate_pin,
+        )
+        server = make_server((config["bind_address"], PORT), str(CERT_PATH), str(KEY_PATH), routes, admin_web)
         stopped = threading.Event()
         for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
             if sig is not None:
                 signal.signal(sig, lambda _sig, _frame: stopped.set())
         logging.info("AD API ready at https://%s:%d/ (TLS SHA-256 %s)",
                      config["public_host"], PORT, certificate_pin)
+        logging.info("AD administrator site ready at https://%s:%d/admin/", config["public_host"], PORT)
         thread = threading.Thread(target=server.serve_forever, name="thessley-ad-https", daemon=True)
         thread.start()
         try:

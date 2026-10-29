@@ -22,9 +22,13 @@ _PRINCIPAL_ID = re.compile(r"^[a-f0-9]{64}$")
 _CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 _LABEL = re.compile(r"^[^\x00-\x1f\x7f]{1,64}$")
 
+# Reserved binding for a phone enrolled centrally for an AD account. It is not
+# a real workstation ID and is never accepted as a machine-auth identity.
+CENTRAL_AD_MACHINE_ID = "0" * 32
+
 
 class PhoneRegistry:
-    """Store phone P-256 public keys bound to one AD SID and one machine.
+    """Store phone P-256 public keys bound to one AD SID and a machine scope.
 
     ``enroll`` is a privileged internal operation. Its caller must first
     complete the phone's signed enrollment and the human pairing-code check;
@@ -85,9 +89,18 @@ class PhoneRegistry:
         finish_private_sqlite(self.path)
 
     def create_enrollment(self, *, machine_id: str, sid: str, username: str, authority: str,
-                          lifetime_seconds: int = 120, now: float | None = None) -> dict | None:
-        """Create a short-lived phone-key enrollment bound to one machine and AD SID."""
+                          lifetime_seconds: int = 120, now: float | None = None,
+                          central_ad: bool = False) -> dict | None:
+        """Create a short-lived enrollment, machine-scoped or centrally AD-scoped.
+
+        ``central_ad`` is for the separately authenticated DC administrator
+        flow only. The public machine API must always use the default False.
+        """
         if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
+            return None
+        if not isinstance(central_ad, bool):
+            return None
+        if central_ad and machine_id != CENTRAL_AD_MACHINE_ID:
             return None
         try:
             principal_id = principal_id_from_sid(sid)
@@ -108,12 +121,13 @@ class PhoneRegistry:
         try:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute("DELETE FROM phone_enrollments WHERE expires_at <= ?", (current,))
-            machine = connection.execute(
-                "SELECT 1 FROM machines WHERE machine_id = ? AND revoked_at IS NULL", (machine_id,)
-            ).fetchone()
-            if machine is None:
-                connection.execute("ROLLBACK")
-                return None
+            if not central_ad:
+                machine = connection.execute(
+                    "SELECT 1 FROM machines WHERE machine_id = ? AND revoked_at IS NULL", (machine_id,)
+                ).fetchone()
+                if machine is None:
+                    connection.execute("ROLLBACK")
+                    return None
             connection.execute(
                 """INSERT INTO phone_enrollments
                    (request_id, machine_id, principal_id, username, authority, nonce, expires_at, status)
@@ -132,6 +146,24 @@ class PhoneRegistry:
             return None
         finally:
             connection.close()
+
+    def create_central_ad_enrollment(self, *, sid: str, username: str, authority: str,
+                                     lifetime_seconds: int = 120,
+                                     now: float | None = None) -> dict | None:
+        """Create an enrollment for an AD identity usable on every paired PC.
+
+        Callers must authenticate a DC administrator and independently verify
+        the target account in AD before invoking this method.
+        """
+        return self.create_enrollment(
+            machine_id=CENTRAL_AD_MACHINE_ID,
+            sid=sid,
+            username=username,
+            authority=authority,
+            lifetime_seconds=lifetime_seconds,
+            now=now,
+            central_ad=True,
+        )
 
     def submit_enrollment(self, *, request_id: str, public_key_spki_b64: str, label: str,
                           timestamp: int, signature_b64: str, now: float | None = None) -> bool:
@@ -378,7 +410,45 @@ class PhoneRegistry:
                      AND p.revoked_at IS NULL AND m.revoked_at IS NULL""",
                 (credential_id, machine_id, principal_id),
             ).fetchone()
+            if row is None:
+                # A centrally enrolled AD account key is valid from any
+                # enrolled workstation, but only for the exact AD SID hash.
+                row = connection.execute(
+                    """SELECT public_key_spki_b64 FROM phone_credentials
+                       WHERE credential_id = ? AND machine_id = ? AND principal_id = ?
+                         AND revoked_at IS NULL""",
+                    (credential_id, CENTRAL_AD_MACHINE_ID, principal_id),
+                ).fetchone()
             return None if row is None else str(row[0])
+        finally:
+            connection.close()
+
+    def list_for_principal(self, principal_id: str) -> list[dict]:
+        """List active phone-key metadata for one AD SID hash, without key material."""
+        if not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id):
+            return []
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """SELECT p.credential_id, p.machine_id, m.machine_name, p.label, p.enrolled_at
+                   FROM phone_credentials AS p
+                   LEFT JOIN machines AS m ON m.machine_id = p.machine_id
+                   WHERE p.principal_id = ? AND p.revoked_at IS NULL
+                     AND (p.machine_id = ? OR (m.machine_id IS NOT NULL AND m.revoked_at IS NULL))
+                   ORDER BY p.enrolled_at, p.credential_id""",
+                (principal_id, CENTRAL_AD_MACHINE_ID),
+            ).fetchall()
+            return [
+                {
+                    "credential_id": str(credential),
+                    "machine_id": str(machine_id),
+                    "machine_name": "All enrolled PCs" if machine_id == CENTRAL_AD_MACHINE_ID else str(machine_name or ""),
+                    "central": machine_id == CENTRAL_AD_MACHINE_ID,
+                    "label": str(label),
+                    "enrolled_at": int(enrolled),
+                }
+                for credential, machine_id, machine_name, label, enrolled in rows
+            ]
         finally:
             connection.close()
 

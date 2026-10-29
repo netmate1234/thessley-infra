@@ -7,6 +7,7 @@ the same route logic can be hosted by an isolated Windows lab service later.
 from __future__ import annotations
 
 import json
+import logging
 import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,10 +38,19 @@ def _auth_headers(headers) -> dict[str, str]:
 
 
 def make_server(address: tuple[str, int], certfile: str, keyfile: str,
-                routes: dict[str, "RawBodyRoute"]) -> ThreadingHTTPServer:
+                routes: dict[str, "RawBodyRoute"], admin_web=None) -> ThreadingHTTPServer:
     """Create a bounded POST-only JSON server with TLS 1.2 or newer."""
 
     class Handler(BaseHTTPRequestHandler):
+        def _dispatch_admin(self, method: str, body: bytes):
+            try:
+                return admin_web.handle(method, self.path, self.headers, body, self.client_address[0])
+            except Exception:
+                logging.getLogger("thessley.ad.admin").exception("Administrator site request failed")
+                return admin_web._response(500, admin_web._page(
+                    "Request failed", '<section class="card error">The request could not be completed. Try again.</section>'
+                ))
+
         def _reply(self, status: int, body: dict) -> None:
             raw = json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
             self.close_connection = True
@@ -54,12 +64,50 @@ def make_server(address: tuple[str, int], certfile: str, keyfile: str,
             self.end_headers()
             self.wfile.write(raw)
 
+        def _reply_web(self, response) -> None:
+            status, headers, raw = response
+            self.close_connection = True
+            self.send_response(status)
+            for name, value in headers:
+                self.send_header(name, value)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(raw)
+
+        def do_GET(self) -> None:
+            if admin_web is not None:
+                response = self._dispatch_admin("GET", b"")
+                if response is not None:
+                    self._reply_web(response)
+                    return
+            self._reply(405, {"result": "error", "message": "POST required."})
+
         def do_POST(self) -> None:
             try:
                 path = urlsplit(self.path)
             except ValueError:
                 self._reply(400, {"result": "error", "message": "Invalid request path."})
                 return
+            if admin_web is not None and path.path.startswith("/admin"):
+                lengths = self.headers.get_all("Content-Length", [])
+                if (len(lengths) != 1 or self.headers.get("Transfer-Encoding") is not None):
+                    self._reply(400, {"result": "error", "message": "Invalid request body."})
+                    return
+                try:
+                    length = int(lengths[0])
+                except (TypeError, ValueError):
+                    length = 0
+                if not 1 <= length <= MAX_BODY_BYTES:
+                    self._reply(400, {"result": "error", "message": "Invalid request body."})
+                    return
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    self._reply(400, {"result": "error", "message": "Invalid request body."})
+                    return
+                response = self._dispatch_admin("POST", raw)
+                if response is not None:
+                    self._reply_web(response)
+                    return
             route = routes.get(path.path) if not path.query and not path.fragment else None
             if route is None:
                 self._reply(404, {"result": "error", "message": "Not found."})
@@ -95,9 +143,6 @@ def make_server(address: tuple[str, int], certfile: str, keyfile: str,
             except Exception:
                 status, reply = 500, {"result": "error", "message": "Could not process this request."}
             self._reply(status, reply)
-
-        def do_GET(self) -> None:
-            self._reply(405, {"result": "error", "message": "POST required."})
 
         def log_message(self, _format: str, *_args) -> None:
             return

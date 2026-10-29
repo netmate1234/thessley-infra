@@ -16,6 +16,11 @@ path.
   approval requests, revocation, and audit. It is independent of Drupal and
   the local-login PAM database. Its lab runtime queries AD through AD Web
   Services as LocalSystem on the DC.
+- **The DC-hosted Python admin page** manages central AD-account phone
+  enrollment and revocation. It is served under `/admin/` on the existing
+  HTTPS API listener (TCP 47810), requires a domain account that is a member
+  of the DC's built-in Administrators group, and does not create or edit AD
+  accounts or group membership.
 - **Windows client agent and credential provider** identify the selected
   principal by SID, consult the Thessley service, and invoke a Windows
   certificate provider for the KDC logon. They do not send or cache the
@@ -139,8 +144,7 @@ pinning and a unique machine credential for every Windows computer:
   empty request body with its pinned machine key. It accepts no caller-selected
   LDAP filters or groups.
 - `POST /thessley-ad/v1/directory/phone-keys` — list active phone-key metadata
-  for the authenticated machine only. The response excludes public and private
-  key material.
+  for the authenticated machine only. The response excludes key material.
 - `POST /thessley-ad/v1/directory/phone-keys/revoke` — revoke a key only when
   it is bound to the authenticated machine. The Windows admin UI requires a
   fresh administrator phone approval before calling this endpoint.
@@ -260,9 +264,26 @@ Phone and client TCP access to port `47810` was verified. The Windows firewall
 allows only `192.168.1.0/24` on that port. The installer does not register or
 modify any Windows sign-in tile.
 
+The updated DC admin page will be at `https://192.168.1.79:47810/admin/` after
+the updated service package is installed. Sign in with a domain username and
+password for an account in the DC's built-in Administrators group (normally
+Domain Admins). It lists enabled AD accounts and sign-in eligibility, starts
+centrally scoped phone enrollment, shows pairing codes for confirmation, and
+revokes phone keys. The service does not store the administrator password.
+Use a certificate trusted by the admin workstation before entering
+credentials; the initial lab certificate is self-signed and its fingerprint
+is printed by the installer. The currently deployed instance must be updated
+before this page is available.
+
+Central AD enrollment creates a phone key tied to the user's SID, not one
+workstation. That key can approve the same AD account on every machine paired
+with this DC; each individual approval remains bound to its requesting machine
+and one-use challenge. Existing machine-scoped enrollments are preserved and
+continue working. Local-account QR keys and offline sign-in remain separate.
+
 From an elevated PowerShell session on the DC, run the package's
 `install-windows-service.ps1`. It installs a pinned Python runtime and the
-`cryptography` wheel, ACL-protects the service/config/database with SYSTEM and
+`cryptography` and QR-rendering wheels, ACL-protects the service/config/database with SYSTEM and
 Administrators access, installs a boot task, and adds the scoped firewall
 rule. It retains any existing `service.json`; review its group SID and host
 before restarting after edits. The installer prints the certificate SHA-256

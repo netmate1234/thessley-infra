@@ -216,7 +216,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the local admin command fil
     }
     throw $failure
 }
-Write-Host "Installed the isolated Thessley AD API task. Test https://$BindAddress`:47810 from the phone and client."
+Write-Host "Installed the Thessley AD API and management site. Test https://$BindAddress`:47810 from the phone and client."
+Write-Host "Administrator site: https://$BindAddress`:47810/admin/ (sign in as a domain controller administrator)."
 Write-Host "TLS certificate SHA-256: $($certificatePin.Trim())"
 Write-Host "Issue a machine code with: `"$adminCommand`" issue-machine-code"
 Write-Host "AD allow group: $groupName ($AllowedGroupSid)"
