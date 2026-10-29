@@ -6,10 +6,11 @@ The domain controller already runs a small Python HTTPS API on TCP 47810. It
 uses Windows LDAP/SSPI to read AD and stores machine registrations, login
 challenges, and phone public keys in the protected
 `C:\ProgramData\ThessleyAD\state.sqlite3` database. The source now adds an
-`/admin/` page on the same TLS listener, SID-wide AD enrollments, and Android
-matching for account-wide keys. These changes still need a signed Android
-build and deployment to the disposable DC/client before they are active in
-the lab.
+`/admin/` page on the same TLS listener and SID-wide AD enrollments. The
+signed Android 0.1.22 release has been installed on the connected phone and
+recognizes account-wide keys. The updated DC service is committed, but has
+not yet been deployed; the new management page is not live until that update
+is installed on the disposable DC.
 
 The local Thessley Windows sign-in provider is a separate path. Keep its local
 account keys and offline behavior unchanged.
@@ -86,12 +87,12 @@ a key at the DC blocks it for all PCs without visiting each PC.
    phone enrollment with QR/pairing confirmation, key listing, and revocation.
    Login validates a domain account with Windows `LogonUser` and requires
    membership in the DC Administrators group; the password is not stored.
-3. The Android source now recognizes central AD keys across paired PCs and
-   labels their scope. The release version was incremented; build, install,
-   and cross-PC verification remain.
-4. Deploy the service and signed Android build to the disposable lab, then
-   verify migration, approval, cross-PC use, revocation, offline behavior, and
-   recovery before deploying to other PCs.
+3. The Android 0.1.22 source recognizes central AD keys across paired PCs and
+   labels their scope. It was built with the existing release signing setup
+   and installed on the connected phone without clearing app data.
+4. Deploy the updated service to the disposable lab, then verify enrollment,
+   cross-PC approval, revocation, offline behavior, and recovery before
+   deploying to other PCs.
 
 Do not install these changes on production PCs until the web login, enrollment,
 cross-PC approval, revocation, and local-account recovery paths are verified
