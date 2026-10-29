@@ -534,6 +534,57 @@ def certificate_request_sha256(path: str) -> str:
     return hashlib.sha256(der).hexdigest()
 
 
+def submit_approved_certificate_request(request_id: str, path: str, expected_sha256: str,
+                                        expected_template: str) -> dict:
+    """Send the exact approved CSR once, after phone approval was delivered."""
+    if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+        raise AgentError("Invalid AD certificate request ID.")
+    if not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256):
+        raise AgentError("Invalid approved CSR digest.")
+    if not isinstance(expected_template, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", expected_template):
+        raise AgentError("Invalid approved certificate template.")
+    if not isinstance(path, str) or not path or len(path) > 4096:
+        raise AgentError("Select the local CSR used to start this approval.")
+    try:
+        with open(path, "rb") as stream:
+            data = stream.read(64 * 1024 + 1)
+    except OSError as exc:
+        raise AgentError("The certificate request file could not be read.") from exc
+    if not data or len(data) > 64 * 1024:
+        raise AgentError("The certificate request file is empty or too large.")
+    try:
+        if data.lstrip().startswith(b"-----BEGIN CERTIFICATE REQUEST-----"):
+            request = x509.load_pem_x509_csr(data)
+        else:
+            request = x509.load_der_x509_csr(data)
+        if (not request.is_signature_valid
+                or request.signature_algorithm_oid.dotted_string != "1.2.840.113549.1.1.11"
+                or not isinstance(request.public_key(), RSAPublicKey)
+                or request.public_key().key_size != 3072):
+            raise AgentError("The CSR must have a valid SHA-256 RSA signature and a 3072-bit RSA key.")
+        der = request.public_bytes(serialization.Encoding.DER)
+    except AgentError:
+        raise
+    except (ValueError, TypeError) as exc:
+        raise AgentError("The file is not a valid PKCS#10 certificate request.") from exc
+    if (not 256 <= len(der) <= 32 * 1024
+            or not secrets.compare_digest(hashlib.sha256(der).hexdigest(), expected_sha256)):
+        raise AgentError("The CSR file differs from the request approved on the phone.")
+    result = _signed_post("/thessley-ad/v1/requests/certificate_csr", {
+        "request_id": request_id,
+        "csr_der_b64": base64.b64encode(der).decode("ascii"),
+    })
+    if (result.get("result") != "csr_verified"
+            or result.get("request_id") != request_id
+            or result.get("certificate_request_sha256") != expected_sha256
+            or result.get("certificate_template") != expected_template
+            or not isinstance(result.get("public_key_spki_sha256"), str)
+            or not _SHA256.fullmatch(result["public_key_spki_sha256"])
+            or result.get("issuer_status") != "not_configured"):
+        raise AgentError("The AD service did not confirm the approved CSR.")
+    return result
+
+
 def poll_login(request_id: str, cancel, say=lambda _message: None, timeout: int = 95,
                certificate_request_sha256: str | None = None,
                certificate_template: str | None = None) -> bool:

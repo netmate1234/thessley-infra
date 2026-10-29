@@ -202,7 +202,8 @@ def _approval_poll(request_id: str, timeout: int) -> int:
     return 0 if approved else 1
 
 
-def _certificate_approval_poll(request_id: str, csr_sha256: str, template: str, timeout: int) -> int:
+def _certificate_approval_poll(request_id: str, csr_sha256: str, template: str,
+                               csr_file: str, timeout: int) -> int:
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
         raise ValueError("The approval request ID is malformed.")
     if not isinstance(csr_sha256, str) or not re.fullmatch(r"[a-f0-9]{64}", csr_sha256):
@@ -213,7 +214,11 @@ def _certificate_approval_poll(request_id: str, csr_sha256: str, template: str, 
         request_id, threading.Event(), say=lambda _message: None, timeout=timeout,
         certificate_request_sha256=csr_sha256, certificate_template=template,
     )
-    print(json.dumps({"status": "approved" if approved else "not_approved"}), flush=True)
+    if not approved:
+        print(json.dumps({"status": "not_approved"}), flush=True)
+        return 1
+    receipt = ad_agent.submit_approved_certificate_request(request_id, csr_file, csr_sha256, template)
+    print(json.dumps({"status": "approved_csr_verified", **receipt}, separators=(",", ":")), flush=True)
     return 0 if approved else 1
 
 
@@ -278,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     certificate_poll.add_argument("--request-id", required=True)
     certificate_poll.add_argument("--csr-sha256", required=True)
+    certificate_poll.add_argument("--csr-file", required=True,
+                                  help="same local PEM/DER CSR used for certificate-approval-start")
     certificate_poll.add_argument("--template", required=True)
     certificate_poll.add_argument("--timeout", type=int, default=175, choices=range(1, 176))
     args = parser.parse_args(argv)
@@ -329,7 +336,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "approval-poll":
             return _approval_poll(args.request_id, args.timeout)
         if args.command == "certificate-approval-poll":
-            return _certificate_approval_poll(args.request_id, args.csr_sha256, args.template, args.timeout)
+            return _certificate_approval_poll(
+                args.request_id, args.csr_sha256, args.template, args.csr_file, args.timeout,
+            )
     except (ad_agent.AgentError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

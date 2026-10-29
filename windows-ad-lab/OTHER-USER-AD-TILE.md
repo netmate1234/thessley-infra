@@ -253,6 +253,13 @@ The CSR helper uses the Windows software KSP and does not claim TPM/TEE
 protection. See `ad-prototype/certificate-pilot/README.md` for its cleanup
 contract and remaining CA/KDC work.
 
+The isolated certificate poll command can now submit the same DER CSR after
+phone approval is delivered. The enrolled machine signs the upload; the AD
+service binds it to that machine and approved challenge, checks the digest and
+CSR profile, and stores the public request once for later issuer work. There
+is no retrieval or issuance endpoint yet, and the certificate method remains
+unavailable for sign-in.
+
 The paired-machine API also has a generic account-resolution operation for a
 Windows **Other user** tile. It accepts a SAM account name (optionally
 `DOMAIN\\name`), resolves it through AD, checks the configured workstation

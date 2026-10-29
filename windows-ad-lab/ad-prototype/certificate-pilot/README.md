@@ -33,26 +33,38 @@ record, then deletes the CSR and manifest. It retains the manifest if key
 deletion fails. Automatic cleanup after successful sign-in and a scheduled
 expiry sweep are not yet integrated.
 
-The returned CSR digest can be passed to the existing isolated client:
+Start the isolated approval using the CSR file so the local client computes the
+digest from canonical DER:
 
 ```powershell
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' certificate-approval-start --sid 'DOMAIN-SID' --csr-file 'CSR-PATH'
 ```
 
-The command will refuse because the certificate method is intentionally absent
-from selectable policy. This keeps the proof path inert until the CA and KDC
-gates below are implemented.
+After the phone approves, submit the same request file while polling:
+
+```powershell
+& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' certificate-approval-poll --request-id 'REQUEST-ID' --csr-sha256 'APPROVED-DER-SHA256' --template 'CONFIGURED-TEMPLATE' --csr-file 'CSR-PATH'
+```
+
+The paired machine signs the upload. The service accepts it only once, for the
+matching machine and approved challenge, revalidates the exact DER request, and
+stores it once with the challenge record. An exact retry returns the same
+verification receipt; a different CSR is rejected. The CSR is public material, but
+the service database remains service-owned and ACL-protected. No endpoint can
+retrieve it or submit it to AD CS yet; this upload currently ends with a
+validation receipt.
+Certificate issuance and Windows logon remain unavailable.
 
 ## Broker-side request validation
 
-`infra/thessley_ad_service/certificate_requests.py` contains a pure validation
-helper for the future broker boundary. Before any CA operation is added, callers
-must pass the exact DER bytes and the digest bound into phone approval to
-`validate_approved_csr`. It enforces the size bound, digest equality, valid
+`infra/thessley_ad_service/certificate_requests.py` contains the broker's strict
+CSR validation helper, called by the upload route. It enforces the size bound,
+digest equality, valid
 PKCS#10 signature, RSA-3072/SHA-256 profile, one random temporary CN, and no
 requested extensions. It returns only request fingerprints and metadata; it
 does not contact AD CS, authorize a SID, consume approval, or issue a
-certificate. It is not yet wired to an HTTP route, by design.
+certificate. The upload route stores the public CSR once against its approved
+challenge. It has no retrieval endpoint and cannot issue certificates.
 
 ## Still required
 
@@ -60,9 +72,6 @@ certificate. It is not yet wired to an HTTP route, by design.
   Kerberos certificate logon.
 - A broker-side, tightly restricted Enrollment Agent identity and signed CMC
   Enrollment-on-Behalf-of request.
-- A CSR upload route that verifies the challenge is still approved and
-  unexpired, binds the uploaded DER bytes to the approved digest, and invokes
-  the strict CSR helper above before any CA operation.
 - Issued-certificate, EKU, template, issuer, validity, and strong SID mapping
   checks on both broker and workstation.
 - One-use delivery of the certificate to the originating machine, followed by

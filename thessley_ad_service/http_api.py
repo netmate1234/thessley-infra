@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from dataclasses import dataclass
 from collections.abc import Callable
@@ -26,6 +28,7 @@ PRINCIPAL_RESOLVE_NAME_PATH = "/thessley-ad/v1/principals/resolve-name"
 LOGIN_START_PATH = "/thessley-ad/v1/requests"
 PHONE_RESPONSE_PATH = "/thessley-ad/v1/requests/respond"
 LOGIN_RESULT_PATH = "/thessley-ad/v1/requests/result"
+CERTIFICATE_CSR_SUBMIT_PATH = "/thessley-ad/v1/requests/certificate_csr"
 PHONE_ENROLL_START_PATH = "/thessley-ad/v1/enrollments"
 PHONE_ENROLL_RESPONSE_PATH = "/thessley-ad/v1/enrollments/respond"
 PHONE_ENROLL_STATUS_PATH = "/thessley-ad/v1/enrollments/status"
@@ -481,6 +484,54 @@ def login_result_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
     return RawBodyRoute(handle)
 
 
+def certificate_csr_submit_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                                 challenges: "ChallengeStore"):
+    """Accept one verified CSR from the machine after its phone approval."""
+    from .certificate_requests import CertificateRequestError
+
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {
+            "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
+        }
+        if (set(auth_headers) != expected or set(body) != {"request_id", "csr_der_b64"}
+                or not isinstance(body.get("request_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", body["request_id"])
+                or not isinstance(body.get("csr_der_b64"), str)
+                or not 344 <= len(body["csr_der_b64"]) <= 43692):
+            return 400, {"result": "error", "message": "Invalid certificate request upload."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(
+            machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
+            auth_headers["x-thessley-signature"], CERTIFICATE_CSR_SUBMIT_PATH, raw_body, registry, replay_guard,
+        ):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        try:
+            encoded = body["csr_der_b64"].encode("ascii")
+            der = base64.b64decode(encoded, validate=True)
+            if base64.b64encode(der) != encoded:
+                raise ValueError("noncanonical base64")
+        except (UnicodeEncodeError, ValueError, binascii.Error):
+            return 400, {"result": "error", "message": "Invalid certificate request encoding."}
+        try:
+            verified = challenges.accept_certificate_request(
+                machine_id=machine_id, request_id=body["request_id"], der=der,
+            )
+        except CertificateRequestError:
+            return 400, {"result": "error", "message": "The CSR does not match the approved request profile."}
+        if verified is None:
+            return 409, {"result": "error", "message": "The approved request is expired, consumed, or unavailable."}
+        return 200, {
+            "result": "csr_verified",
+            "request_id": body["request_id"],
+            "certificate_request_sha256": verified["sha256"],
+            "public_key_spki_sha256": verified["public_key_spki_sha256"],
+            "certificate_template": verified["certificate_template"],
+            "issuer_status": "not_configured",
+        }
+
+    return RawBodyRoute(handle)
+
+
 def phone_enrollment_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                                  directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                                  phones: "PhoneRegistry", server_host: str,
@@ -663,6 +714,7 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         ),
         PHONE_RESPONSE_PATH: phone_response_route(challenges),
         LOGIN_RESULT_PATH: login_result_route(registry, replay_guard, challenges),
+        CERTIFICATE_CSR_SUBMIT_PATH: certificate_csr_submit_route(registry, replay_guard, challenges),
         PHONE_ENROLL_START_PATH: phone_enrollment_start_route(
             registry, replay_guard, directory, allowed_group_sids, phones, server_host, server_fingerprint
         ),

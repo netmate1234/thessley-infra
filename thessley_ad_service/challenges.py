@@ -69,6 +69,8 @@ class ChallengeStore:
                        credential_id TEXT,
                        certificate_request_sha256 TEXT,
                        certificate_template TEXT,
+                       certificate_request_der BLOB,
+                       certificate_request_received_at REAL,
                        response_at REAL,
                        delivered_at REAL
                    ) WITHOUT ROWID"""
@@ -78,6 +80,10 @@ class ChallengeStore:
                 connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_request_sha256 TEXT")
             if "certificate_template" not in columns:
                 connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_template TEXT")
+            if "certificate_request_der" not in columns:
+                connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_request_der BLOB")
+            if "certificate_request_received_at" not in columns:
+                connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_request_received_at REAL")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS login_challenges_expiry ON login_challenges(expires_at)"
             )
@@ -125,7 +131,12 @@ class ChallengeStore:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute("DELETE FROM login_challenges WHERE expires_at <= ?", (current,))
+            connection.execute(
+                "DELETE FROM login_challenges WHERE "
+                "(certificate_request_der IS NULL AND expires_at <= ?) OR "
+                "(certificate_request_der IS NOT NULL AND certificate_request_received_at <= ?)",
+                (current, current - 600),
+            )
             connection.execute(
                 """INSERT INTO login_challenges
                    (request_id, machine_id, principal_id, principal_type, authority, username,
@@ -266,6 +277,12 @@ class ChallengeStore:
             if status in ("approve", "deny"):
                 if delivered_at is not None:
                     connection.execute("COMMIT")
+                    if status == "approve" and certificate_request_sha256 is not None:
+                        return {
+                            "status": "approved",
+                            "certificate_request_sha256": certificate_request_sha256,
+                            "certificate_template": certificate_template,
+                        }
                     return {"status": "consumed"}
                 connection.execute(
                     "UPDATE login_challenges SET delivered_at = ? WHERE request_id = ? AND delivered_at IS NULL",
@@ -283,6 +300,59 @@ class ChallengeStore:
                 return {"status": "denied"}
             connection.execute("COMMIT")
             return {"status": status}
+        except sqlite3.Error:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            return None
+        finally:
+            connection.close()
+
+    def accept_certificate_request(self, *, machine_id: str, request_id: str, der: bytes,
+                                   now: float | None = None) -> dict | None:
+        """Store one exact CSR only after its phone approval was delivered.
+
+        The caller must authenticate the enrolled machine. This operation only
+        validates and retains the public CSR briefly; it never contacts AD CS.
+        """
+        if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
+                or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
+                or not isinstance(der, bytes) or not 256 <= len(der) <= 32 * 1024):
+            return None
+        current = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT certificate_request_sha256, certificate_template, status, delivered_at, response_at, "
+                "certificate_request_der FROM login_challenges WHERE request_id = ? AND machine_id = ?",
+                (request_id, machine_id),
+            ).fetchone()
+            if row is None:
+                connection.execute("ROLLBACK")
+                return None
+            expected_sha256, template, status, delivered_at, response_at, existing_der = row
+            if (not expected_sha256 or not template or status != "approve" or delivered_at is None
+                    or not isinstance(response_at, (int, float)) or current > response_at + 180):
+                connection.execute("ROLLBACK")
+                return None
+            from .certificate_requests import validate_approved_csr
+
+            metadata = validate_approved_csr(der, expected_sha256)
+            if existing_der is not None:
+                connection.execute("ROLLBACK")
+                return metadata if secrets.compare_digest(existing_der, der) else None
+            cursor = connection.execute(
+                "UPDATE login_challenges SET certificate_request_der = ?, certificate_request_received_at = ? "
+                "WHERE request_id = ? AND machine_id = ? AND status = 'approve' "
+                "AND delivered_at IS NOT NULL AND certificate_request_der IS NULL",
+                (der, current, request_id, machine_id),
+            )
+            connection.execute("COMMIT")
+            if cursor.rowcount != 1:
+                return None
+            return {**metadata, "certificate_template": template}
         except sqlite3.Error:
             try:
                 connection.execute("ROLLBACK")
