@@ -61,12 +61,14 @@ if (-not (Test-Path (Join-Path $appSource 'thessley_ad_service\windows_service.p
     throw 'The verified service package is missing beside this installer.'
 }
 $python = Join-Path $InstallRoot 'Python\python.exe'
-if (-not (Test-Path -LiteralPath $python)) {
-    $pythonInstaller = Join-Path $sourceRoot 'install-python.ps1'
-    if (-not (Test-Path -LiteralPath $pythonInstaller)) { throw 'The pinned Python installer is missing.' }
-    & $pythonInstaller -InstallRoot (Join-Path $InstallRoot 'Python')
-    if ($LASTEXITCODE -ne 0) { throw 'Pinned Python setup failed.' }
-}
+$pythonInstaller = Join-Path $sourceRoot 'install-python.ps1'
+if (-not (Test-Path -LiteralPath $pythonInstaller)) { throw 'The pinned Python installer is missing.' }
+# Run on upgrades too: an existing Python runtime may lack a newly required,
+# pinned package such as qrcode. The installer validates Python and reconciles
+# service dependencies before the live app or task is touched.
+& $pythonInstaller -InstallRoot (Join-Path $InstallRoot 'Python')
+if ($LASTEXITCODE -ne 0) { throw 'Pinned Python setup failed.' }
+if (-not (Test-Path -LiteralPath $python)) { throw "Pinned Python was not installed at $python." }
 
 New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $StateRoot -Force | Out-Null
