@@ -6,19 +6,18 @@ provider. It does not add or replace a Windows sign-in tile.
 
 The current prototype supports pairing the computer, requesting phone-key
 enrollment for an authorized AD account, and testing phone approval. A
-separate, build-only Credential Provider clone now connects those approvals to
-a lab TPM virtual smart-card certificate. It is hard-limited to the inspected
-`THESSLEYLAB\\martin` SID and VSC container on the disposable Pro VM. It is not
-registered or installed by the prototype setup scripts. The working local QR
-tile remains unchanged and continues to cover local accounts, including
-Windows Home.
+separate, build-only Credential Provider clone is a legacy proof tied to one
+lab TPM virtual smart-card certificate. It is not the phone-issued certificate
+path and is not registered or installed by the prototype setup scripts. The
+working local QR tile remains unchanged and continues to cover local accounts,
+including Windows Home.
 
 Two quiet JSON commands are available as the native AD tile's service
 adapter: `approval-start --sid SID --context interactive|unlock` returns a
 validated one-use request ID, phone link, and QR matrix; `approval-poll
 --request-id ID --timeout 175` waits for the machine-bound result. They do not
 log in to Windows. The isolated AD Credential Provider uses them to request
-approval, then uses the existing TPM VSC certificate to build a Kerberos
+approval, then uses the lab TPM VSC certificate to build a Kerberos
 certificate-logon serialization. On first use, enter the card PIN and
 explicitly check the remember option. After a successful logon, the PIN is
 stored in a separate SID-scoped DPAPI LocalMachine vault, with access limited
@@ -37,7 +36,7 @@ bash infra/windows-ad-lab/ad-prototype/windows-logon-provider/build.sh
 
 The output goes to `/tmp/thessley-ad-provider-build` by default. This only
 compiles files; it does not register the provider, deploy it to the VM, or
-change any sign-in setting. The provider embeds the lab SID and VSC container
+change any sign-in setting. The provider embeds one lab SID and VSC container
 from `windows-logon-provider/ad_lab_vsc_config.h`; do not treat this artifact
 as a general installer. A later deployment must first have a tested rollback
 path and a separate non-network recovery login.
@@ -81,9 +80,27 @@ enrollment for another authorized domain account remains available.
 
 ```powershell
 & 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' enroll-current-user
-& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' enroll-phone --user 'THESSLEYLAB\martin'
-& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' approval-test --user 'THESSLEYLAB\martin'
+& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' enroll-phone --user 'DOMAIN\account'
+& 'C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd' approval-test --user 'DOMAIN\account'
 ```
+
+## Phone-approved certificate pilot
+
+The isolated service and Android protocol support a separate v3 approval whose
+phone signature binds one exact CSR SHA-256 digest, the configured AD CS
+template, the machine, domain SID, and request expiry. The generic agent
+exposes `certificate-approval-start --sid SID --csr-sha256 DIGEST` and
+`certificate-approval-poll --request-id ID --csr-sha256 DIGEST --template NAME`.
+The start command validates the service's complete v3 link before returning QR
+data. The poll command checks that the one-use response echoes the expected
+CSR digest and template.
+This does not generate a CSR, submit an Enrollment Agent-signed request,
+receive a certificate, or perform PKINIT. The policy store still refuses to
+enable this method, so do not register a login tile from this scaffold. The
+CSR/key generation, certificate issuance, and actual KDC sign-in remain the
+next implementation work. The new v3 request does not embed a user, SID,
+machine, or template; the service resolves the user and reads the template
+from protected configuration.
 
 `activate.ps1` stages and validates a replacement before moving it into place,
 then installs the all-users Start menu shortcut and Thessley icon. The current

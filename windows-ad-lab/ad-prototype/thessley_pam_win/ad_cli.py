@@ -202,6 +202,42 @@ def _approval_poll(request_id: str, timeout: int) -> int:
     return 0 if approved else 1
 
 
+def _certificate_approval_poll(request_id: str, csr_sha256: str, template: str, timeout: int) -> int:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+        raise ValueError("The approval request ID is malformed.")
+    if not re.fullmatch(r"[a-f0-9]{64}", csr_sha256):
+        raise ValueError("The CSR SHA-256 must contain 64 lowercase hexadecimal characters.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", template):
+        raise ValueError("The configured certificate template name is malformed.")
+    approved = ad_agent.poll_login(
+        request_id, threading.Event(), say=lambda _message: None, timeout=timeout,
+        certificate_request_sha256=csr_sha256, certificate_template=template,
+    )
+    print(json.dumps({"status": "approved" if approved else "not_approved"}), flush=True)
+    return 0 if approved else 1
+
+
+def _certificate_approval_start(sid: str, csr_sha256: str) -> int:
+    """Emit v3 approval metadata for a future certificate-logon client."""
+    if not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid, re.IGNORECASE):
+        raise ValueError("The selected account SID is malformed.")
+    if not re.fullmatch(r"[a-f0-9]{64}", csr_sha256):
+        raise ValueError("The CSR SHA-256 must contain 64 lowercase hexadecimal characters.")
+    _require_domain_joined()
+    started = ad_agent.start_certificate_login(sid, csr_sha256)
+    print(json.dumps({
+        "request_id": started["request_id"],
+        "link": started["link"],
+        "credential_method": started["credential_method"],
+        "policy_source": started["policy_source"],
+        "certificate_request_sha256": started["certificate_request_sha256"],
+        "certificate_template": started["certificate_template"],
+        "expires_at": started["expires_at"],
+        "qr_matrix": started["qr_matrix"],
+    }, separators=(",", ":")), flush=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="thessley-ad-test", description="Isolated Thessley AD sign-in prototype")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -223,9 +259,23 @@ def main(argv: list[str] | None = None) -> int:
     start = commands.add_parser("approval-start", help="start an AD sign-in approval and return JSON for the native tile")
     start.add_argument("--sid", required=True)
     start.add_argument("--context", choices=("interactive", "unlock"), required=True)
+    certificate_start = commands.add_parser(
+        "certificate-approval-start",
+        help="start CSR-bound phone approval for the isolated certificate pilot",
+    )
+    certificate_start.add_argument("--sid", required=True)
+    certificate_start.add_argument("--csr-sha256", required=True)
     poll = commands.add_parser("approval-poll", help="poll an AD sign-in approval and return JSON for the native tile")
     poll.add_argument("--request-id", required=True)
     poll.add_argument("--timeout", type=int, default=175, choices=range(1, 176))
+    certificate_poll = commands.add_parser(
+        "certificate-approval-poll",
+        help="wait for approval and verify the exact CSR and template binding",
+    )
+    certificate_poll.add_argument("--request-id", required=True)
+    certificate_poll.add_argument("--csr-sha256", required=True)
+    certificate_poll.add_argument("--template", required=True)
+    certificate_poll.add_argument("--timeout", type=int, default=175, choices=range(1, 176))
     args = parser.parse_args(argv)
 
     try:
@@ -270,8 +320,12 @@ def main(argv: list[str] | None = None) -> int:
             return _approval_test(args.user, args.context)
         if args.command == "approval-start":
             return _approval_start(args.sid, args.context)
+        if args.command == "certificate-approval-start":
+            return _certificate_approval_start(args.sid, args.csr_sha256)
         if args.command == "approval-poll":
             return _approval_poll(args.request_id, args.timeout)
+        if args.command == "certificate-approval-poll":
+            return _certificate_approval_poll(args.request_id, args.csr_sha256, args.template, args.timeout)
     except (ad_agent.AgentError, OSError, ValueError, subprocess.SubprocessError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

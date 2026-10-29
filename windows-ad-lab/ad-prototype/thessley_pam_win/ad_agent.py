@@ -40,6 +40,7 @@ _MACHINE_ID = re.compile(r"^[a-f0-9]{32}$")
 _PIN = re.compile(r"^[a-f0-9]{64}$")
 _SID = re.compile(r"^S-1-(?:[0-9]+-)+[0-9]+$", re.IGNORECASE)
 _NONCE = re.compile(r"^[A-Za-z0-9_-]{22,86}$")
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
 class AgentError(RuntimeError):
@@ -424,10 +425,94 @@ def start_login(sid: str, context: str) -> dict:
             "qr_matrix": "/".join(qr.bitmap_rows(link, border=2))}
 
 
-def poll_login(request_id: str, cancel, say=lambda _message: None, timeout: int = 95) -> bool:
+def start_certificate_login(sid: str, certificate_request_sha256: str) -> dict:
+    """Start the isolated CSR-bound approval pilot for a domain sign-in.
+
+    The caller must keep the private key local and submit its matching CSR only
+    after this approval succeeds. This method returns approval metadata only;
+    it does not request or issue a certificate and cannot complete Windows logon.
+    """
+    if (not isinstance(sid, str) or not _SID.fullmatch(sid)
+            or not isinstance(certificate_request_sha256, str)
+            or not _SHA256.fullmatch(certificate_request_sha256)):
+        raise AgentError("The selected domain SID or certificate request digest is invalid.")
+    principal_id = hashlib.sha256(sid.upper().encode("ascii")).hexdigest()
+    result = _signed_post("/thessley-ad/v1/requests", {
+        "sid": sid.upper(),
+        "context": "interactive",
+        "certificate_request_sha256": certificate_request_sha256,
+    })
+    request = result.get("request")
+    link = result.get("app_link")
+    method = result.get("credential_method")
+    source = result.get("policy_source")
+    if method != "phone_ephemeral_certificate":
+        raise AgentError("The domain policy has not enabled the certificate sign-in pilot.")
+    if (result.get("result") != "created" or not isinstance(request, dict)
+            or not isinstance(link, str) or source not in ("workstation", "group", "domain-default")):
+        raise AgentError("The AD service did not return a valid certificate approval request.")
+
+    config, _key, host, port, pin = _load()
+    request_id = request.get("request_id")
+    nonce = request.get("nonce")
+    expires_at = request.get("expires_at")
+    template = request.get("certificate_template")
+    if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
+            or not isinstance(nonce, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", nonce)
+            or request.get("machine_id") != config["machine_id"]
+            or request.get("principal_id") != principal_id
+            or request.get("principal_type") != "domain"
+            or request.get("context") != "interactive"
+            or request.get("certificate_request_sha256") != certificate_request_sha256
+            or not isinstance(template, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", template)
+            or isinstance(expires_at, bool) or not isinstance(expires_at, int)
+            or expires_at <= int(time.time())):
+        raise AgentError("The AD service returned a certificate request for a different account or machine.")
+    try:
+        parsed = urlsplit(link)
+        query = parse_qs(parsed.query, strict_parsing=True)
+    except ValueError as exc:
+        raise AgentError("The AD service returned a malformed certificate approval link.") from exc
+    required = ("h", "p", "fp", "id", "n", "m", "hn", "u", "pv", "sid", "scope", "auth",
+                "ctx", "api", "csr", "tmpl", "exp")
+    if (parsed.scheme != "thessleypam" or parsed.netloc != "login"
+            or any(len(query.get(name, [])) != 1 for name in required)
+            or query.get("api") != ["ad"] or query.get("pv") != ["3"]
+            or query.get("id") != [request_id] or query.get("n") != [nonce]
+            or query.get("m") != [config["machine_id"]] or query.get("sid") != [principal_id]
+            or query.get("scope") != ["domain"] or query.get("ctx") != ["interactive"]
+            or query.get("csr") != [certificate_request_sha256]
+            or query.get("tmpl") != [template] or query.get("exp") != [str(expires_at)]
+            or query.get("fp", [""])[0].lower() != pin
+            or query.get("h", [""])[0].lower() != host.lower()
+            or query.get("p") != [str(port)]
+            or query.get("u") != [request.get("username")]
+            or query.get("auth") != [request.get("authority")]):
+        raise AgentError("The AD service returned a certificate approval link with mismatched request details.")
+    return {
+        "request_id": request_id,
+        "link": link,
+        "credential_method": method,
+        "policy_source": source,
+        "certificate_request_sha256": certificate_request_sha256,
+        "certificate_template": template,
+        "expires_at": expires_at,
+        "qr_matrix": "/".join(qr.bitmap_rows(link, border=2)),
+    }
+
+
+def poll_login(request_id: str, cancel, say=lambda _message: None, timeout: int = 95,
+               certificate_request_sha256: str | None = None,
+               certificate_template: str | None = None) -> bool:
     """Poll a one-use machine-bound AD approval result. Does not perform Windows logon."""
     if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
         raise AgentError("Invalid AD sign-in request id.")
+    if ((certificate_request_sha256 is None) != (certificate_template is None)
+            or (certificate_request_sha256 is not None
+                and (not _SHA256.fullmatch(certificate_request_sha256)
+                     or not isinstance(certificate_template, str)
+                     or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", certificate_template)))):
+        raise AgentError("Invalid certificate approval binding.")
     # The service's AD login challenges live for three minutes. Leave a small
     # margin for the client to receive the one-use result before server expiry.
     deadline = time.monotonic() + max(1, min(int(timeout), 175))
@@ -437,6 +522,10 @@ def poll_login(request_id: str, cancel, say=lambda _message: None, timeout: int 
         result = _signed_post("/thessley-ad/v1/requests/result", {"request_id": request_id}, timeout=8.0)
         state = result.get("status")
         if state == "approved":
+            if certificate_request_sha256 is not None and (
+                    result.get("certificate_request_sha256") != certificate_request_sha256
+                    or result.get("certificate_template") != certificate_template):
+                raise AgentError("The approved result does not match this CSR and configured certificate template.")
             say("Phone approval verified. Windows certificate sign-in is not yet connected.")
             return True
         if state in ("denied", "expired", "consumed"):
