@@ -1,10 +1,12 @@
 # Isolated AD certificate sign-in pilot
 
 This folder contains unintegrated proof steps for a generic, phone-approved AD
-certificate login. They do not register a Windows Credential Provider, change a
-sign-in policy, or perform PKINIT. The manual CA submit helper only contacts a
-CA if an administrator explicitly runs it with a selected CA and template; no
-service or login flow invokes it.
+certificate login. The CSR key is generated on the Windows PC; the phone
+approves that exact public key, but the phone does not create or hold the
+private key. This is not direct phone-key PKINIT. These steps do not register a
+Windows Credential Provider, change a sign-in policy, or perform PKINIT. The
+manual CA submit helper only contacts a CA if an administrator explicitly runs
+it with a selected CA and template; no service or login flow invokes it.
 
 ## Fresh local key and CSR
 
@@ -15,6 +17,15 @@ Administrators. Each attempt gets a random container prefix and random subject;
 the account, domain name, and certificate template are not compiled or written
 into the request. The script writes DER PKCS#10 and a protected JSON manifest
 under `%ProgramData%\ThessleyPamWin\ad-agent\certificate-requests`.
+
+The service's CSR validator accepts the Windows generator's RSA-3072/SHA-256
+profile and P-256 ECDSA/SHA-256 as a future Android Keystore candidate. The
+certificate validator accepts a pinned direct RSA/SHA-256 or P-256
+ECDSA/SHA-256 issuer. This is algorithm support only: it does not prove that
+the selected AD CS template or domain controller accepts EC logon
+certificates, and it does not prove that the phone owns the key. The current
+Windows script still creates a PC-held RSA key; no Android CSR flow is wired
+to this pilot.
 
 The manifest and non-exportable machine key are retained for at most 24 hours
 from CSR creation so an approved CA request can finish asynchronously. This is
@@ -115,6 +126,19 @@ and key:
 The confirmation switch is an operator assertion; the helper cannot verify CA
 revocation status. Requests left in `installing` after an interrupted
 acceptance are deliberately preserved for manual recovery.
+
+## Windows logon integration boundary
+
+The installed certificate is not yet a Windows logon credential in this
+prototype. The existing native serializer accepts Kerberos smart-card
+credential metadata, while this pilot's private key is in the PC's Software
+KSP. A direct phone-held key requires a supported Windows smart-card
+minidriver or equivalent provider that can relay the KDC signing operation to
+the phone's protected key. See
+[`credential-serialization/README.md`](../credential-serialization/README.md)
+for the Windows contract and the remaining implementation gap. Do not point
+the current VSC serializer at the Software KSP certificate or enable the
+certificate method in policy.
 
 ## CMC/EOBO request construction (source-only)
 

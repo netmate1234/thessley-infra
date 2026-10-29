@@ -1,0 +1,67 @@
+# Phone-held key Windows sign-in: next prototype boundary
+
+## What the current pilot proves
+
+The current CSR is signed by a non-exportable key created on the Windows PC.
+The phone approves the CSR digest, and restricted AD CS issuance can return a
+certificate for that PC key. This proves approval binding and certificate
+validation; it does not make the phone's key a Windows logon key. Keep the
+existing `phone_ephemeral_certificate` policy method disabled.
+
+## Required architecture for a phone-held key
+
+1. **Phone key and enrollment.** The Android app creates a dedicated,
+   non-exportable key in Android Keystore; it does not repurpose a website's
+   relying-party passkey. The AD service binds its public key to one domain SID
+   and verifies fresh key attestation. An enrollment QR proves the phone's
+   possession of the private key. The phone, not the PC, creates/signs the CSR.
+2. **Restricted certificate issuance.** AD CS issues a Smart Card Logon
+   certificate for that phone public key, with the approved account SID and a
+   narrowly controlled template. Only the public certificate reaches Windows;
+   the private key never does.
+3. **Windows cryptographic bridge.** A Windows smart-card minidriver or
+   equivalent key provider exposes the phone credential through the supported
+   Windows smart-card/Kerberos path. Its private-key signing operation relays
+   the exact signing input to the enrolled phone and returns only the
+   signature. The Windows Credential Provider gathers the selected SID and
+   logon context, then submits the supported Kerberos certificate credential
+   serialization. It must not save the account password or copy the phone key.
+4. **Phone approval per logon.** Before the phone signs, it shows the machine,
+   account, and logon purpose and requires local user verification. Each
+   operation is nonce-bound, short-lived, single-use, and protected by the
+   pinned service connection. A stale or mismatched request fails closed.
+5. **Recovery and rollout.** Keep Windows PIN/password sign-in available during
+   the pilot. Enroll and test one disposable domain account first. Enable a new
+   policy method only after interactive sign-in, unlock, cancellation, offline,
+   and recovery behavior are verified on the VM.
+
+## Network dependency
+
+At the Windows sign-in screen, the client must be able to reach the phone or a
+relay that can reach the phone. A VPN that requires an interactive browser login
+after Windows sign-in cannot provide that path before sign-in. The first pilot
+must therefore use either a shared local network, a pre-logon-capable network
+path, or a deliberately designed USB transport. The design must state which
+one it supports; it must not silently fall back to password or a PC-held key.
+
+## Compatibility questions before implementation
+
+- Can the Android hardware-backed key algorithm be accepted by the chosen AD
+  CS template, Windows smart-card provider, and domain controller PKINIT path?
+- Can the Windows minidriver/provider call the phone safely from the LogonUI
+  security context, and what supported transport works before logon?
+- Which Windows versions and editions support the required provider contract?
+- How are certificate renewal, phone revocation, lost-phone recovery, and
+  certificate revocation reflected at every workstation?
+
+These questions need a disposable VM and CA. The current PC-key certificate
+pilot is useful for validating the issuer and SID/template checks, but it does
+not answer them. Do not wire it to the existing TPM VSC serializer or enable it
+as a sign-in policy.
+
+## Microsoft contracts
+
+- [`KERB_CERTIFICATE_LOGON`](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_certificate_logon) describes the Kerberos smart-card logon serialization.
+- [`KERB_SMARTCARD_CSP_INFO`](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info) describes the provider, container, card, and reader metadata passed with it.
+- [Smart Card Architecture](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-architecture) describes the Windows credential-provider and Base CSP/KSP/minidriver layers.
+- [Smart Card Minidriver Overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview) describes the card-specific interface a provider implementation must satisfy.

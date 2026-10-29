@@ -22,6 +22,29 @@ required. The returned buffer must be securely freed with
 `FreeKerbCertificateSerialization` if it is not handed to LogonUI. After
 handoff, LogonUI owns it.
 
+## Certificate-pilot boundary
+
+The separate `certificate-pilot` currently generates the private key in the
+PC's Software KSP. Installing the CA response with `certreq -accept` does not
+make that key a phone key, and this serializer is not a generic interface for
+any certificate in `LocalMachine\My`. `KERB_CERTIFICATE_LOGON` is the Kerberos
+smart-card logon structure; its `CspData` carries
+`KERB_SMARTCARD_CSP_INFO` metadata for a smart-card provider, key container,
+and optional card/reader ([KERB_CERTIFICATE_LOGON](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_certificate_logon),
+[KERB_SMARTCARD_CSP_INFO](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info)).
+Windows' smart-card subsystem routes key operations through the Base CSP/KSP
+and a card minidriver ([Smart Card Architecture](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-architecture),
+[Smart Card Minidriver Overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview)).
+
+Therefore the current Software KSP certificate is not wired into this tested
+VSC serializer. A real phone-held-key path needs a supported Windows smart-card
+minidriver or equivalent provider that can relay the Kerberos signing operation
+to the phone's protected key. Until that exists and is tested, the only proven
+credential path remains the PC's TPM virtual smart card with a separate phone
+approval; the certificate pilot remains disabled. The end-to-end design and
+pre-implementation questions are in
+[`certificate-pilot/PHONE-HELD-KEY-DESIGN.md`](../certificate-pilot/PHONE-HELD-KEY-DESIGN.md).
+
 ## Current lab blocker
 
 The existing Martin certificate is present in the domain user's store, uses

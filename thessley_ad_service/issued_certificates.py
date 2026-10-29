@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.x509.oid import ExtensionOID, ObjectIdentifier
 
 from .certificate_requests import validate_approved_csr
@@ -18,6 +18,7 @@ from .certificate_requests import validate_approved_csr
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _SID = re.compile(r"^S-1-(?:[0-9]+-)+[0-9]+$")
 _RSA_SHA256_SIGNATURE_OID = "1.2.840.113549.1.1.11"
+_ECDSA_SHA256_SIGNATURE_OID = "1.2.840.10045.4.3.2"
 _TEMPLATE_EXTENSION_OID = ObjectIdentifier("1.3.6.1.4.1.311.21.7")
 _SID_EXTENSION_OID = ObjectIdentifier("1.3.6.1.4.1.311.25.2")
 _SID_OTHER_NAME_OID = "1.3.6.1.4.1.311.25.2.1"
@@ -129,11 +130,11 @@ def validate_issued_certificate(
 ) -> dict[str, str | int]:
     """Check an issued leaf against the approved CSR, SID, template, and CA pin.
 
-    Supports direct issuance by a configured RSA/SHA-256 CA certificate. EOBO
-    builds the subject from its RequesterName, so subject is not compared to the
-    temporary CSR subject. The approved SID extension and CSR public key bind
-    the result. This function does not retrieve the certificate, alter AD,
-    install a key, or perform a Windows logon.
+    Supports direct issuance by a configured RSA/SHA-256 or ECDSA P-256/SHA-256
+    CA certificate. EOBO builds the subject from its RequesterName, so subject
+    is not compared to the temporary CSR subject. The approved SID extension
+    and CSR public key bind the result. This function does not retrieve the
+    certificate, alter AD, install a key, or perform a Windows logon.
     """
     if (not isinstance(certificate_der, bytes) or not 256 <= len(certificate_der) <= 64 * 1024
             or not isinstance(issuer_certificate_der, bytes) or not 256 <= len(issuer_certificate_der) <= 64 * 1024
@@ -156,15 +157,28 @@ def validate_issued_certificate(
         if not ca_constraints.ca or not ca_usage.key_cert_sign:
             raise IssuedCertificateError("The configured issuer certificate is not authorized to sign certificates.")
         issuer_key = issuer.public_key()
-        if (not isinstance(issuer_key, rsa.RSAPublicKey) or issuer_key.key_size < 2048
-                or certificate.signature_algorithm_oid.dotted_string != _RSA_SHA256_SIGNATURE_OID
+        signature_oid = certificate.signature_algorithm_oid.dotted_string
+        if (certificate.signature_hash_algorithm is None
                 or certificate.signature_hash_algorithm.name.lower() != "sha256"
                 or certificate.issuer != issuer.subject):
-            raise IssuedCertificateError("The issued certificate does not use the configured direct RSA/SHA-256 issuer.")
-        issuer_key.verify(
-            certificate.signature, certificate.tbs_certificate_bytes,
-            padding.PKCS1v15(), hashes.SHA256(),
-        )
+            raise IssuedCertificateError("The issued certificate does not use the configured direct SHA-256 issuer.")
+        if isinstance(issuer_key, rsa.RSAPublicKey) and issuer_key.key_size >= 2048:
+            if signature_oid != _RSA_SHA256_SIGNATURE_OID:
+                raise IssuedCertificateError("The RSA issuer returned an unsupported certificate signature.")
+            issuer_key.verify(
+                certificate.signature, certificate.tbs_certificate_bytes,
+                padding.PKCS1v15(), hashes.SHA256(),
+            )
+        elif (isinstance(issuer_key, ec.EllipticCurvePublicKey)
+              and isinstance(issuer_key.curve, ec.SECP256R1)):
+            if signature_oid != _ECDSA_SHA256_SIGNATURE_OID:
+                raise IssuedCertificateError("The EC issuer returned an unsupported certificate signature.")
+            issuer_key.verify(
+                certificate.signature, certificate.tbs_certificate_bytes,
+                ec.ECDSA(hashes.SHA256()),
+            )
+        else:
+            raise IssuedCertificateError("The configured direct issuer uses an unsupported signing key.")
 
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None or current.utcoffset() is None:
