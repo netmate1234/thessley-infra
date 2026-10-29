@@ -175,6 +175,15 @@ rollback installer now waits for the listeners instead of treating a brief
 Task Scheduler `Ready` state as a startup failure. A fresh phone enrollment
 and pairing-code confirmation remain to be tested interactively.
 
+At 23:39, the DC service was upgraded to verify Android attestation for
+ordinary **Enroll phone** keys as well as dedicated AD logon keys. The
+rollback installer retained `service.json`, TLS identity, firewall scope,
+and the existing SQLite database. Both listeners are active and the admin
+page returns HTTP 200. Existing phone keys are conservatively labeled
+unverified; a new enrollment is needed for the server to assess their
+attestation. Android app 0.1.27 (release key unchanged) is installed on the
+connected SM-A528B and reports the server result on the account card.
+
 On 2026-10-29, the central AD service was updated on `THESSLEY-DC1` using the
 rollback-capable installer. The existing `service.json`, allow-group SID,
 TLS certificate, firewall scope, and SQLite database were retained. State

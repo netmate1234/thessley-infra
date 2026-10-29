@@ -661,10 +661,18 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             keys = self.phones.list_for_principal(principal_id)
             if keys:
                 for key in keys:
+                    attestation = str(key.get("attestation_status", "unverified"))
+                    protection, protection_class = {
+                        "verified_tee": ("TEE-protected · server verified", "yes"),
+                        "verified_strongbox": ("StrongBox-protected · server verified", "yes"),
+                        "verified_software": ("Software-backed · server verified", "no"),
+                    }.get(attestation, ("Not verified · treat as software-backed", "no"))
                     content += '<div class="phone"><div><strong>' + html.escape(key["label"]) + '</strong> · ' + html.escape(key["machine_name"]) + '</div><div class="muted small">Enrolled ' + html.escape(time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(key["enrolled_at"]))) + '</div>'
+                    content += f'<div class="badge {protection_class}">Phone-key protection: {protection}</div>'
                     content += f'''<form method="post" action="/admin/revoke" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone…</button></form></div>'''
             else:
                 content += '<div class="muted">No phone enrolled.</div>'
+            content += '<div class="muted small">Phone-key protection is checked by the server during enrollment. Software-backed keys remain usable; unverified keys are treated as software-backed. AD logon keys below are separate.</div>'
             logon_keys = self.ad_logon_keys.list_for_principal(principal_id) if self.ad_logon_keys else []
             active_logon_keys = [key for key in logon_keys if key["revoked_at"] is None]
             content += '<div class="phone"><strong>AD logon keys</strong><div class="muted small">Separate from phone approvals; sign-in is disabled until attestation and the Windows signing bridge are validated.</div>'

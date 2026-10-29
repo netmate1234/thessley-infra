@@ -1,5 +1,13 @@
 # Android key protection for AD logon keys
 
+The same server-side verification now applies to ordinary AD phone-approval
+keys enrolled through **Enroll phone**. The DC stores the attestation result
+alongside the phone's public key and displays it in the AD account's Phones
+card. The Android app also shows that result on the account card after
+enrollment. This is separate from the dedicated **AD logon key** flow below.
+Existing phone keys migrate as `unverified`; they must be enrolled again for
+the server to assess their attestation chain.
+
 The app creates each dedicated AD logon key in Android Keystore with
 StrongBox requested first. If StrongBox is unavailable, it retries without
 that request so Android can use its TEE-backed Keystore. The app reads

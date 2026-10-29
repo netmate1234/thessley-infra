@@ -638,6 +638,7 @@ def phone_enrollment_response_route(phones: "PhoneRegistry"):
         if not phones.submit_enrollment(
             request_id=body.get("request_id"), public_key_spki_b64=body.get("public_key"),
             label=body.get("label"), timestamp=timestamp, signature_b64=body.get("proof_signature"),
+            attestation_chain=chain,
         ):
             return 409, {"result": "error", "message": "Phone proof was invalid, expired, or already used."}
         result = phones.wait_enrollment(body["request_id"], timeout=110)
@@ -646,7 +647,8 @@ def phone_enrollment_response_route(phones: "PhoneRegistry"):
         if not result or result.get("status") != "confirmed":
             return 409, {"result": "error", "message": "Pairing was not confirmed on the Windows computer."}
         return 200, {"result": "ok", "credential_id": result["credential_id"],
-                     "username": result["username"]}
+                     "username": result["username"],
+                     "attestation_status": result.get("attestation_status", "unverified")}
 
     return RawBodyRoute(handle, response_wait=115)
 

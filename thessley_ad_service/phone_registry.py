@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from .protocol import canonical_phone_message, principal_id_from_sid, timestamp_is_fresh, verify_phone_signature
 from .state_permissions import finish_private_sqlite, prepare_private_sqlite
+from .android_attestation import verify_android_key_attestation
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -60,7 +61,8 @@ class PhoneRegistry:
                        public_key_spki_b64 TEXT NOT NULL,
                        label TEXT NOT NULL,
                        enrolled_at REAL NOT NULL,
-                       revoked_at REAL
+                       revoked_at REAL,
+                       attestation_status TEXT NOT NULL DEFAULT 'unverified'
                    ) WITHOUT ROWID"""
             )
             connection.execute(
@@ -81,9 +83,18 @@ class PhoneRegistry:
                        label TEXT,
                        credential_id TEXT UNIQUE,
                        pairing_code TEXT,
-                       confirm_attempts INTEGER NOT NULL DEFAULT 0
+                       confirm_attempts INTEGER NOT NULL DEFAULT 0,
+                       attestation_status TEXT NOT NULL DEFAULT 'unverified'
                    ) WITHOUT ROWID"""
             )
+            # Existing installations keep their enrolled keys; new metadata is
+            # added in place and defaults old keys to the conservative status.
+            for table in ("phone_credentials", "phone_enrollments"):
+                columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+                if "attestation_status" not in columns:
+                    connection.execute(
+                        f"ALTER TABLE {table} ADD COLUMN attestation_status TEXT NOT NULL DEFAULT 'unverified'"
+                    )
         finally:
             connection.close()
         finish_private_sqlite(self.path)
@@ -166,7 +177,8 @@ class PhoneRegistry:
         )
 
     def submit_enrollment(self, *, request_id: str, public_key_spki_b64: str, label: str,
-                          timestamp: int, signature_b64: str, now: float | None = None) -> bool:
+                          timestamp: int, signature_b64: str, attestation_chain: object = None,
+                          now: float | None = None) -> bool:
         """Verify proof of possession and stage a key until the Windows user confirms the pairing code."""
         if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
                 or not self._valid_key(public_key_spki_b64) or not isinstance(label, str)
@@ -192,6 +204,20 @@ class PhoneRegistry:
             )
             if not verify_phone_signature(public_key_spki_b64, signature_b64, message):
                 return False
+            try:
+                public_key_der = base64.b64decode(public_key_spki_b64, validate=True)
+            except (binascii.Error, ValueError):
+                return False
+            attestation = verify_android_key_attestation(
+                attestation_chain,
+                expected_challenge=nonce.encode("utf-8"),
+                expected_public_key_spki=public_key_der,
+            )
+            attestation_status = str(attestation.get("status", "unverified"))
+            if attestation_status not in {
+                "verified_tee", "verified_strongbox", "verified_software", "unverified",
+            }:
+                attestation_status = "unverified"
             digest = hashlib.sha256(base64.b64decode(public_key_spki_b64, validate=True)).digest()
             code_number = int.from_bytes(digest[:4], "big") % 1_000_000
             pairing_code = f"{code_number:06d}"[:3] + " " + f"{code_number:06d}"[3:]
@@ -199,8 +225,9 @@ class PhoneRegistry:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 "UPDATE phone_enrollments SET status = 'ready', public_key_spki_b64 = ?, label = ?, "
-                "credential_id = ?, pairing_code = ? WHERE request_id = ? AND status = 'pending' AND expires_at > ?",
-                (public_key_spki_b64, label, credential_id, pairing_code, request_id, current),
+                "credential_id = ?, pairing_code = ?, attestation_status = ? "
+                "WHERE request_id = ? AND status = 'pending' AND expires_at > ?",
+                (public_key_spki_b64, label, credential_id, pairing_code, attestation_status, request_id, current),
             )
             connection.execute("COMMIT")
             return cursor.rowcount == 1
@@ -222,13 +249,13 @@ class PhoneRegistry:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT status, expires_at, pairing_code, username FROM phone_enrollments "
+                "SELECT status, expires_at, pairing_code, username, attestation_status FROM phone_enrollments "
                 "WHERE request_id = ? AND machine_id = ?", (request_id, machine_id)
             ).fetchone()
             if row is None:
                 connection.execute("COMMIT")
                 return None
-            status, expires_at, pairing_code, username = row
+            status, expires_at, pairing_code, username, attestation_status = row
             if status in ("pending", "ready") and expires_at <= current:
                 connection.execute("UPDATE phone_enrollments SET status = 'expired' WHERE request_id = ?", (request_id,))
                 status = "expired"
@@ -236,6 +263,7 @@ class PhoneRegistry:
             result = {"status": status, "username": username}
             if status == "ready":
                 result["pairing_code"] = pairing_code
+                result["attestation_status"] = attestation_status
             return result
         except sqlite3.Error:
             try:
@@ -257,14 +285,14 @@ class PhoneRegistry:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT principal_id, public_key_spki_b64, label, credential_id, pairing_code, expires_at, confirm_attempts "
+                "SELECT principal_id, public_key_spki_b64, label, credential_id, pairing_code, expires_at, confirm_attempts, attestation_status "
                 "FROM phone_enrollments WHERE request_id = ? AND machine_id = ? AND status = 'ready'",
                 (request_id, machine_id),
             ).fetchone()
             if row is None:
                 connection.execute("ROLLBACK")
                 return False
-            principal_id, public_key, label, credential_id, expected_code, expires_at, attempts = row
+            principal_id, public_key, label, credential_id, expected_code, expires_at, attempts, attestation_status = row
             if expires_at <= current:
                 connection.execute(
                     "UPDATE phone_enrollments SET status = 'expired' WHERE request_id = ?", (request_id,)
@@ -281,9 +309,9 @@ class PhoneRegistry:
                 return False
             connection.execute(
                 "INSERT INTO phone_credentials "
-                "(credential_id, machine_id, principal_id, public_key_spki_b64, label, enrolled_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (credential_id, machine_id, principal_id, public_key, label, current),
+                "(credential_id, machine_id, principal_id, public_key_spki_b64, label, enrolled_at, attestation_status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (credential_id, machine_id, principal_id, public_key, label, current, attestation_status),
             )
             connection.execute(
                 "UPDATE phone_enrollments SET status = 'confirmed' WHERE request_id = ? AND status = 'ready'",
@@ -325,16 +353,17 @@ class PhoneRegistry:
             connection = self._connect()
             try:
                 row = connection.execute(
-                    "SELECT status, expires_at, credential_id, username FROM phone_enrollments WHERE request_id = ?",
+                    "SELECT status, expires_at, credential_id, username, attestation_status FROM phone_enrollments WHERE request_id = ?",
                     (request_id,),
                 ).fetchone()
             finally:
                 connection.close()
             if row is None:
                 return None
-            status, expires_at, credential_id, username = row
+            status, expires_at, credential_id, username, attestation_status = row
             if status == "confirmed":
-                return {"status": "confirmed", "credential_id": credential_id, "username": username}
+                return {"status": "confirmed", "credential_id": credential_id, "username": username,
+                        "attestation_status": attestation_status}
             if status == "denied":
                 return {"status": "denied"}
             if status == "expired" or expires_at <= time.time():
@@ -430,7 +459,8 @@ class PhoneRegistry:
         connection = self._connect()
         try:
             rows = connection.execute(
-                """SELECT p.credential_id, p.machine_id, m.machine_name, p.label, p.enrolled_at
+                """SELECT p.credential_id, p.machine_id, m.machine_name, p.label, p.enrolled_at,
+                          p.attestation_status
                    FROM phone_credentials AS p
                    LEFT JOIN machines AS m ON m.machine_id = p.machine_id
                    WHERE p.principal_id = ? AND p.revoked_at IS NULL
@@ -446,8 +476,9 @@ class PhoneRegistry:
                     "central": machine_id == CENTRAL_AD_MACHINE_ID,
                     "label": str(label),
                     "enrolled_at": int(enrolled),
+                    "attestation_status": str(attestation_status or "unverified"),
                 }
-                for credential, machine_id, machine_name, label, enrolled in rows
+                for credential, machine_id, machine_name, label, enrolled, attestation_status in rows
             ]
         finally:
             connection.close()
