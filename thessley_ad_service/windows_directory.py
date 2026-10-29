@@ -19,6 +19,7 @@ from .directory import (
 from .protocol import principal_id_from_sid
 
 _USERNAME = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$", re.IGNORECASE)
+_SID = re.compile(r"^S-1-(?:[0-9]+-)+[0-9]+$")
 
 
 @dataclass(frozen=True)
@@ -317,14 +318,17 @@ try {{
             for user in users:
                 if not isinstance(user, dict):
                     raise ValueError
-                sam, name, upn = user.get("sam"), user.get("name"), user.get("upn", "")
+                sam, sid, name, upn = (user.get("sam"), user.get("sid"),
+                                       user.get("name"), user.get("upn", ""))
                 if (not isinstance(sam, str) or not sam or len(sam) > 64
+                        or not isinstance(sid, str) or not _SID.fullmatch(sid)
                         or not isinstance(name, str) or len(name) > 256
                         or not isinstance(upn, str) or len(upn) > 256
                         or not isinstance(user.get("enabled"), bool)
                         or not isinstance(user.get("authorized"), bool)):
                     raise ValueError
-                clean.append({"sam": sam, "name": name, "upn": upn,
+                sid_to_bytes(sid)
+                clean.append({"sam": sam, "sid": sid, "name": name, "upn": upn,
                               "enabled": user["enabled"], "authorized": user["authorized"]})
             return {"domain": domain[:256], "users": clean, "truncated": truncated}
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
