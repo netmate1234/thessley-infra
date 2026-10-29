@@ -184,6 +184,13 @@ unverified; a new enrollment is needed for the server to assess their
 attestation. Android app 0.1.27 (release key unchanged) is installed on the
 connected SM-A528B and reports the server result on the account card.
 
+At 23:54, a second rollback-capable DC update fixed the AD logon-key QR link:
+the DC had sent `ctx=ad-key-enrollment`, which the Android request parser
+rejects; it now uses the supported `ctx=enrollment`. The migration also
+records the verifier's reason for future unverified phone keys, visible to
+administrators in the account page. The API and admin listeners are active,
+the admin page returns HTTP 200, and both new database columns are present.
+
 On 2026-10-29, the central AD service was updated on `THESSLEY-DC1` using the
 rollback-capable installer. The existing `service.json`, allow-group SID,
 TLS certificate, firewall scope, and SQLite database were retained. State

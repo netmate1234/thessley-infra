@@ -517,7 +517,9 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 "h": self.public_host, "p": "47810", "fp": self.certificate_fingerprint,
                 "id": request["request_id"], "n": request["nonce"], "m": CENTRAL_AD_MACHINE_ID,
                 "hn": self.authority, "u": principal.username, "pv": "2", "sid": principal_id,
-                "scope": "domain", "auth": principal.authority, "ctx": "ad-key-enrollment",
+                # PamRequest accepts the shared enrollment context for both
+                # phone and AD-logon-key enrollment requests.
+                "scope": "domain", "auth": principal.authority, "ctx": "enrollment",
                 "api": "ad", "global": "1",
             })
             try:
@@ -662,6 +664,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             if keys:
                 for key in keys:
                     attestation = str(key.get("attestation_status", "unverified"))
+                    reason = str(key.get("attestation_reason", ""))
                     protection, protection_class = {
                         "verified_tee": ("TEE-protected · server verified", "yes"),
                         "verified_strongbox": ("StrongBox-protected · server verified", "yes"),
@@ -669,6 +672,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                     }.get(attestation, ("Not verified · treat as software-backed", "no"))
                     content += '<div class="phone"><div><strong>' + html.escape(key["label"]) + '</strong> · ' + html.escape(key["machine_name"]) + '</div><div class="muted small">Enrolled ' + html.escape(time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(key["enrolled_at"]))) + '</div>'
                     content += f'<div class="badge {protection_class}">Phone-key protection: {protection}</div>'
+                    if attestation == "unverified" and reason:
+                        content += '<div class="muted small">Server check: ' + html.escape(reason) + '</div>'
                     content += f'''<form method="post" action="/admin/revoke" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone…</button></form></div>'''
             else:
                 content += '<div class="muted">No phone enrolled.</div>'

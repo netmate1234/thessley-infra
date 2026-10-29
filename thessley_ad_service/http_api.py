@@ -648,7 +648,8 @@ def phone_enrollment_response_route(phones: "PhoneRegistry"):
             return 409, {"result": "error", "message": "Pairing was not confirmed on the Windows computer."}
         return 200, {"result": "ok", "credential_id": result["credential_id"],
                      "username": result["username"],
-                     "attestation_status": result.get("attestation_status", "unverified")}
+                     "attestation_status": result.get("attestation_status", "unverified"),
+                     "attestation_reason": result.get("attestation_reason", "")}
 
     return RawBodyRoute(handle, response_wait=115)
 
