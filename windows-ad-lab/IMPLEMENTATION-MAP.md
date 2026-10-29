@@ -104,6 +104,29 @@ bridge; AD QR SSH success does not verify either one.
   logon providers, published `ThessleyVscLogon` template, or TPM smart-card
   certificate.
 
+## Clone 1 live baseline (2026-10-29)
+
+- Read-only SSH checks reached `MARTIN-WM` as `THESSLEYLAB\martin` on Windows
+  11 Pro (`10.0.26300.9711`). The Thessley AD service status and signed
+  machine-connection check succeeded.
+- The AD service authorized `THESSLEYLAB\Administrator` and denied
+  `THESSLEYLAB\startmenutest`. This verifies the server-side group gate, not
+  Windows interactive sign-in.
+- Both `Thessley AD Passkey (Lab)` and `Thessley Passkey unlock` are registered
+  as Credential Providers. The expected per-SID mapping registry root
+  `HKLM\SOFTWARE\Thessley\ADCredentialProvider\Users` is absent. Therefore
+  the live AD provider's account coverage is not established; do not assume
+  that Administrator has a configured VSC mapping or a usable tile.
+- The installed `C:\ProgramData\ThessleyPamWin\ad-prototype\thessley-ad-test.cmd`
+  is zero bytes. Its status and authorization commands silently did nothing.
+  Calling the installed `ad_main.py` entrypoint directly worked. The source
+  activation script now regenerates both command launchers in staging and
+  validates the installed test launcher before it reports activation success.
+- No VM files, provider registrations, sign-in settings, or scheduled tasks
+  were changed during this inspection. The lock-screen tile for Administrator
+  still needs a console test; SSH and the AD authorization check cannot prove
+  tile enumeration or Kerberos logon.
+
 ## Windows Start-menu account flyout delay (2026-10-28)
 
 - The separate issue under investigation is a persistent ~40-second delay when
