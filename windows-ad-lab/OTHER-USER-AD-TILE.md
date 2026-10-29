@@ -217,3 +217,31 @@ approval alone performs Windows logon.
   source tree now includes domain/group/workstation method rules, but that
   policy update has not yet been deployed to the lab.
 - No workstation logon configuration was changed as part of this design work.
+
+## Isolated v3 approval scaffold (not enabled)
+
+The source now contains a separate version-3 phone approval encoding for a
+single interactive domain sign-in. It binds the challenge to the canonical
+SID hash, paired machine, short expiry, SHA-256 digest of the DER CSR, and the
+certificate template short name configured in the protected AD service
+configuration. The phone displays the template name as part of its approval.
+Existing v2 TPM approval bytes and the working TPM credential path remain
+unchanged.
+
+The optional service setting is named `certificate_template` in Windows
+`C:\ProgramData\ThessleyAD\service.json` or in the Linux prototype's
+`[service]` section in `/etc/thessley-ad/service.toml`. It is a template short
+name, not a display label or CA name. Leave it absent until a dedicated
+template has passed the CA restrictions and SID-mapping checks. This setting
+does not publish the template or enable the sign-in method.
+
+This is only a protocol scaffold. The Windows agent still accepts only the
+TPM method and does not create a CNG key/CSR, submit an Enrollment-on-Behalf-of
+request, validate an issued certificate, or perform a PKINIT logon with the
+temporary key. The certificate template is optional in service configuration;
+without it, certificate challenges fail closed. The method remains deliberately
+absent from the selectable policy set. Do not publish a template, issue
+certificates, install the tile, or attempt a user sign-in based on this
+scaffold. The unproven CA restrictions,
+strong SID mapping, certificate validation, cleanup-after-crash, and fresh KDC
+logon gates above still have to be proved independently in the disposable lab.

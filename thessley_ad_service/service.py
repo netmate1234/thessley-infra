@@ -46,7 +46,8 @@ def main() -> int:
     config = _read_config()
     service = config["service"]
     directory_config = config["directory"]
-    if set(service) != {"public_host", "allowed_group_sids"}:
+    required_service_options = {"public_host", "allowed_group_sids"}
+    if set(service) not in (required_service_options, required_service_options | {"certificate_template"}):
         raise RuntimeError("Invalid [service] options")
     allowed_group_sids = service["allowed_group_sids"]
     if not isinstance(allowed_group_sids, list):
@@ -60,6 +61,7 @@ def main() -> int:
     from .challenges import ChallengeStore
     from .directory import ActiveDirectory, DirectoryConfig, validate_group_sid_allowlist
     from .http_api import create_routes
+    from .protocol import validate_certificate_template
     from .machine_auth import ReplayGuard
     from .machine_registry import MachineRegistry
     from .login_policy import LoginPolicyStore
@@ -74,6 +76,10 @@ def main() -> int:
     replay_store = SQLiteReplayStore(STATE_DB)
     directory = ActiveDirectory(DirectoryConfig(**directory_config))
     group_sids = validate_group_sid_allowlist(allowed_group_sids)
+    try:
+        certificate_template = validate_certificate_template(service.get("certificate_template"))
+    except ValueError as exc:
+        raise RuntimeError("service.certificate_template is invalid") from exc
     certificate_pin = {"value": ""}
     routes = create_routes(
         registry,
@@ -85,6 +91,7 @@ def main() -> int:
         lambda: certificate_pin["value"],
         phones,
         login_policy,
+        certificate_template,
     )
     listener_routes = {
         path: ListenerRawBodyRoute(route.handler, response_wait=route.response_wait)

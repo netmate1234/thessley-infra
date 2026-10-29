@@ -18,11 +18,14 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 PHONE_SIGNATURE_DOMAIN = "thessley_win_pam_v2"
+PHONE_CERTIFICATE_SIGNATURE_DOMAIN = "thessley_win_cert_request_v1"
 CLOCK_SKEW_SECONDS = 60
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _MACHINE_ID = re.compile(r"^[a-f0-9]{32}$")
 _SID_HASH = re.compile(r"^[a-f0-9]{64}$")
+_CERTIFICATE_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_CERTIFICATE_TEMPLATE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SID = re.compile(r"^S-1-(?:[0-9]+-)+[0-9]+$")
 _USERNAME = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$", re.IGNORECASE)
 _AUTHORITY = re.compile(r"^[A-Za-z0-9_.@-]{1,128}$")
@@ -30,6 +33,15 @@ _FIELD_CONTROL = re.compile(r"[|\s\x00-\x1f\x7f]")
 
 _ACTIONS = {"register", "approve", "deny"}
 _CONTEXTS = {"enrollment", "interactive", "unlock", "ssh", "admin-web"}
+
+
+def validate_certificate_template(value: str | None) -> str | None:
+    """Validate an optional AD CS template short name from protected service config."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _CERTIFICATE_TEMPLATE.fullmatch(value):
+        raise ValueError("invalid certificate template")
+    return value
 
 
 def principal_id_from_sid(sid: str) -> str:
@@ -98,6 +110,70 @@ def canonical_phone_message(
         str(ts),
         action,
     )
+    if any(not value or _FIELD_CONTROL.search(value) for value in fields):
+        raise ValueError("invalid signed field")
+    return "|".join(fields).encode("utf-8")
+
+
+def canonical_certificate_approval_message(
+    *,
+    request_id: str,
+    machine_id: str,
+    principal_id: str,
+    principal_type: str,
+    authority: str,
+    username: str,
+    context: str,
+    nonce: str,
+    expires_at: int,
+    certificate_request_sha256: str,
+    certificate_template: str,
+    timestamp: int,
+    action: str,
+) -> bytes:
+    """Build the separate v3 proof binding phone approval to one exact DER CSR.
+
+    This is intentionally not a variant of the TPM/password-gating v2 message.
+    A certificate approval is only accepted for interactive domain sign-in and
+    includes the immutable expiry, CSR digest, and template name.
+    """
+    fields = (
+        PHONE_CERTIFICATE_SIGNATURE_DOMAIN,
+        "login",
+        request_id,
+        machine_id,
+        principal_id,
+        principal_type,
+        authority,
+        username,
+        context,
+        nonce,
+        str(expires_at),
+        certificate_request_sha256,
+        certificate_template,
+        str(timestamp),
+        action,
+    )
+    if any(not isinstance(value, str) for value in fields):
+        raise ValueError("signed fields must be strings")
+    if not _TOKEN.fullmatch(request_id) or not _TOKEN.fullmatch(nonce):
+        raise ValueError("invalid request token")
+    if not _MACHINE_ID.fullmatch(machine_id) or not _SID_HASH.fullmatch(principal_id):
+        raise ValueError("invalid machine or principal id")
+    if principal_type != "domain" or context != "interactive":
+        raise ValueError("certificate approval is limited to interactive domain sign-in")
+    if not _AUTHORITY.fullmatch(authority) or not _USERNAME.fullmatch(username):
+        raise ValueError("invalid Windows account")
+    if not _CERTIFICATE_SHA256.fullmatch(certificate_request_sha256):
+        raise ValueError("invalid certificate request digest")
+    if not _CERTIFICATE_TEMPLATE.fullmatch(certificate_template):
+        raise ValueError("invalid certificate template")
+    if isinstance(expires_at, bool) or not isinstance(expires_at, int) or expires_at <= 0:
+        raise ValueError("invalid request expiry")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+        raise ValueError("invalid timestamp")
+    if action not in ("approve", "deny"):
+        raise ValueError("unsupported action")
     if any(not value or _FIELD_CONTROL.search(value) for value in fields):
         raise ValueError("invalid signed field")
     return "|".join(fields).encode("utf-8")

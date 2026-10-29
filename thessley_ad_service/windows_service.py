@@ -39,9 +39,8 @@ def _read_config() -> dict:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("The protected AD service configuration could not be read") from exc
-    if not isinstance(data, dict) or set(data) != {
-        "version", "bind_address", "public_host", "authority", "allowed_group_sids"
-    }:
+    required = {"version", "bind_address", "public_host", "authority", "allowed_group_sids"}
+    if not isinstance(data, dict) or set(data) not in (required, required | {"certificate_template"}):
         raise RuntimeError("Invalid AD service configuration")
     if data["version"] != 1 or isinstance(data["version"], bool):
         raise RuntimeError("Unsupported AD service configuration version")
@@ -54,10 +53,15 @@ def _read_config() -> dict:
     if not isinstance(data["public_host"], str) or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", data["public_host"]):
         raise RuntimeError("The AD service public host is invalid")
     from .directory import validate_group_sid_allowlist
+    from .protocol import validate_certificate_template
     from .windows_directory import WindowsDirectoryConfig
 
     WindowsDirectoryConfig(data["authority"])
     data["allowed_group_sids"] = validate_group_sid_allowlist(data["allowed_group_sids"])
+    try:
+        data["certificate_template"] = validate_certificate_template(data.get("certificate_template"))
+    except ValueError as exc:
+        raise RuntimeError("The configured AD CS certificate template is invalid") from exc
     return data
 
 
@@ -165,6 +169,7 @@ def main() -> int:
         routes = create_routes(
             registry, ReplayGuard(replay_store.claim), directory, config["allowed_group_sids"],
             challenges, config["public_host"], certificate_pin, phones, login_policy,
+            config["certificate_template"],
         )
         admin_web = AdminWeb(
             directory=directory,

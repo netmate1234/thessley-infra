@@ -256,13 +256,19 @@ def principal_resolve_route(registry: "MachineRegistry", replay_guard: "ReplayGu
 def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                       directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                       challenges: "ChallengeStore", server_host: str,
-                      server_fingerprint: str | Callable[[], str], login_policy=None):
+                      server_fingerprint: str | Callable[[], str], login_policy=None,
+                      certificate_template: str | None = None):
     """Create a QR link only after the machine, SID, and AD group are verified."""
     from .directory import DirectoryUnavailable, PrincipalNotFound
     from .directory import validate_group_sid_allowlist
-    from .login_policy import METHOD_TPM, METHOD_WINDOWS, PolicyError
+    from .login_policy import METHOD_EPHEMERAL_CERT, METHOD_TPM, METHOD_WINDOWS, PolicyError
+    from .protocol import validate_certificate_template
 
     allowed_group_sids = validate_group_sid_allowlist(allowed_group_sids)
+    try:
+        certificate_template = validate_certificate_template(certificate_template)
+    except ValueError as exc:
+        raise ValueError("Invalid configured AD CS certificate template") from exc
     if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", server_host):
         raise ValueError("Invalid AD service host")
     fingerprint_provider = server_fingerprint if callable(server_fingerprint) else lambda: server_fingerprint
@@ -271,7 +277,9 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         expected = {
             "x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"
         }
-        if set(auth_headers) != expected or set(body) != {"sid", "context"}:
+        body_fields = set(body)
+        if (set(auth_headers) != expected or body_fields not in (
+                {"sid", "context"}, {"sid", "context", "certificate_request_sha256"})):
             return 400, {"result": "error", "message": "Invalid sign-in request."}
         if not isinstance(body.get("sid"), str) or body.get("context") not in ("interactive", "unlock", "ssh"):
             return 400, {"result": "error", "message": "Invalid sign-in request."}
@@ -303,10 +311,20 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
             return 503, {"result": "error", "message": "The workstation sign-in policy is unavailable."}
         if policy["method"] == METHOD_WINDOWS:
             return 403, {"result": "disabled", "message": "Thessley phone sign-in is disabled for this account on this workstation."}
-        if policy["method"] != METHOD_TPM:
+        certificate_pilot = policy["method"] == METHOD_EPHEMERAL_CERT
+        if certificate_pilot:
+            if certificate_template is None:
+                return 503, {"result": "unsupported", "message": "The certificate sign-in template is not configured."}
+            digest = body.get("certificate_request_sha256")
+            if (body["context"] != "interactive" or not isinstance(digest, str)
+                    or not re.fullmatch(r"[a-f0-9]{64}", digest)):
+                return 400, {"result": "error", "message": "The certificate sign-in request is invalid."}
+        elif "certificate_request_sha256" in body:
+            return 400, {"result": "error", "message": "This sign-in method does not accept a certificate request."}
+        elif policy["method"] != METHOD_TPM:
             return 503, {"result": "unsupported", "message": "The selected Thessley sign-in method is not available yet."}
         try:
-            challenge = challenges.create(
+            challenge_args = dict(
                 machine_id=machine_id,
                 sid=principal.sid,
                 username=principal.username,
@@ -316,9 +334,15 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                 # approve. The challenge remains one-use and machine-bound.
                 lifetime_seconds=180,
             )
+            if certificate_pilot:
+                challenge_args.update({
+                    "certificate_request_sha256": body["certificate_request_sha256"],
+                    "certificate_template": certificate_template,
+                })
+            challenge = challenges.create(**challenge_args)
         except (RuntimeError, TypeError, ValueError):
             return 503, {"result": "error", "message": "Could not create a sign-in request."}
-        link = "thessleypam://login?" + urlencode({
+        link_values = {
             "h": server_host,
             "p": "47810",
             "fp": fingerprint,
@@ -327,13 +351,20 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
             "m": machine_id,
             "hn": machine_name,
             "u": principal.username,
-            "pv": "2",
+            "pv": "3" if certificate_pilot else "2",
             "sid": principal.principal_id,
             "scope": "domain",
             "auth": principal.authority,
             "ctx": body["context"],
             "api": "ad",
-        })
+        }
+        if certificate_pilot:
+            link_values.update({
+                "csr": challenge["certificate_request_sha256"],
+                "tmpl": challenge["certificate_template"],
+                "exp": str(int(challenge["expires_at"])),
+            })
+        link = "thessleypam://login?" + urlencode(link_values)
         return 201, {"result": "created", "credential_method": policy["method"],
                      "policy_source": policy["source"], "request": challenge, "app_link": link}
 
@@ -548,7 +579,7 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                   directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                   challenges: "ChallengeStore", server_host: str,
                   server_fingerprint: str | Callable[[], str], phones: "PhoneRegistry",
-                  login_policy=None) -> dict:
+                  login_policy=None, certificate_template: str | None = None) -> dict:
     """Build routes without binding them to a particular HTTPS listener."""
     return {
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
@@ -561,7 +592,7 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         ),
         LOGIN_START_PATH: login_start_route(
             registry, replay_guard, directory, allowed_group_sids, challenges, server_host, server_fingerprint,
-            login_policy,
+            login_policy, certificate_template,
         ),
         PHONE_RESPONSE_PATH: phone_response_route(challenges),
         LOGIN_RESULT_PATH: login_result_route(registry, replay_guard, challenges),

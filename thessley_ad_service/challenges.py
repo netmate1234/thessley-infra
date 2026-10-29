@@ -11,11 +11,19 @@ from pathlib import Path
 from typing import Callable
 from .state_permissions import finish_private_sqlite, prepare_private_sqlite
 
-from .protocol import canonical_phone_message, principal_id_from_sid, timestamp_is_fresh, verify_phone_signature
+from .protocol import (
+    canonical_certificate_approval_message,
+    canonical_phone_message,
+    principal_id_from_sid,
+    timestamp_is_fresh,
+    verify_phone_signature,
+)
 
 _MACHINE_ID = re.compile(r"^[a-f0-9]{32}$")
 _PRINCIPAL_ID = re.compile(r"^[a-f0-9]{64}$")
 _CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_CERTIFICATE_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_CERTIFICATE_TEMPLATE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class ChallengeStore:
@@ -59,10 +67,17 @@ class ChallengeStore:
                        expires_at REAL NOT NULL,
                        status TEXT NOT NULL,
                        credential_id TEXT,
+                       certificate_request_sha256 TEXT,
+                       certificate_template TEXT,
                        response_at REAL,
                        delivered_at REAL
                    ) WITHOUT ROWID"""
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(login_challenges)")}
+            if "certificate_request_sha256" not in columns:
+                connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_request_sha256 TEXT")
+            if "certificate_template" not in columns:
+                connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_template TEXT")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS login_challenges_expiry ON login_challenges(expires_at)"
             )
@@ -71,22 +86,42 @@ class ChallengeStore:
         finish_private_sqlite(self.path)
 
     def create(self, *, machine_id: str, sid: str, username: str, authority: str,
-               context: str, lifetime_seconds: int = 90, now: float | None = None) -> dict:
+               context: str, lifetime_seconds: int = 90, now: float | None = None,
+               certificate_request_sha256: str | None = None,
+               certificate_template: str | None = None) -> dict:
         if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
             raise ValueError("invalid machine id")
         if isinstance(lifetime_seconds, bool) or not isinstance(lifetime_seconds, int) or not 30 <= lifetime_seconds <= 180:
             raise ValueError("challenge lifetime must be between 30 and 180 seconds")
         current = time.time() if now is None else now
         principal_id = principal_id_from_sid(sid)
+        if (certificate_request_sha256 is None) != (certificate_template is None):
+            raise ValueError("certificate digest and template must be supplied together")
+        if certificate_request_sha256 is not None:
+            if (not isinstance(certificate_request_sha256, str)
+                    or not isinstance(certificate_template, str)
+                    or not _CERTIFICATE_SHA256.fullmatch(certificate_request_sha256)
+                    or not _CERTIFICATE_TEMPLATE.fullmatch(certificate_template)
+                    or context != "interactive"):
+                raise ValueError("invalid certificate sign-in request")
         request_id = secrets.token_urlsafe(24)
         nonce = secrets.token_urlsafe(24)
         expires = current + lifetime_seconds
         # Run protocol-level field validation before creating durable state.
-        canonical_phone_message(
-            type_="login", request_id=request_id, machine_id=machine_id,
-            principal_id=principal_id, principal_type="domain", authority=authority,
-            username=username, context=context, nonce=nonce, timestamp=int(current), action="approve",
-        )
+        if certificate_request_sha256 is None:
+            canonical_phone_message(
+                type_="login", request_id=request_id, machine_id=machine_id,
+                principal_id=principal_id, principal_type="domain", authority=authority,
+                username=username, context=context, nonce=nonce, timestamp=int(current), action="approve",
+            )
+        else:
+            canonical_certificate_approval_message(
+                request_id=request_id, machine_id=machine_id, principal_id=principal_id,
+                principal_type="domain", authority=authority, username=username,
+                context=context, nonce=nonce, expires_at=int(expires),
+                certificate_request_sha256=certificate_request_sha256,
+                certificate_template=str(certificate_template), timestamp=int(current), action="approve",
+            )
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -94,12 +129,14 @@ class ChallengeStore:
             connection.execute(
                 """INSERT INTO login_challenges
                    (request_id, machine_id, principal_id, principal_type, authority, username,
-                    context, nonce, created_at, expires_at, status)
-                   VALUES (?, ?, ?, 'domain', ?, ?, ?, ?, ?, ?, 'pending')""",
-                (request_id, machine_id, principal_id, authority, username, context, nonce, current, expires),
+                    context, nonce, created_at, expires_at, status,
+                    certificate_request_sha256, certificate_template)
+                   VALUES (?, ?, ?, 'domain', ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+                (request_id, machine_id, principal_id, authority, username, context, nonce, current, expires,
+                 certificate_request_sha256, certificate_template),
             )
             connection.execute("COMMIT")
-            return {
+            request = {
                 "request_id": request_id,
                 "nonce": nonce,
                 "machine_id": machine_id,
@@ -110,6 +147,12 @@ class ChallengeStore:
                 "context": context,
                 "expires_at": expires,
             }
+            if certificate_request_sha256 is not None:
+                request.update({
+                    "certificate_request_sha256": certificate_request_sha256,
+                    "certificate_template": certificate_template,
+                })
+            return request
         except sqlite3.Error as exc:
             try:
                 connection.execute("ROLLBACK")
@@ -138,13 +181,15 @@ class ChallengeStore:
         connection = self._connect()
         try:
             row = connection.execute(
-                "SELECT machine_id, principal_id, principal_type, authority, username, context, nonce, expires_at, status "
+                "SELECT machine_id, principal_id, principal_type, authority, username, context, nonce, expires_at, status, "
+                "certificate_request_sha256, certificate_template "
                 "FROM login_challenges WHERE request_id = ?",
                 (request_id,),
             ).fetchone()
             if row is None:
                 return False
-            machine_id, principal_id, principal_type, authority, username, context, challenge_nonce, expires_at, status = row
+            (machine_id, principal_id, principal_type, authority, username, context, challenge_nonce,
+             expires_at, status, certificate_request_sha256, certificate_template) = row
             current = time.time() if now is None else now
             if status != "pending" or expires_at <= current:
                 return False
@@ -156,12 +201,21 @@ class ChallengeStore:
                     return False
             else:
                 try:
-                    message = canonical_phone_message(
-                        type_="login", request_id=request_id, machine_id=machine_id,
-                        principal_id=principal_id, principal_type=principal_type, authority=authority,
-                        username=username, context=context, nonce=challenge_nonce,
-                        timestamp=timestamp, action=action,
-                    )
+                    if certificate_request_sha256 is None:
+                        message = canonical_phone_message(
+                            type_="login", request_id=request_id, machine_id=machine_id,
+                            principal_id=principal_id, principal_type=principal_type, authority=authority,
+                            username=username, context=context, nonce=challenge_nonce,
+                            timestamp=timestamp, action=action,
+                        )
+                    else:
+                        message = canonical_certificate_approval_message(
+                            request_id=request_id, machine_id=machine_id, principal_id=principal_id,
+                            principal_type=principal_type, authority=authority, username=username,
+                            context=context, nonce=challenge_nonce, expires_at=int(expires_at),
+                            certificate_request_sha256=certificate_request_sha256,
+                            certificate_template=certificate_template, timestamp=timestamp, action=action,
+                        )
                 except ValueError:
                     return False
                 if not verify_phone_signature(public_key, signature_b64, message):
@@ -194,14 +248,15 @@ class ChallengeStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT status, expires_at, delivered_at, credential_id FROM login_challenges "
+                "SELECT status, expires_at, delivered_at, credential_id, "
+                "certificate_request_sha256, certificate_template FROM login_challenges "
                 "WHERE request_id = ? AND machine_id = ?",
                 (request_id, machine_id),
             ).fetchone()
             if row is None:
                 connection.execute("COMMIT")
                 return None
-            status, expires_at, delivered_at, credential_id = row
+            status, expires_at, delivered_at, credential_id, certificate_request_sha256, certificate_template = row
             if status == "pending" and expires_at <= current:
                 connection.execute(
                     "UPDATE login_challenges SET status = 'expired' WHERE request_id = ? AND status = 'pending'",
@@ -218,7 +273,13 @@ class ChallengeStore:
                 )
                 connection.execute("COMMIT")
                 if status == "approve":
-                    return {"status": "approved", "credential_id": credential_id}
+                    result = {"status": "approved", "credential_id": credential_id}
+                    if certificate_request_sha256 is not None:
+                        result.update({
+                            "certificate_request_sha256": certificate_request_sha256,
+                            "certificate_template": certificate_template,
+                        })
+                    return result
                 return {"status": "denied"}
             connection.execute("COMMIT")
             return {"status": status}
