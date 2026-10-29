@@ -602,8 +602,15 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             if active_logon_keys:
                 for key in active_logon_keys:
                     fingerprint = html.escape(key["public_key_sha256"])
+                    attestation = str(key.get("attestation_status", "unverified"))
+                    protection, protection_class = {
+                        "verified_tee": ("TEE-protected · verified", "yes"),
+                        "verified_strongbox": ("StrongBox-protected · verified", "yes"),
+                        "verified_software": ("Software-backed · verified", "no"),
+                    }.get(attestation, ("Not verified · treat as software-backed", "no"))
                     content += f'''<div class="phone"><strong>{html.escape(key["label"])}</strong>
-<div class="muted small">SHA-256 {fingerprint} · Attestation: {html.escape(key["attestation_status"])}</div>
+<div class="muted small">SHA-256 {fingerprint}</div>
+<div class="badge {protection_class}">Key protection: {protection}</div>
 <form method="post" action="/admin/revoke-logon-key" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="key_id" value="{html.escape(key['key_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke key…</button></form></div>'''
             else:
                 content += '<div class="muted small">No AD logon key enrolled.</div>'
