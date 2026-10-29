@@ -35,6 +35,34 @@ existing `phone_ephemeral_certificate` policy method disabled.
    policy method only after interactive sign-in, unlock, cancellation, offline,
    and recovery behavior are verified on the VM.
 
+## Concrete protocol boundary
+
+The first implementation slice should be account-key enrollment, kept separate
+from the current PC-generated CSR flow:
+
+1. The AD service creates a short-lived enrollment challenge bound to the
+   account SID, the existing phone-approval credential, and a fresh nonce.
+2. Android creates a new P-256 Android Keystore key under a distinct AD-key
+   namespace, with user verification required. It returns only the SPKI and
+   the attestation chain; it never exports the private key. The app must not
+   reuse a website passkey or the phone's existing approval key.
+3. The phone proves possession by signing the challenge. The AD service checks
+   the signature, account binding, nonce, attestation policy, and duplicate-key
+   policy before recording the key against the immutable SID. Enrollment and
+   revocation are auditable and independently available to administrators.
+4. Certificate issuance consumes that recorded public key and the SID. The
+   phone creates the CSR; the PC-generated CSR endpoint remains separate and
+   cannot silently substitute a workstation key.
+5. The certificate is not a usable Windows credential until the Windows
+   provider can route the KDC's private-key signing operation to the phone.
+   Until that bridge exists and is verified, the login policy remains disabled.
+
+This sequence deliberately keeps three identities distinct: the phone's
+existing approval key, the dedicated AD logon key, and any workstation key used
+by the current certificate pilot. Each needs its own lifecycle and revocation
+record. There is no AD logon-key enrollment endpoint yet; adding one is the next
+server-side implementation task.
+
 ## Network dependency
 
 At the Windows sign-in screen, the client must be able to reach the phone or a
