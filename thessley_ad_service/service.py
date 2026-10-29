@@ -66,12 +66,14 @@ def main() -> int:
     from .machine_registry import MachineRegistry
     from .login_policy import LoginPolicyStore
     from .phone_registry import PhoneRegistry
+    from .ad_logon_keys import AdLogonKeyRegistry
     from .replay_store import SQLiteReplayStore
 
     _ensure_state_dir()
     registry = MachineRegistry(STATE_DB)
     login_policy = LoginPolicyStore(STATE_DB)
     phones = PhoneRegistry(STATE_DB)
+    ad_logon_keys = AdLogonKeyRegistry(STATE_DB)
     challenges = ChallengeStore(STATE_DB, phones.public_key_for)
     challenges.purge_expired()
     replay_store = SQLiteReplayStore(STATE_DB)
@@ -93,6 +95,7 @@ def main() -> int:
         phones,
         login_policy,
         certificate_template,
+        ad_logon_keys,
     )
     listener_routes = {
         path: ListenerRawBodyRoute(route.handler, response_wait=route.response_wait)

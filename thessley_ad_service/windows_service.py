@@ -157,12 +157,14 @@ def main() -> int:
         from .machine_registry import MachineRegistry
         from .login_policy import LoginPolicyStore
         from .phone_registry import PhoneRegistry
+        from .ad_logon_keys import AdLogonKeyRegistry
         from .replay_store import SQLiteReplayStore
         from .admin_web import AdminWeb
 
         registry = MachineRegistry(STATE_PATH)
         login_policy = LoginPolicyStore(STATE_PATH)
         phones = PhoneRegistry(STATE_PATH)
+        ad_logon_keys = AdLogonKeyRegistry(STATE_PATH)
         challenges = ChallengeStore(STATE_PATH, phones.public_key_for)
         challenges.purge_expired()
         replay_store = SQLiteReplayStore(STATE_PATH)
@@ -171,6 +173,7 @@ def main() -> int:
             registry, ReplayGuard(replay_store.claim), directory, config["allowed_group_sids"],
             challenges, config["public_host"], certificate_pin, phones, login_policy,
             config["certificate_template"],
+            ad_logon_keys,
         )
         admin_web = AdminWeb(
             directory=directory,

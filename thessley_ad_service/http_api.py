@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .directory import ActiveDirectory
     from .challenges import ChallengeStore
     from .phone_registry import PhoneRegistry
+    from .ad_logon_keys import AdLogonKeyRegistry
 
 
 MACHINE_ENROLL_PATH = "/thessley-ad/v1/machines/enroll"
@@ -35,6 +36,7 @@ PHONE_ENROLL_RESPONSE_PATH = "/thessley-ad/v1/enrollments/respond"
 PHONE_ENROLL_STATUS_PATH = "/thessley-ad/v1/enrollments/status"
 PHONE_ENROLL_CONFIRM_PATH = "/thessley-ad/v1/enrollments/confirm"
 PHONE_ENROLL_CANCEL_PATH = "/thessley-ad/v1/enrollments/cancel"
+AD_LOGON_KEY_ENROLL_PATH = "/thessley-ad/v1/logon-keys/enroll"
 
 
 @dataclass(frozen=True)
@@ -722,11 +724,57 @@ def phone_enrollment_cancel_route(registry: "MachineRegistry", replay_guard: "Re
     return RawBodyRoute(handle)
 
 
+def ad_logon_key_enroll_route(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRegistry"):
+    """Register a separate phone-held AD key using an existing central phone key."""
+    from .phone_registry import CENTRAL_AD_MACHINE_ID
+
+    fields = {
+        "request_id", "principal_id", "credential_id", "public_key_spki_b64", "label", "nonce",
+        "timestamp", "approval_signature_b64", "proof_signature_b64", "attestation_chain",
+    }
+
+    def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
+        if auth_headers or set(body) != fields:
+            return 400, {"result": "error", "message": "Invalid AD logon-key enrollment."}
+        if (not isinstance(body.get("principal_id"), str)
+                or not isinstance(body.get("credential_id"), str)
+                or not isinstance(body.get("public_key_spki_b64"), str)
+                or not isinstance(body.get("label"), str)
+                or not isinstance(body.get("request_id"), str)
+                or not isinstance(body.get("nonce"), str)
+                or isinstance(body.get("timestamp"), bool)
+                or not isinstance(body.get("timestamp"), int)
+                or not isinstance(body.get("approval_signature_b64"), str)
+                or not isinstance(body.get("proof_signature_b64"), str)):
+            return 400, {"result": "error", "message": "Invalid AD logon-key enrollment."}
+        approval_key = phones.public_key_for(
+            body["credential_id"], CENTRAL_AD_MACHINE_ID, body["principal_id"],
+        )
+        if approval_key is None:
+            return 403, {"result": "error", "message": "An active phone key for this AD account is required."}
+        registered = logon_keys.register(
+            request_id=body["request_id"], principal_id=body["principal_id"],
+            credential_id=body["credential_id"], approval_public_key_spki_b64=approval_key,
+            public_key_spki_b64=body["public_key_spki_b64"], label=body["label"],
+            nonce=body["nonce"], timestamp=body["timestamp"],
+            approval_signature_b64=body["approval_signature_b64"],
+            proof_signature_b64=body["proof_signature_b64"],
+            attestation_chain=body["attestation_chain"],
+        )
+        if registered is None:
+            return 409, {"result": "error", "message": "The key proof was invalid, duplicated, or expired."}
+        return 201, {"result": "recorded", **registered,
+                     "message": "Key recorded; hardware attestation is unverified and sign-in is not enabled."}
+
+    return RawBodyRoute(handle)
+
+
 def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                   directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                   challenges: "ChallengeStore", server_host: str,
                   server_fingerprint: str | Callable[[], str], phones: "PhoneRegistry",
-                  login_policy=None, certificate_template: str | None = None) -> dict:
+                  login_policy=None, certificate_template: str | None = None,
+                  ad_logon_keys: "AdLogonKeyRegistry | None" = None) -> dict:
     """Build routes without binding them to a particular HTTPS listener."""
     return {
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
@@ -755,4 +803,6 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         PHONE_ENROLL_STATUS_PATH: phone_enrollment_status_route(registry, replay_guard, phones),
         PHONE_ENROLL_CONFIRM_PATH: phone_enrollment_confirm_route(registry, replay_guard, phones),
         PHONE_ENROLL_CANCEL_PATH: phone_enrollment_cancel_route(registry, replay_guard, phones),
+        **({AD_LOGON_KEY_ENROLL_PATH: ad_logon_key_enroll_route(phones, ad_logon_keys)}
+           if ad_logon_keys is not None else {}),
     }
