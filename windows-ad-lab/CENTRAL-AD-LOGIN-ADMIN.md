@@ -17,6 +17,11 @@ the disposable DC: the admin listener returns `200 OK` on TCP 47820, while
 TCP 47810 remains API-only. Administrator login, central enrollment,
 cross-PC approval, and revocation still need interactive verification.
 
+No Clone 1 client update is needed for central key scope: it keeps using its
+existing machine-paired signed API on TCP 47810. SID-wide key lookup is handled
+by the DC service, and the phone app already understands the central enrollment
+scope. The Clone 1 machine still must be paired and able to reach the DC API.
+
 The local Thessley Windows sign-in provider is a separate path. Keep its local
 account keys and offline behavior unchanged.
 
