@@ -218,8 +218,6 @@ Start-ScheduledTask -TaskName $taskName
         Start-Sleep -Milliseconds 500
         $listener = Get-NetTCPConnection -State Listen -LocalAddress $BindAddress -LocalPort 47810 -ErrorAction SilentlyContinue
         $adminListener = Get-NetTCPConnection -State Listen -LocalAddress $BindAddress -LocalPort 47820 -ErrorAction SilentlyContinue
-        $currentTask = Get-ScheduledTask -TaskName $taskName
-        if ((-not $listener -or -not $adminListener) -and $currentTask.State -ne 'Running') { break }
     } while ((-not $listener -or -not $adminListener) -and (Get-Date) -lt $startDeadline)
 if (-not $listener -or -not $adminListener) {
     $task = Get-ScheduledTask -TaskName $taskName

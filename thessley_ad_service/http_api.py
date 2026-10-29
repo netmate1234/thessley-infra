@@ -38,6 +38,7 @@ PHONE_ENROLL_STATUS_PATH = "/thessley-ad/v1/enrollments/status"
 PHONE_ENROLL_CONFIRM_PATH = "/thessley-ad/v1/enrollments/confirm"
 PHONE_ENROLL_CANCEL_PATH = "/thessley-ad/v1/enrollments/cancel"
 AD_LOGON_KEY_ENROLL_PATH = "/thessley-ad/v1/logon-keys/enroll"
+AD_LOGON_KEY_STATUS_PATH = "/thessley-ad/v1/logon-keys/status"
 
 
 @dataclass(frozen=True)
@@ -731,7 +732,7 @@ def ad_logon_key_enroll_route(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRe
 
     fields = {
         "request_id", "principal_id", "credential_id", "public_key_spki_b64", "label", "nonce",
-        "timestamp", "approval_signature_b64", "proof_signature_b64", "attestation_chain",
+        "timestamp", "approval_signature_b64", "proof_signature_b64", "attestation_chain", "pairing_code",
     }
 
     def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
@@ -746,7 +747,8 @@ def ad_logon_key_enroll_route(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRe
                 or isinstance(body.get("timestamp"), bool)
                 or not isinstance(body.get("timestamp"), int)
                 or not isinstance(body.get("approval_signature_b64"), str)
-                or not isinstance(body.get("proof_signature_b64"), str)):
+                or not isinstance(body.get("proof_signature_b64"), str)
+                or not isinstance(body.get("pairing_code"), str)):
             return 400, {"result": "error", "message": "Invalid AD logon-key enrollment."}
         approval_key = phones.public_key_for(
             body["credential_id"], CENTRAL_AD_MACHINE_ID, body["principal_id"],
@@ -761,6 +763,7 @@ def ad_logon_key_enroll_route(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRe
             approval_signature_b64=body["approval_signature_b64"],
             proof_signature_b64=body["proof_signature_b64"],
             attestation_chain=body["attestation_chain"],
+            pairing_code=body["pairing_code"],
         )
         if registered is None:
             logging.getLogger("thessley.ad.api").warning(
@@ -769,7 +772,7 @@ def ad_logon_key_enroll_route(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRe
             )
             return 409, {"result": "error", "message": "The key proof was invalid, duplicated, or expired."}
         logging.getLogger("thessley.ad.api").info(
-            "ad_logon_key_recorded principal_id=%s key_id=%s attestation=%s already_recorded=%s",
+            "ad_logon_key_staged principal_id=%s key_id=%s attestation=%s already_recorded=%s",
             body["principal_id"], registered["key_id"], registered["attestation_status"],
             registered["already_recorded"],
         )
@@ -782,9 +785,22 @@ def ad_logon_key_enroll_route(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRe
             message = "Warning: Android attestation reports software-only key protection. It can be used, but has less protection if the phone is compromised."
         else:
             message = "Warning: hardware protection could not be verified. The key can be used, but treat it as software-backed."
-        return 201, {"result": "recorded", **registered,
-                     "message": message}
+        return 202, {"result": "pending_confirmation", **registered,
+                     "message": "Compare the code on this phone with the AD admin page. The key is not active until confirmed."}
 
+    return RawBodyRoute(handle)
+
+
+def ad_logon_key_status_route(logon_keys: "AdLogonKeyRegistry"):
+    """Return minimal completion status to the phone holding the QR request ID."""
+    def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
+        if auth_headers or set(body) != {"request_id"} or not isinstance(body.get("request_id"), str):
+            return 400, {"result": "error", "message": "Invalid AD key status request."}
+        state = logon_keys.enrollment_status(body["request_id"])
+        if state is None:
+            return 404, {"result": "error", "message": "AD key request was not found."}
+        return 200, {"result": state["status"], "attestation_status": state["attestation_status"],
+                     "key_id": state["key_id"] if state["status"] == "confirmed" else ""}
     return RawBodyRoute(handle)
 
 
@@ -822,6 +838,7 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         PHONE_ENROLL_STATUS_PATH: phone_enrollment_status_route(registry, replay_guard, phones),
         PHONE_ENROLL_CONFIRM_PATH: phone_enrollment_confirm_route(registry, replay_guard, phones),
         PHONE_ENROLL_CANCEL_PATH: phone_enrollment_cancel_route(registry, replay_guard, phones),
-        **({AD_LOGON_KEY_ENROLL_PATH: ad_logon_key_enroll_route(phones, ad_logon_keys)}
+        **({AD_LOGON_KEY_ENROLL_PATH: ad_logon_key_enroll_route(phones, ad_logon_keys),
+            AD_LOGON_KEY_STATUS_PATH: ad_logon_key_status_route(ad_logon_keys)}
            if ad_logon_keys is not None else {}),
     }

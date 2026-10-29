@@ -140,12 +140,12 @@ TLS pin remains
 `49a95d5ab0710aa9c6d822d0263a753e195e717aa2947377784c3a8a7f37bc99`.
 The installed verifier hash matches the source package. The Android app
 `0.1.25` was installed on the Samsung A52s with the same signing certificate
-as the prior build, preserving its app data and Keystore entries. It now
-requests StrongBox first, falls back to TEE, and warns before registering a
-software-backed or unverified AD logon key. No new AD logon key has yet been
-created to confirm this phone's hardware attestation. Use **Add AD logon key**
-in the app; the server records and displays the verified protection level.
-This key enrollment is still a prototype and does not yet enable Windows
+as the prior build, preserving its app data and Keystore entries. It requests
+StrongBox first, falls back to TEE, and warns before creating a software-backed
+or unverified AD logon key. The earlier direct-registration attempt did not
+reach the service and is not an active server key. The verified enrollment
+flow is being prepared in source; deployment and a fresh pairing-code-confirmed
+enrollment are still pending. This key prototype does not enable Windows
 passwordless sign-in.
 
 At 22:50, the admin page was redeployed to label key status as TEE verified,
@@ -154,6 +154,16 @@ created another state snapshot at
 `C:\ProgramData\ThessleyAD\backups\pre-update-20261029-225016`. The task is
 running and both listeners remain active; the TLS pin and firewall scopes are
 unchanged.
+
+The planned AD key enrollment uses a separate admin-started flow: an authorized
+administrator starts a short-lived request from the target account card, the
+phone scans that QR and creates/signs its key, and both screens show the same
+six-digit pairing code. The server activates the key only after the admin
+confirms the match. Pending keys are not returned in the active-key list or
+usable for login. The enrollment QR is pinned to the already-enrolled AD
+service host, port, and certificate fingerprint. The active account card
+continues to show the verified StrongBox/TEE/software status. This remains a
+key-management prototype; it does not enable Windows passwordless sign-in.
 
 On 2026-10-29, the central AD service was updated on `THESSLEY-DC1` using the
 rollback-capable installer. The existing `service.json`, allow-group SID,

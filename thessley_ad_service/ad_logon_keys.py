@@ -34,7 +34,7 @@ _KEY_ID = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 _CREDENTIAL_ID = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 _LABEL = re.compile(r"^[^|\x00-\x1f\x7f]{1,64}$")
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
-_SIGNATURE_DOMAIN = "thessley_ad_logon_key_enroll_v1"
+_SIGNATURE_DOMAIN = "thessley_ad_logon_key_enroll_v2"
 
 
 class AdLogonKeyRegistry:
@@ -84,6 +84,26 @@ class AdLogonKeyRegistry:
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ad_logon_keys_active_spki "
                 "ON ad_logon_keys(principal_id, public_key_sha256) WHERE revoked_at IS NULL"
+            )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS ad_logon_key_enrollments (
+                       request_id TEXT PRIMARY KEY,
+                       principal_id TEXT NOT NULL,
+                       username TEXT NOT NULL,
+                       authority TEXT NOT NULL,
+                       nonce TEXT NOT NULL,
+                       expires_at REAL NOT NULL,
+                       status TEXT NOT NULL,
+                       pairing_code TEXT NOT NULL DEFAULT '',
+                       credential_id TEXT NOT NULL DEFAULT '',
+                       public_key_spki_b64 TEXT NOT NULL DEFAULT '',
+                       public_key_sha256 TEXT NOT NULL DEFAULT '',
+                       label TEXT NOT NULL DEFAULT '',
+                       attestation_chain_json TEXT NOT NULL DEFAULT '[]',
+                       attestation_status TEXT NOT NULL DEFAULT 'unverified',
+                       key_id TEXT NOT NULL DEFAULT '',
+                       created_at REAL NOT NULL
+                   ) WITHOUT ROWID"""
             )
         finally:
             connection.close()
@@ -138,25 +158,27 @@ class AdLogonKeyRegistry:
 
     @staticmethod
     def enrollment_message(*, request_id: str, principal_id: str, credential_id: str,
-                           public_key_sha256: str, nonce: str, timestamp: int, label: str) -> bytes | None:
+                           public_key_sha256: str, nonce: str, timestamp: int, label: str,
+                           pairing_code: str) -> bytes | None:
         if (not isinstance(request_id, str) or not _REQUEST_ID.fullmatch(request_id)
                 or not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id)
                 or not isinstance(credential_id, str) or not _CREDENTIAL_ID.fullmatch(credential_id)
                 or not isinstance(public_key_sha256, str) or not _SHA256.fullmatch(public_key_sha256)
                 or not isinstance(nonce, str) or not _NONCE.fullmatch(nonce)
                 or isinstance(timestamp, bool) or not isinstance(timestamp, int)
-                or not isinstance(label, str) or not _LABEL.fullmatch(label)):
+                or not isinstance(label, str) or not _LABEL.fullmatch(label)
+                or not isinstance(pairing_code, str) or not re.fullmatch(r"[0-9]{3} [0-9]{3}", pairing_code)):
             return None
         fields = (_SIGNATURE_DOMAIN, request_id, principal_id, credential_id,
-                  public_key_sha256, nonce, str(timestamp), label)
+                  public_key_sha256, nonce, str(timestamp), label, pairing_code)
         return "|".join(fields).encode("utf-8")
 
     def register(self, *, request_id: str, principal_id: str, credential_id: str,
                  approval_public_key_spki_b64: str, public_key_spki_b64: str,
                  label: str, nonce: str, timestamp: int,
                  approval_signature_b64: str, proof_signature_b64: str,
-                 attestation_chain: object, now: float | None = None) -> dict | None:
-        """Record a new key after two independent signatures verify.
+                 attestation_chain: object, pairing_code: str = "", now: float | None = None) -> dict | None:
+        """Stage a new key after two signatures and attestation verify.
 
         The caller must obtain ``approval_public_key_spki_b64`` by looking up
         ``credential_id`` for ``CENTRAL_AD_MACHINE_ID`` and this exact
@@ -168,12 +190,14 @@ class AdLogonKeyRegistry:
         current = time.time() if now is None else now
         if (new_key is None or approval_key is None or chain_json is None
                 or not timestamp_is_fresh(timestamp, now)
-                or not isinstance(label, str) or not _LABEL.fullmatch(label)):
+                or not isinstance(label, str) or not _LABEL.fullmatch(label)
+                or not isinstance(pairing_code, str) or not re.fullmatch(r"[0-9]{3} [0-9]{3}", pairing_code)):
             return None
         _, key_digest = new_key
         message = self.enrollment_message(
             request_id=request_id, principal_id=principal_id, credential_id=credential_id,
             public_key_sha256=key_digest, nonce=nonce, timestamp=timestamp, label=label,
+            pairing_code=pairing_code,
         )
         if message is None:
             return None
@@ -192,57 +216,37 @@ class AdLogonKeyRegistry:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                """SELECT key_id, principal_id, approval_credential_id,
-                          public_key_sha256, label, attestation_chain_json,
-                          attestation_status, created_at, revoked_at
-                   FROM ad_logon_keys WHERE request_id = ?""",
+            request = connection.execute(
+                "SELECT principal_id, nonce, expires_at, status FROM ad_logon_key_enrollments WHERE request_id = ?",
                 (request_id,),
             ).fetchone()
-            if existing is not None:
-                (existing_id, existing_principal, existing_credential, existing_digest,
-                 existing_label, existing_chain_json, existing_status, created_at, revoked_at) = existing
-                if (existing_principal != principal_id or existing_credential != credential_id
-                        or existing_digest != key_digest or existing_label != label or revoked_at is not None):
-                    connection.execute("ROLLBACK")
-                    return None
-                # Allow a retry of an older registration to improve an empty
-                # or previously unverified evidence record, but never permit
-                # a changed chain to replace non-empty evidence.
-                if existing_chain_json != chain_json:
-                    if existing_chain_json != "[]" or attestation_status not in {
-                        "verified_tee", "verified_strongbox", "verified_software"
-                    }:
-                        connection.execute("ROLLBACK")
-                        return None
-                    connection.execute(
-                        "UPDATE ad_logon_keys SET attestation_chain_json = ?, attestation_status = ? "
-                        "WHERE key_id = ?",
-                        (chain_json, attestation_status, existing_id),
-                    )
-                elif existing_status == "unverified" and attestation_status != "unverified":
-                    connection.execute(
-                        "UPDATE ad_logon_keys SET attestation_status = ? WHERE key_id = ?",
-                        (attestation_status, existing_id),
-                    )
-                connection.execute("COMMIT")
-                return {"key_id": existing_id, "public_key_sha256": key_digest,
-                        "attestation_status": attestation_status if attestation_status != "unverified" else existing_status,
-                        "created_at": created_at,
-                        "already_recorded": True}
+            if (request is None or request[0] != principal_id or request[1] != nonce
+                    or request[2] <= current or request[3] not in ("pending", "ready")):
+                connection.execute("ROLLBACK")
+                return None
+            if request[3] == "ready":
+                existing = connection.execute(
+                    "SELECT credential_id, public_key_sha256, label, pairing_code, key_id "
+                    "FROM ad_logon_key_enrollments WHERE request_id = ?", (request_id,),
+                ).fetchone()
+                if existing and existing[:3] == (credential_id, key_digest, label):
+                    connection.execute("COMMIT")
+                    return {"result": "pending_confirmation", "pairing_code": existing[3],
+                            "key_id": existing[4], "public_key_sha256": key_digest,
+                            "attestation_status": attestation_status, "already_recorded": True}
+                connection.execute("ROLLBACK")
+                return None
             connection.execute(
-                """INSERT INTO ad_logon_keys
-                   (key_id, request_id, principal_id, approval_credential_id,
-                    public_key_spki_b64, public_key_sha256, label,
-                    attestation_chain_json, attestation_status, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (key_id, request_id, principal_id, credential_id, public_key_spki_b64,
-                 key_digest, label, chain_json, attestation_status, current),
+                """UPDATE ad_logon_key_enrollments SET status='ready', pairing_code=?, credential_id=?,
+                   public_key_spki_b64=?, public_key_sha256=?, label=?, attestation_chain_json=?,
+                   attestation_status=?, key_id=? WHERE request_id=? AND status='pending'""",
+                (pairing_code, credential_id, public_key_spki_b64, key_digest, label,
+                 chain_json, attestation_status, key_id, request_id),
             )
             connection.execute("COMMIT")
-            return {"key_id": key_id, "public_key_sha256": key_digest,
-                    "attestation_status": attestation_status, "created_at": current,
-                    "already_recorded": False}
+            return {"result": "pending_confirmation", "key_id": key_id,
+                    "public_key_sha256": key_digest, "attestation_status": attestation_status,
+                    "pairing_code": pairing_code, "already_recorded": False}
         except sqlite3.IntegrityError:
             try:
                 connection.execute("ROLLBACK")
@@ -255,6 +259,102 @@ class AdLogonKeyRegistry:
             except sqlite3.Error:
                 pass
             return None
+        finally:
+            connection.close()
+
+    def create_enrollment(self, *, principal_id: str, username: str, authority: str,
+                          now: float | None = None, lifetime_seconds: int = 300) -> dict | None:
+        if (not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id)
+                or not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,20}", username)
+                or not isinstance(authority, str) or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}", authority)
+                or not isinstance(lifetime_seconds, int) or not 60 <= lifetime_seconds <= 600):
+            return None
+        current = time.time() if now is None else now
+        request_id, nonce = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
+        connection = self._connect()
+        try:
+            connection.execute(
+                "DELETE FROM ad_logon_key_enrollments WHERE "
+                "(expires_at <= ? AND status IN ('pending','ready')) OR "
+                "(created_at < ? AND status IN ('confirmed','cancelled'))",
+                (current, current - 86400),
+            )
+            connection.execute(
+                "INSERT INTO ad_logon_key_enrollments(request_id, principal_id, username, authority, nonce, expires_at, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (request_id, principal_id, username, authority, nonce, current + lifetime_seconds, current),
+            )
+            return {"request_id": request_id, "principal_id": principal_id, "username": username,
+                    "authority": authority, "nonce": nonce, "expires_at": current + lifetime_seconds}
+        except sqlite3.Error:
+            return None
+        finally:
+            connection.close()
+
+    def enrollment_status(self, request_id: str, *, now: float | None = None) -> dict | None:
+        if not isinstance(request_id, str) or not _REQUEST_ID.fullmatch(request_id):
+            return None
+        current = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT principal_id, username, authority, expires_at, status, pairing_code, key_id, public_key_sha256, attestation_status "
+                "FROM ad_logon_key_enrollments WHERE request_id=?", (request_id,),
+            ).fetchone()
+            if not row:
+                return None
+            status = "expired" if row[3] <= current and row[4] not in ("confirmed", "cancelled") else row[4]
+            return {"principal_id": row[0], "username": row[1], "authority": row[2], "expires_at": row[3],
+                    "status": status, "pairing_code": row[5], "key_id": row[6],
+                    "public_key_sha256": row[7], "attestation_status": row[8]}
+        except sqlite3.Error:
+            return None
+        finally:
+            connection.close()
+
+    def confirm_enrollment(self, *, request_id: str, pairing_code: str,
+                           administrator: str, now: float | None = None) -> bool:
+        if (not isinstance(request_id, str) or not _REQUEST_ID.fullmatch(request_id)
+                or not isinstance(pairing_code, str) or not re.fullmatch(r"[0-9]{3} [0-9]{3}", pairing_code)
+                or not isinstance(administrator, str) or not administrator or len(administrator) > 256):
+            return False
+        current = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT principal_id, credential_id, public_key_spki_b64, public_key_sha256, label, attestation_chain_json, attestation_status, key_id, created_at, expires_at, status, pairing_code "
+                "FROM ad_logon_key_enrollments WHERE request_id=?", (request_id,),
+            ).fetchone()
+            if not row or row[9] <= current or row[10] != "ready" or not secrets.compare_digest(row[11], pairing_code):
+                connection.execute("ROLLBACK")
+                return False
+            connection.execute(
+                "INSERT INTO ad_logon_keys(key_id, request_id, principal_id, approval_credential_id, public_key_spki_b64, public_key_sha256, label, attestation_chain_json, attestation_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (row[7], request_id, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[8]),
+            )
+            connection.execute("UPDATE ad_logon_key_enrollments SET status='confirmed', pairing_code='', credential_id='' WHERE request_id=?", (request_id,))
+            connection.execute("COMMIT")
+            return True
+        except sqlite3.Error:
+            try: connection.execute("ROLLBACK")
+            except sqlite3.Error: pass
+            return False
+        finally:
+            connection.close()
+
+    def cancel_enrollment(self, request_id: str) -> bool:
+        if not isinstance(request_id, str) or not _REQUEST_ID.fullmatch(request_id):
+            return False
+        connection = self._connect()
+        try:
+            cursor = connection.execute(
+                "UPDATE ad_logon_key_enrollments SET status='cancelled', pairing_code='', credential_id='' "
+                "WHERE request_id=? AND status IN ('pending','ready')", (request_id,),
+            )
+            return cursor.rowcount == 1
+        except sqlite3.Error:
+            return False
         finally:
             connection.close()
 

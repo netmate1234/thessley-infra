@@ -109,6 +109,7 @@ class AdminWeb:
         self._preauth: dict[str, float] = {}
         self._login_attempts: dict[str, list[float]] = {}
         self._enrollment_qrs: dict[str, tuple[str, float]] = {}
+        self._ad_logon_key_qrs: dict[str, tuple[str, float]] = {}
         self._qr_logins: dict[str, dict] = {}
         self._lock = threading.RLock()
 
@@ -237,6 +238,14 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 return self._response(400, self._page("Enrollment", "<section class=card>Invalid enrollment ID.</section>"))
             qr_data = self._enrollment_qrs.get(request_ids[0], ("", 0))[0]
             return self._enrollment_page(request_ids[0], session, qr_data=qr_data)
+        if path == "/admin/ad-logon-key-enrollment":
+            params = parse_qs(query, keep_blank_values=True)
+            request_ids = params.get("id", [])
+            if len(request_ids) != 1 or not _REQUEST_ID.fullmatch(request_ids[0]):
+                return self._response(400, self._page("AD key enrollment", "<section class=card>Invalid enrollment ID.</section>"))
+            return self._ad_logon_key_enrollment_page(
+                request_ids[0], session, self._ad_logon_key_qrs.get(request_ids[0], ("", 0))[0]
+            )
         if path == "/admin/logout":
             return self._response(405, self._page("Sign out", "<section class=card>Use the sign-out button.</section>"))
         return self._response(404, self._page("Not found", "<section class=card>Page not found.</section>"))
@@ -485,6 +494,66 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             _LOG.info("admin_enrollment_started actor=%s target=%s", session["sid"], principal.sid)
             return self._response(303, "", extra_headers=((
                 "Location", f"/admin/enrollment?id={enrollment['request_id']}"),))
+        if path == "/admin/enroll-ad-logon-key":
+            sid = form.get("sid", "")
+            if self.ad_logon_keys is None:
+                return self._response(503, self._page("AD key enrollment", '<section class="card error">AD logon-key registry is unavailable.</section>'))
+            try:
+                principal = self.directory.resolve_user_sid(sid)
+            except Exception:
+                _LOG.exception("admin_ad_logon_key_target_lookup_failed actor=%s", session["sid"])
+                return self._response(503, self._page("AD key enrollment", '<section class="card error">Could not verify that AD account. Refresh and retry.</section>'))
+            if (principal.authority.casefold() != self.authority.casefold()
+                    or (not principal.group_sids.intersection(self.allowed_group_sids)
+                        and _ADMINISTRATORS_SID not in principal.group_sids)):
+                return self._response(403, self._page("AD key enrollment", '<section class="card error">That account is not authorized for Thessley AD sign-in.</section>'))
+            principal_id = principal_id_from_sid(principal.sid)
+            request = self.ad_logon_keys.create_enrollment(
+                principal_id=principal_id, username=principal.username, authority=principal.authority,
+            )
+            if not request:
+                return self._response(503, self._page("AD key enrollment", '<section class="card error">Could not start the key enrollment.</section>'))
+            link = "thessleypam://ad-key-enroll?" + urlencode({
+                "h": self.public_host, "p": "47810", "fp": self.certificate_fingerprint,
+                "id": request["request_id"], "n": request["nonce"], "m": CENTRAL_AD_MACHINE_ID,
+                "hn": self.authority, "u": principal.username, "pv": "2", "sid": principal_id,
+                "scope": "domain", "auth": principal.authority, "ctx": "ad-key-enrollment",
+                "api": "ad", "global": "1",
+            })
+            try:
+                qr = _qr_data_uri(link)
+            except Exception:
+                self.ad_logon_keys.cancel_enrollment(request["request_id"])
+                return self._response(503, self._page("AD key enrollment", '<section class="card error">Could not render an enrollment QR. No key was activated.</section>'))
+            with self._lock:
+                now = time.time()
+                self._ad_logon_key_qrs = {
+                    key: value for key, value in self._ad_logon_key_qrs.items() if value[1] > now
+                }
+                self._ad_logon_key_qrs[request["request_id"]] = (qr, request["expires_at"])
+            _LOG.info("admin_ad_logon_key_enrollment_started actor=%s target=%s request=%s",
+                      session["sid"], principal.sid, request["request_id"])
+            return self._response(303, "", extra_headers=((
+                "Location", f"/admin/ad-logon-key-enrollment?id={request['request_id']}"),))
+        if path == "/admin/confirm-ad-logon-key":
+            request_id = form.get("id", "")
+            pairing = form.get("pairing_code", "")
+            if self.ad_logon_keys is None or not _REQUEST_ID.fullmatch(request_id):
+                return self._response(400, self._page("AD key enrollment", '<section class="card error">Invalid enrollment confirmation.</section>'))
+            if not self.ad_logon_keys.confirm_enrollment(
+                request_id=request_id, pairing_code=pairing, administrator=session["sid"],
+            ):
+                return self._ad_logon_key_enrollment_page(request_id, session, message="The code did not match or the request expired.")
+            _LOG.info("admin_ad_logon_key_enrollment_confirmed actor=%s request=%s", session["sid"], request_id)
+            return self._response(303, "", extra_headers=((
+                "Location", f"/admin/ad-logon-key-enrollment?id={request_id}"),))
+        if path == "/admin/cancel-ad-logon-key":
+            request_id = form.get("id", "")
+            if self.ad_logon_keys is not None and _REQUEST_ID.fullmatch(request_id):
+                self.ad_logon_keys.cancel_enrollment(request_id)
+                with self._lock:
+                    self._ad_logon_key_qrs.pop(request_id, None)
+            return self._response(303, "", extra_headers=(("Location", "/admin/"),))
         if path == "/admin/confirm-enrollment":
             request_id = form.get("id", "")
             if not _REQUEST_ID.fullmatch(request_id) or form.get("confirm") != "match":
@@ -618,10 +687,34 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             content += '</div><div>'
             if authorized or dc_administrator:
                 content += f'''<form method="post" action="/admin/enroll"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button>Enroll phone</button></form>'''
+                content += f'''<form method="post" action="/admin/enroll-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="small">Add AD logon key…</button></form>'''
             content += '</div></section>'
         if snapshot.get("truncated"):
             content += '<section class="card">Directory listing reached its 1,000-account limit.</section>'
         return self._response(200, self._page("AD accounts", content))
+
+    def _ad_logon_key_enrollment_page(self, request_id: str, session: dict, qr_data: str = "", message: str = ""):
+        if self.ad_logon_keys is None:
+            return self._response(503, self._page("AD key enrollment", '<section class="card error">AD logon-key registry is unavailable.</section>'))
+        state = self.ad_logon_keys.enrollment_status(request_id)
+        if state is None:
+            return self._response(404, self._page("AD key enrollment", '<section class="card error">Enrollment request not found.</section>'))
+        account = html.escape(state["authority"] + chr(92) + state["username"])
+        if state["status"] == "confirmed":
+            body = f'<h1>AD key confirmed</h1><section class="card success">The key for <strong>{account}</strong> is active. Protection: {html.escape(state["attestation_status"])}.</section><a class="button" href="/admin/">Back to accounts</a>'
+        elif state["status"] in ("expired", "cancelled"):
+            body = '<h1>Enrollment ended</h1><section class="card error">This request expired or was cancelled. Start a new request from AD accounts.</section><a class="button" href="/admin/">Back to accounts</a>'
+        else:
+            refresh = '<meta http-equiv="refresh" content="2">' if state["status"] == "pending" else ''
+            error = f'<section class="card error">{html.escape(message)}</section>' if message else ''
+            qr = f'<img class="qr" alt="AD logon key enrollment QR" src="{html.escape(qr_data, quote=True)}">' if qr_data else ''
+            body = refresh + f'<h1>Add AD logon key for {account}</h1>{error}<section class="card"><p>Scan with Thessley Passkey. The phone creates the key and displays a six-digit code. Confirm only when the phone and this page show the same code.</p>{qr}'
+            if state["status"] == "pending":
+                body += '<p class="status">Waiting for the phone to create and submit its key…</p>'
+            elif state["status"] == "ready":
+                body += f'<p class="status">Pairing code: <strong>{html.escape(state["pairing_code"])}</strong></p><p class="muted">Protection reported by Android: {html.escape(state["attestation_status"])}. A code match verifies the request, not the phone manufacturer or hardware beyond the attestation result.</p><form method="post" action="/admin/confirm-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><input type="hidden" name="pairing_code" value="{html.escape(state["pairing_code"])}"><button>Codes match — activate key</button></form>'
+            body += '</section><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button> <a class="button" href="/admin/">Return to accounts</a></form>'
+        return self._response(200, self._page("AD logon-key enrollment", body))
 
     def _policy_page(self, session: dict, message: str = ""):
         if self.login_policy is None:
