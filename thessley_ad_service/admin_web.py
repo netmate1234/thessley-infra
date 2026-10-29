@@ -188,7 +188,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             parsed = urlsplit(target)
         except ValueError:
             return self._response(400, self._page("Bad request", "<section class=card>Invalid request.</section>"))
-        if parsed.path != "/admin" and not parsed.path.startswith("/admin/"):
+        if parsed.path != "/" and parsed.path != "/admin" and not parsed.path.startswith("/admin/"):
             return None
         if parsed.query and ("#" in target or len(parsed.query) > 512):
             return self._response(400, self._page("Bad request", "<section class=card>Invalid request.</section>"))
@@ -204,6 +204,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         return self._post(parsed.path, form, headers, client_ip)
 
     def _get(self, path: str, query: str, headers, client_ip: str):
+        if path == "/":
+            return self._response(303, "", extra_headers=(("Location", "/admin/"),))
         if path in ("/admin", "/admin/"):
             token, session = self._session(headers)
             if not session:
