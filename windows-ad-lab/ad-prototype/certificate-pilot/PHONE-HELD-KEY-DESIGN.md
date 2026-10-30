@@ -105,14 +105,12 @@ Kerberos trust also requires Microsoft Entra Kerberos and does not support a
 pure on-premises AD DS deployment. These are not drop-in routes for this lab.
 
 For pure AD DS and network-only phone communication, the phone's private key
-needs to sign the KDC authentication challenge through a Windows-supported
-smart-card/key-provider path. A Credential Provider can collect and serialize
-credentials, but it does not itself provide the private-key signing operation
-that LSA/Kerberos performs. A remote signing bridge therefore needs a Windows
-component in the authentication path. The supported smart-card minidriver path
-is subject to Microsoft's protected-LSA signing requirements; a Credential
-Provider alone cannot replace it. Do not weaken LSA protection or describe a
-QR approval as direct phone-key PKINIT.
+must sign the KDC authentication challenge. A custom smart-card minidriver is
+one possible bridge, but it may not be the only one. The candidate below uses
+the phone itself as the PKINIT client and asks the Windows Credential Provider
+to pass the KDC-issued tickets through the built-in Kerberos authentication
+package. This avoids putting a custom key provider in LSA, but remains
+unproven for an interactive desktop logon.
 
 The connected A52s LineageOS 24 build was inspected read-only over ADB on
 2026-10-30. Its kernel exposes `/dev/ccid_ctrl` and `/dev/ccid_bulk`, but the
@@ -120,15 +118,42 @@ phone is not rooted (`su` is unavailable), its current USB mode is `adb`, and
 the CCID gadget endpoints are root-owned. This does not provide the required
 network-only Windows bridge; no USB-based setup is being pursued.
 
-The practical network-only fallback is to use the phone's verified TEE key to
-sign a fresh, machine- and account-bound login approval, then have Windows use
-its existing TPM-backed smart-card credential for the actual AD/Kerberos
-logon. This is phone-approved login with a PC-held logon key; it is **not**
-direct phone-key PKINIT. If direct phone-key PKINIT remains mandatory, the
-remaining work is a supported, signed Windows key-provider/minidriver bridge
-plus its network relay, or an applicable Microsoft Entra deployment. Do not
-issue a phone-key logon certificate or enable that policy before one of those
-paths is available.
+### Candidate: phone PKINIT plus Windows ticket logon
+
+Microsoft documents that Credential Providers serialize credentials for an
+authentication package, and that the Kerberos package accepts
+`KERB_TICKET_LOGON` through `LsaLogonUser`. That structure carries the KDC's
+host service ticket for `host/<computer>` and optionally a forwarded TGT in a
+`KRB_CRED`. The service ticket's PAC is what Windows uses to build the user's
+logon token. This suggests a network-only flow that keeps the phone key as the
+actual AD credential without a smart-card driver:
+
+1. Windows starts a single-use request bound to the selected AD SID and this
+   computer's host SPN, then displays its QR.
+2. After scanning, Android uses the TEE-held key and its AD logon certificate
+   to perform PKINIT directly with the domain controller and obtains a TGT.
+3. Android requests the host service ticket, packages that ticket and the
+   forwarded TGT, and delivers them over the authenticated, machine-bound
+   request channel.
+4. The Windows Credential Provider serializes `KERB_TICKET_LOGON` for the
+   built-in Kerberos package. LSA/Kerberos validates the KDC-issued ticket and
+   creates the interactive logon session.
+
+This is a **candidate, not a verified implementation**. The Microsoft API
+documentation describes ticket logon and the credential serialization
+contract, but does not explicitly document this exact custom Credential
+Provider desktop-logon combination. The first gate is a disposable Windows
+test account: obtain real KDC tickets using the existing TPM smart-card
+credential, pass them through a minimal `KERB_TICKET_LOGON` Credential
+Provider, and verify an interactive desktop session plus a valid ticket cache.
+Only after that succeeds should the flow be changed to phone PKINIT. Keep all
+tickets in memory, wipe them after one use, and never log or persist them.
+
+The QR request and ticket delivery must be short-lived, single-use, and bound
+to the selected SID, exact host SPN, phone credential, and current machine.
+The phone must display the account and computer and require local user
+verification before signing. Offline first logon is unavailable because the
+phone and PC need the DC; retain the normal recovery credential.
 
 For the requested `THESSLEYLAB\Administrator` test, the phone key is already
 enrolled and verified TEE, but the service configuration still has no
@@ -136,9 +161,9 @@ enrolled and verified TEE, but the service configuration still has no
 logon method remains disabled. The last read-only DC check confirmed
 `CertSvc` is running and listed existing published templates including
 `ThessleyVscLogon`; it did not configure or change the CA. Therefore there is
-no direct phone-key Administrator login to try yet. Keep the existing
-password/TPM recovery options available while the network-only bridge is
-resolved.
+no phone-key Administrator login to try yet. Keep the existing password/TPM
+recovery options available. Do not configure CA issuance for the built-in
+Administrator until the ticket-logon proof passes with a disposable account.
 
 ## Compatibility questions for the Windows bridge
 
