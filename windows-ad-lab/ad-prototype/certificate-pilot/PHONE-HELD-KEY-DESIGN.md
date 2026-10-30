@@ -670,5 +670,19 @@ certificate-object transport can work. It does **not** establish that Windows
 accepts the returned object as a usable certificate/key pair, that Windows
 requested a phone signature, that PKINIT reached the DC, or that AD login
 works. The unchanged physical phone is not the card presented by this VM
-POC. The current blocking question is Windows smart-card certificate/key
-association and enumeration; the phone-signing relay has not been built.
+POC. Microsoft's documented sign-in enumeration first opens the card's
+default crypto container; if that fails, Windows considers the card unusable.
+It then obtains certificates from the provider's user certificate store or
+from the container's `AT_KEYEXCHANGE` certificate. The POC deliberately has
+no private-key container and rejects signing, so `NTE_BAD_KEYSET` is expected
+and explains why the certificate is not offered as a usable logon credential.
+This is a missing bridge implementation, not a change to or failure of the
+phone's secure chip. See Microsoft's [certificate enumeration and sign-in
+flow](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration).
+
+The next implementation step is to connect PIV key reference `9A` and its
+ECDSA operation to the existing phone TEE key, with a fresh, account- and
+computer-bound phone approval before the signature is returned. The card
+provider must then expose the certificate and key as one usable container.
+Only after Windows requests the signature can a matching DC PKINIT event and
+a successful Windows session establish end-to-end login.
