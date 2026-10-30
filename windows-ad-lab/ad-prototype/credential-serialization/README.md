@@ -1,10 +1,11 @@
 # AD certificate serialization spike
 
-This directory contains a small, isolated helper for the future AD-only
-Credential Provider. It builds a `KERB_CERTIFICATE_LOGON` or
-`KERB_CERTIFICATE_UNLOCK_LOGON` buffer for LogonUI; it does not call
-`LsaLogonUser`, talk to the approval service, register a provider, or alter a
-Windows sign-in path.
+This directory contains isolated helpers for the future AD-only Credential
+Provider. The certificate helper builds `KERB_CERTIFICATE_LOGON` or
+`KERB_CERTIFICATE_UNLOCK_LOGON`; the ticket helper builds `KERB_TICKET_LOGON`
+for the built-in Kerberos package. They do not call `LsaLogonUser`, perform
+PKINIT, talk to the approval service, register a provider, or alter a Windows
+sign-in path.
 
 `ad_approval_client.cpp` is the separate native adapter for the AD agent. It
 starts the existing Python agent with a SID and logon context, captures its
@@ -37,12 +38,14 @@ and a card minidriver ([Smart Card Architecture](https://learn.microsoft.com/en-
 [Smart Card Minidriver Overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/smart-card-minidriver-overview)).
 
 Therefore the current Software KSP certificate is not wired into this tested
-VSC serializer. A real phone-held-key path needs a supported Windows smart-card
-minidriver or equivalent provider that can relay the Kerberos signing operation
-to the phone's protected key. Until that exists and is tested, the only proven
-credential path remains the PC's TPM virtual smart card with a separate phone
-approval; the certificate pilot remains disabled. The end-to-end design and
-pre-implementation questions are in
+VSC serializer. The new ticket serializer supports a different candidate:
+Android performs PKINIT with its TEE-held key, requests the exact computer
+host ticket, then delivers that KDC-issued ticket and a forwarded TGT for
+`KERB_TICKET_LOGON`. This avoids asking Windows to call a remote private-key
+provider. The exact interactive Credential Provider path is unproven; validate
+it with a disposable test account before issuing the phone-key certificate or
+enabling the policy. The existing TPM VSC path remains the only proven
+credential path. End-to-end requirements are in
 [`certificate-pilot/PHONE-HELD-KEY-DESIGN.md`](../certificate-pilot/PHONE-HELD-KEY-DESIGN.md).
 
 ## Current lab blocker
@@ -81,9 +84,12 @@ final LSA status/substatus. When changing the provider DLL, verify its SHA-256
 against the build output and reload LogonUI (a VM reboot was used for this
 test) before interpreting the trace.
 
-The eventual near-term flow is phone approval followed by this TPM VSC
-certificate logon. The private key remains on the PC. This is not the
-phone-held-key PKINIT target.
+The direct phone-key target is PKINIT in Android followed by Kerberos ticket
+logon in Windows. The phone key performs the KDC authentication signature; the
+Windows machine receives only the short-lived KDC-issued ticket material. The
+ticket serializer is not yet connected to the Credential Provider, and this
+flow has not yet passed an interactive logon test. The existing TPM VSC path
+remains available as recovery.
 
 ## Build
 
