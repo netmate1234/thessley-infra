@@ -20,11 +20,32 @@ mkdir -p "$out_dir"
   "$provider_dir/provider_diag.cpp" "$provider_dir/password_vault.cpp" "$provider_dir/pin_vault.cpp" \
   "$provider_dir/ad_lab_vsc_config.cpp" \
   "$serialization_dir/kerb_certificate_serialization.cpp" \
+  "$serialization_dir/kerb_ticket_serialization.cpp" \
+  "$serialization_dir/ad_ticket_broker_client.cpp" \
   "$serialization_dir/ad_approval_client.cpp" \
   "$out_dir/provider-res.o" "$provider_dir/samplev2credentialprovider.def" \
   -lcredui -lole32 -loleaut32 -lshlwapi -lsecur32 -ladvapi32 -lgdi32 \
   -lws2_32 -luuid -lcrypt32 \
   -o "$out_dir/ThessleyADCredentialProvider.dll"
+
+"${tool_prefix}-g++" \
+  -std=c++17 -O2 -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN \
+  -DTHESSLEY_TICKET_LOGON_TEST \
+  -include "$provider_dir/mingw_compat.h" -shared -static -pthread \
+  -I"$serialization_dir" \
+  "$provider_dir/ThessleyCredential.cpp" \
+  "$provider_dir/CSampleProvider.cpp" "$provider_dir/Dll.cpp" \
+  "$provider_dir/guid.cpp" "$provider_dir/helpers.cpp" \
+  "$provider_dir/provider_diag.cpp" "$provider_dir/password_vault.cpp" "$provider_dir/pin_vault.cpp" \
+  "$provider_dir/ad_lab_vsc_config.cpp" \
+  "$serialization_dir/kerb_certificate_serialization.cpp" \
+  "$serialization_dir/kerb_ticket_serialization.cpp" \
+  "$serialization_dir/ad_ticket_broker_client.cpp" \
+  "$serialization_dir/ad_approval_client.cpp" \
+  "$out_dir/provider-res.o" "$provider_dir/samplev2credentialprovider.def" \
+  -lcredui -lole32 -loleaut32 -lshlwapi -lsecur32 -ladvapi32 -lgdi32 \
+  -lws2_32 -luuid -lcrypt32 \
+  -o "$out_dir/ThessleyADTicketTestCredentialProvider.dll"
 
 pushd "$viewer_dir" >/dev/null
 "${tool_prefix}-windres" -O coff resources.rc -o "$out_dir/qr-viewer-res.o"
@@ -36,4 +57,5 @@ pushd "$viewer_dir" >/dev/null
 popd >/dev/null
 
 printf 'Built isolated AD provider and QR viewer in %s\n' "$out_dir"
+printf 'Built separate ticket-test provider GUID: %s\n' "$out_dir/ThessleyADTicketTestCredentialProvider.dll"
 printf 'Build only: no registration, installation, or VM changes were made.\n'

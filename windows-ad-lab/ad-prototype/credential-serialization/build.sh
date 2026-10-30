@@ -7,6 +7,7 @@ out="/tmp/thessley-ad-kerb-certificate-serialization.o"
 client_out="/tmp/thessley-ad-approval-client.o"
 ticket_out="/tmp/thessley-ad-kerb-ticket-serialization.o"
 probe_out="/tmp/thessley-ad-ticket-logon-probe.exe"
+broker_out="/tmp/thessley-ad-ticket-broker.exe"
 
 "${tool_prefix}-g++" \
   -std=c++17 -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0601 \
@@ -39,5 +40,13 @@ probe_out="/tmp/thessley-ad-ticket-logon-probe.exe"
   -municode -ladvapi32 -lsecur32 -lole32 -Wl,--gc-sections \
   -o "$probe_out"
 
-printf 'Built isolated certificate serializer: %s\nBuilt isolated approval client: %s\nBuilt isolated Kerberos ticket serializer: %s\nBuilt LSA ticket-logon probe: %s\n' \
-  "$out" "$client_out" "$ticket_out" "$probe_out"
+"${tool_prefix}-g++" \
+  -std=c++17 -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0601 \
+  -Wall -Wextra -Werror -Os -s -static-libgcc -static-libstdc++ \
+  -I"$root" \
+  "$root/ticket_broker_service.cpp" \
+  -municode -mwindows -ladvapi32 -lsecur32 -lwtsapi32 \
+  -o "$broker_out"
+
+printf 'Built isolated certificate serializer: %s\nBuilt isolated approval client: %s\nBuilt isolated Kerberos ticket serializer: %s\nBuilt LSA ticket-logon probe: %s\nBuilt Clone 1-only volatile ticket broker: %s\n' \
+  "$out" "$client_out" "$ticket_out" "$probe_out" "$broker_out"

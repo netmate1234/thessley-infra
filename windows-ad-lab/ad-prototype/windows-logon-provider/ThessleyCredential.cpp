@@ -13,6 +13,7 @@
 #define WIN32_NO_STATUS
 #endif
 #include <unknwn.h>
+#include <wincrypt.h>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -21,7 +22,9 @@
 #include "guid.h"
 #include "provider_diag.h"
 #include "ad_approval_client.h"
+#include "ad_ticket_broker_protocol.h"
 #include "kerb_certificate_serialization.h"
+#include "kerb_ticket_serialization.h"
 #include "password_vault.h"
 
 // Releasing the worker's final COM reference on the worker itself can destroy
@@ -33,6 +36,16 @@ static DWORD WINAPI ReleaseCredentialReference(LPVOID context)
 {
     static_cast<CSampleCredential *>(context)->Release();
     return 0;
+}
+
+static bool IsTicketLogonTestMode(const AdLabVscConfig& config)
+{
+#ifdef THESSLEY_TICKET_LOGON_TEST
+    return config.ticketLogonTest;
+#else
+    (void)config;
+    return false;
+#endif
 }
 
 static std::wstring RenderQr(const std::string &matrix)
@@ -77,7 +90,11 @@ static bool LaunchQrViewer(const std::string &matrix)
     std::wstring wideMatrix(static_cast<size_t>(chars), L'\0');
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, matrix.data(),
                              static_cast<int>(matrix.size()), wideMatrix.data(), chars)) return false;
+#ifdef THESSLEY_TICKET_LOGON_TEST
+    const std::wstring app = L"C:\\ProgramData\\ThessleyPamWin\\ad-ticket-logon-test\\ThessleyADQrViewer.exe";
+#else
     const std::wstring app = L"C:\\ProgramData\\ThessleyPamWin\\ad-credential-provider\\ThessleyADQrViewer.exe";
+#endif
     std::wstring command = L"\"" + app + L"\" --matrix=" + wideMatrix;
     std::vector<wchar_t> writable(command.begin(), command.end());
     writable.push_back(L'\0');
@@ -544,7 +561,16 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
         // A configured account SID is the allowlist. Do not infer local vs
         // domain identity from the provider ID: Windows may report a domain
         // profile through Identity_LocalUserProvider.
-        const bool isAllowedAdLabUser = LoadAdLabVscConfig(_pszUserSid, &_adLabVscConfig);
+        bool isAllowedAdLabUser = LoadAdLabVscConfig(_pszUserSid, &_adLabVscConfig);
+#ifdef THESSLEY_TICKET_LOGON_TEST
+        isAllowedAdLabUser = isAllowedAdLabUser && _adLabVscConfig.ticketLogonTest;
+#else
+        // Ticket-test-only SIDs must never appear on the established VSC tile.
+        isAllowedAdLabUser = isAllowedAdLabUser &&
+            !_adLabVscConfig.providerName.empty() &&
+            (_adLabVscConfig.keySpec == AT_KEYEXCHANGE ||
+             _adLabVscConfig.keySpec == AT_SIGNATURE);
+#endif
         ProviderDiag(L"AdLabSidCheck", S_OK, isAllowedAdLabUser ? 1 : 0);
         ProviderDiag(L"IdentityLocalProvider", S_OK, _fIsLocalUser ? 1 : 0);
         if (!isAllowedAdLabUser)
@@ -555,8 +581,10 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
         {
             _fIsLocalUser = false;
             _adLabUser = true;
-            _vaultAvailable = ThessleyPinVaultExists(_pszUserSid);
-            _passwordEntryMode = !_vaultAvailable; // only the first sign-in needs the PIN typed
+            _vaultAvailable = !IsTicketLogonTestMode(_adLabVscConfig) &&
+                ThessleyPinVaultExists(_pszUserSid);
+            _passwordEntryMode = !IsTicketLogonTestMode(_adLabVscConfig) &&
+                !_vaultAvailable; // only VSC mode asks for its one-time PIN
             _fChecked = false;
             if (_rgFieldStrings[SFI_EDIT_TEXT])
             {
@@ -564,14 +592,18 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
                 CoTaskMemFree(_rgFieldStrings[SFI_EDIT_TEXT]);
             }
             _rgFieldStrings[SFI_EDIT_TEXT] = nullptr;
-            SHStrDupW(_vaultAvailable
-                ? L"Phone approval will unlock this PC's TPM sign-in key."
-                : L"For the first sign-in, enter the TPM PIN once. Check Remember to use QR approval alone next time.",
+            SHStrDupW(IsTicketLogonTestMode(_adLabVscConfig)
+                ? L"Ticket-logon feasibility test: phone approval submits one short-lived, local-only Kerberos ticket."
+                : (_vaultAvailable
+                    ? L"Phone approval will unlock this PC's TPM sign-in key."
+                    : L"For the first sign-in, enter the TPM PIN once. Check Remember to use QR approval alone next time."),
                 &_rgFieldStrings[SFI_EDIT_TEXT]);
             if (_rgFieldStrings[SFI_CHECKBOX]) CoTaskMemFree(_rgFieldStrings[SFI_CHECKBOX]);
             _rgFieldStrings[SFI_CHECKBOX] = nullptr;
-            SHStrDupW(L"Remember TPM PIN on this PC for QR-only sign-in (encrypted)",
-                      &_rgFieldStrings[SFI_CHECKBOX]);
+            SHStrDupW(IsTicketLogonTestMode(_adLabVscConfig)
+                ? L"Ticket test (no PIN or password is sent)"
+                : L"Remember TPM PIN on this PC for QR-only sign-in (encrypted)",
+                &_rgFieldStrings[SFI_CHECKBOX]);
         }
     }
 
@@ -673,7 +705,8 @@ HRESULT CSampleCredential::GetFieldState(DWORD dwFieldID,
         *pcpfis = _rgFieldStatePairs[dwFieldID].cpfis;
         if (dwFieldID == SFI_PASSWORD)
         {
-            *pcpfs = (_adLabUser && !_passwordEntryMode)
+            *pcpfs = (_adLabUser && (!_passwordEntryMode ||
+                                     IsTicketLogonTestMode(_adLabVscConfig)))
                 ? CPFS_HIDDEN : CPFS_DISPLAY_IN_SELECTED_TILE;
             *pcpfis = CPFIS_FOCUSED;
         }
@@ -681,6 +714,9 @@ HRESULT CSampleCredential::GetFieldState(DWORD dwFieldID,
             *pcpfs = CPFS_HIDDEN; // Local accounts never expose the AD card-PIN option.
         else if (dwFieldID == SFI_CHECKBOX && _adLabUser)
             *pcpfs = _passwordEntryMode ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN;
+        else if (dwFieldID == SFI_QR_SETUP_LINK &&
+                 IsTicketLogonTestMode(_adLabVscConfig))
+            *pcpfs = CPFS_HIDDEN;
         hr = S_OK;
     }
     else
@@ -965,6 +1001,8 @@ HRESULT CSampleCredential::CommandLinkClicked(DWORD dwFieldID)
         case SFI_QR_SETUP_LINK:
             if (_adLabUser)
             {
+                if (IsTicketLogonTestMode(_adLabVscConfig))
+                    return E_ACCESSDENIED;
                 _passwordEntryMode = !_passwordEntryMode;
                 _fChecked = _passwordEntryMode;
                 _savePasswordAfterSuccess = false;
@@ -1068,6 +1106,44 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
     // certificate. The PIN is typed once during setup, then may be DPAPI-protected locally.
     if (_adLabUser)
     {
+        if (IsTicketLogonTestMode(_adLabVscConfig))
+        {
+            _phoneApproved.store(false); // ticket handoff is always one-use
+            _phoneApprovedAt.store(0);
+            std::vector<BYTE> ticket;
+            struct TicketVectorWiper
+            {
+                std::vector<BYTE>& value;
+                ~TicketVectorWiper() { thessley::ticket_broker::WipeTicket(&value); }
+            } wipeTicket{ticket};
+            hr = thessley::ticket_broker::ConsumeTicketForSid(_pszUserSid, &ticket);
+            ProviderDiag(L"ConsumeAdLabTicket", hr,
+                         SUCCEEDED(hr) ? static_cast<DWORD>(ticket.size()) : 0,
+                         L"one-use local ticket broker; ticket bytes omitted");
+            ULONG authPackage = 0;
+            if (SUCCEEDED(hr)) hr = RetrieveKerberosAuthPackage(&authPackage);
+            if (SUCCEEDED(hr))
+            {
+                hr = BuildKerbTicketSerialization(
+                    ticket.data(), ticket.size(), nullptr, 0,
+                    authPackage, CLSID_ThessleyAD, pcpcs);
+                ProviderDiag(L"BuildADTicketLogon", hr,
+                    SUCCEEDED(hr) ? pcpcs->cbSerialization : 0,
+                    L"service ticket only; no TGT or ticket bytes logged");
+            }
+            if (SUCCEEDED(hr))
+            {
+                *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
+                return S_OK;
+            }
+            FreeKerbTicketSerialization(pcpcs);
+            ProviderDiag(L"ADTicketLogonFailed", hr, 0,
+                         L"ticket acquisition/serialization failed; no password fallback");
+            SHStrDupW(L"The one-use test ticket was unavailable. Sign in with a normal Windows option and prepare a fresh ticket before retrying.",
+                      ppwszOptionalStatusText);
+            *pcpsiOptionalStatusIcon = CPSI_WARNING;
+            return S_OK;
+        }
         ProviderDiag(L"ADGetSerializationStart", S_OK, _vaultAvailable ? 1 : 0,
                      L"vault-available; no identity or PIN recorded");
         std::vector<WCHAR> savedPin;

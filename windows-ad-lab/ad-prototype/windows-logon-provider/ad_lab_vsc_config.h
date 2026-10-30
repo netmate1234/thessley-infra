@@ -12,6 +12,7 @@ struct AdLabVscConfig
     std::wstring containerName;
     std::wstring providerName;
     DWORD keySpec = 0;
+    bool ticketLogonTest = false;
 };
 
 bool LoadAdLabVscConfig(const wchar_t *sid, AdLabVscConfig *config);

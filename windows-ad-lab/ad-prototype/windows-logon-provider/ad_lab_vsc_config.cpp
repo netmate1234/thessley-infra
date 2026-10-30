@@ -61,19 +61,26 @@ bool LoadAdLabVscConfig(const wchar_t *sid, AdLabVscConfig *config)
     DWORD keySpecBytes = sizeof(keySpec);
     const LSTATUS keySpecStatus = RegGetValueW(key, nullptr, L"KeySpec", RRF_RT_REG_DWORD,
                                                nullptr, &keySpec, &keySpecBytes);
-    const bool valid = keySpecStatus == ERROR_SUCCESS && keySpecBytes == sizeof(keySpec)
+    const bool validVsc = keySpecStatus == ERROR_SUCCESS && keySpecBytes == sizeof(keySpec)
         && (keySpec == AT_KEYEXCHANGE || keySpec == AT_SIGNATURE)
         && ReadString(key, L"ContainerName", &config->containerName, true)
         && ReadString(key, L"ProviderName", &config->providerName, true)
         && ReadString(key, L"ReaderName", &config->readerName, false)
         && ReadString(key, L"CardName", &config->cardName, false);
+    DWORD ticketMode = 0;
+    DWORD ticketModeBytes = sizeof(ticketMode);
+    const LSTATUS ticketModeStatus = RegGetValueW(
+        key, nullptr, L"TicketLogonTest", RRF_RT_REG_DWORD, nullptr,
+        &ticketMode, &ticketModeBytes);
+    config->ticketLogonTest = ticketModeStatus == ERROR_SUCCESS &&
+        ticketModeBytes == sizeof(ticketMode) && ticketMode == 1;
     RegCloseKey(key);
 
-    if (!valid)
+    if (!validVsc && !config->ticketLogonTest)
     {
         *config = AdLabVscConfig{};
         return false;
     }
-    config->keySpec = keySpec;
+    if (validVsc) config->keySpec = keySpec;
     return true;
 }
