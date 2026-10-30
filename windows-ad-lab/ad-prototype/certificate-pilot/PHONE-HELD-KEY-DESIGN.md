@@ -686,3 +686,13 @@ computer-bound phone approval before the signature is returned. The card
 provider must then expose the certificate and key as one usable container.
 Only after Windows requests the signature can a matching DC PKINIT event and
 a successful Windows session establish end-to-end login.
+
+The 2026-10-30 21:15 local lock-screen capture shows the built-in Windows
+smart-card tile selected (the third icon from the left), not either of the two
+Thessley shield tiles. A later `sc queryex SCardSvr` showed the Smart Card
+service running (PID 1216). Running `certutil -scinfo` directly from the SSH
+session returned `0x80070005` / `SCardAccessStartedEvent: unknown state`; that
+is an SSH-session access limitation and is not evidence that the service was
+stopped. The previous SYSTEM-run task completed at 21:07 with
+`0x80090016 (NTE_BAD_KEYSET)`, which is the useful diagnostic for the
+certificate-only POC.
