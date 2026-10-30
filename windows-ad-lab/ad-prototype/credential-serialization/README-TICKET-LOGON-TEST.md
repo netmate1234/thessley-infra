@@ -76,6 +76,10 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
   Winlogon reported `0xC000000D` (`STATUS_INVALID_PARAMETER`), with substatus
   zero. This is the first current-build end-to-end rejection; it is not a
   cache miss and does not prove a successful desktop logon.
+- The provider registration on Clone 1 points to
+  `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketTestCredentialProvider-ae1c970a52a898b4.dll`.
+  Its full SHA-256 is
+  `ae1c970a52a898b4e76112eb8be7a439290571ae3f777dfc3b620a859096af73`.
 - The next diagnostic must isolate the serialization representation. The
   direct `ticket_logon_probe` can submit the same structure with native
   pointers or with the packed offsets unchanged. The checked-in CLI accepts
@@ -86,8 +90,11 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
   semantics and the `KERB_TICKET_LOGON`/interactive-logon combination instead.
   No ticket bytes should be logged or persisted.
 - Tie future logs to the registered DLL's full SHA-256, not only the shortened
-  filename suffix. Do not repeat the password-seeded test after a cache miss
-  unless the broker log first confirms a fresh `CaptureTicketStored` event.
+  filename suffix. The local source now logs the message type, flags, ticket
+  lengths, and pointer-field values at serialization time, without logging
+  ticket bytes; that diagnostic build has not yet been installed on Clone 1.
+  Do not repeat the password-seeded test after a cache miss unless the broker
+  log first confirms a fresh `CaptureTicketStored` event.
 - The local `ticket_logon_probe.cpp` parser already accepts the Kerberos
   package and pointer mode independently, in either optional-argument order.
   For clarity, use the explicit form
