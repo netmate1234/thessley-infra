@@ -640,3 +640,35 @@ reader and route the card's signing operation to the phone's verified TEE key;
 only a matching DC PKINIT event and successful Windows session will prove the
 login path. Offline ECC logon would additionally require an associated ECDH
 key.
+
+### Disposable virtual-reader discovery POC (2026-10-30)
+
+The Clone 1 experiment uses a loopback-only vpcd client and a disposable PIV
+card responder. It does not change the physical phone, the phone's secure
+element/TEE, or any enrolled key. It reads the already-issued public
+`startmenutest` certificate from the VM's `.cer` file; it has no private key
+and does not communicate with the phone to sign.
+
+The responder advertises the full versioned PIV AID and exposes the
+certificate only in PIV Authentication object `5FC105`. It accepts only the
+test PIN `0000` and deliberately refuses GENERAL AUTHENTICATE (`6A81`). Its
+log contains APDU names and lengths, but does not log the PIN value. It is a
+diagnostic harness, not a usable smart card or login mechanism.
+
+Observed on Clone 1: Windows selected the PIV AID, fetched CHUID (`5FC102`),
+and in one enumeration fetched all 2,243 bytes of the certificate object
+(`5FC105`) using GET RESPONSE chaining. Windows also queried several optional
+objects, which the responder correctly reported absent. A later scan read
+only CHUID and reset the card. No VERIFY or GENERAL AUTHENTICATE was observed
+in the latest trace. `certutil -scinfo` reported `NTE_BAD_KEYSET` / “Missing
+stored keyset” for the virtual PIV card and did not enumerate the phone-bound
+certificate as a usable sign-in certificate. The user-facing smart-card
+message was “No valid certificates were found on this smartcard.”
+
+This establishes that the UMDF reader, PC/SC path, PIV AID selection, and
+certificate-object transport can work. It does **not** establish that Windows
+accepts the returned object as a usable certificate/key pair, that Windows
+requested a phone signature, that PKINIT reached the DC, or that AD login
+works. The unchanged physical phone is not the card presented by this VM
+POC. The current blocking question is Windows smart-card certificate/key
+association and enumeration; the phone-signing relay has not been built.
