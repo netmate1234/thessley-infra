@@ -121,32 +121,45 @@ Do not use this probe to capture or export tickets from production sessions.
 
 The build also creates `/tmp/thessley-ad-certificate-logon-probe.exe`. This
 separate disposable probe calls `LsaLogonUser(Interactive)` with a
-`KERB_CERTIFICATE_LOGON` serialization naming a machine key container and
-provider, with no card or reader. It reports only NTSTATUS values, buffer and
-profile lengths, and the temporary logon LUID. It does not export certificate,
-key, PIN, or token data, and it does not register a Credential Provider.
-Run it only as LocalSystem on Clone 1 after a low-privilege lab account has a
-short-lived, strongly SID-mapped Smart Card Logon certificate associated with
-the exact machine key. Example:
+`KERB_CERTIFICATE_LOGON` serialization naming a machine KSP unique container
+and provider, with no card or reader. It reports only NTSTATUS values, buffer
+and profile lengths, and the temporary logon LUID. It does not export
+certificate, key, PIN, or token data, and it does not register a Credential
+Provider. Run it only as LocalSystem on Clone 1 after a low-privilege lab
+account has a short-lived, strongly SID-mapped Smart Card Logon certificate
+associated with the exact machine key. Use the `key_unique_name` returned by
+`new-ephemeral-csr.ps1`, not the caller-chosen `key_container` name. Example:
 
 ```text
-certificate_logon_probe.exe lab.thessley.test adqrproof <TEMP-KEY-CONTAINER> "Microsoft Software Key Storage Provider" 1
+certificate_logon_probe.exe lab.thessley.test adqrproof <KSP-UNIQUE-NAME> "Microsoft Software Key Storage Provider" 1
 ```
 
-First use `Microsoft Software Key Storage Provider` with KeySpec `1`, matching
-the provider used by the existing ephemeral-CSR pilot. `KERB_SMARTCARD_CSP_INFO`
-defines its KeySpec field as the legacy `AT_KEYEXCHANGE`/`AT_SIGNATURE` selector;
-the certificate's CNG `dwKeySpec` is a separate value. Whether Kerberos can
-resolve a Software KSP container from this legacy field is exactly what this
-probe tests; do not infer support from successful CSR creation. The Microsoft
-Platform Crypto Provider may be tested separately if a TPM-key certificate is
-available. The CAPI RSA provider is a separate comparison and requires a key
-created by that provider. The builder permits an empty PIN only for an
-isolated no-reader probe using these explicit built-in providers; the existing
-smart-card path still requires a CredProtect-protected PIN. A successful direct
-LSA probe establishes only that this provider and certificate can authenticate
-through the KDC. LogonUI handoff, phone-bound issuance, request binding,
-cleanup, and offline behavior remain separate proof gates.
+Run four cases against the same certificate and unique container, changing only
+`KeySpec` and the optional CSP name:
+
+```text
+certificate_logon_probe.exe lab.thessley.test adqrproof <KSP-UNIQUE-NAME> - 1
+certificate_logon_probe.exe lab.thessley.test adqrproof <KSP-UNIQUE-NAME> - 2
+certificate_logon_probe.exe lab.thessley.test adqrproof <KSP-UNIQUE-NAME> "Microsoft Software Key Storage Provider" 1
+certificate_logon_probe.exe lab.thessley.test adqrproof <KSP-UNIQUE-NAME> "Microsoft Software Key Storage Provider" 2
+```
+
+The `-` selector omits the CSP name. Microsoft's structure documentation
+allows only KeySpec `1` (`AT_KEYEXCHANGE`) or `2` (`AT_SIGNATURE`); the
+certificate's CNG `dwKeySpec` is a separate property. Do not pass zero to LSA:
+the builder rejects it because it is outside the documented structure. The
+probe prints which combination was submitted plus LSA status/substatus. Capture
+client CAPI2 and Kerberos events and check the DC for the matching 4768 event.
+No AS-REQ indicates a local provider/key lookup failure; an AS-REQ followed by
+a KDC rejection points to certificate trust, mapping, or policy. A successful
+direct LSA call still does not prove LogonUI handoff, phone-bound issuance,
+request binding, cleanup, or offline behavior.
+
+The Microsoft Platform Crypto Provider and CAPI RSA provider are separate
+comparisons and require certificates tied to keys from those exact providers.
+The builder permits an empty PIN only for this isolated no-reader probe using
+explicit built-in providers; the existing smart-card path still requires a
+CredProtect-protected PIN.
 
 References: Microsoft's [`CRYPT_KEY_PROV_INFO`](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-crypt_key_prov_info)
 documentation describes `dwProvType = 0` as CNG and passes `dwKeySpec` to

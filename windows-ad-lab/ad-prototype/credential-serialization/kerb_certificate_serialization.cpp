@@ -149,6 +149,7 @@ HRESULT BuildKerbCertificateSerialization(
         const bool noReader = (!cardName || !*cardName) &&
                               (!readerName || !*readerName);
         const bool probeProvider =
+            !providerName || !*providerName ||
             _wcsicmp(providerName, L"Microsoft Software Key Storage Provider") == 0 ||
             _wcsicmp(providerName, L"Microsoft Platform Crypto Provider") == 0 ||
             _wcsicmp(providerName, L"Microsoft Enhanced RSA and AES Cryptographic Provider") == 0;

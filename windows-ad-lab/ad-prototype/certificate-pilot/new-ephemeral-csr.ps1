@@ -7,6 +7,7 @@ $root = Join-Path $env:ProgramData 'ThessleyPamWin\ad-agent\certificate-requests
 $requestId = [Guid]::NewGuid().ToString('N')
 $containerPrefix = "ThessleyAD-$requestId"
 $containerName = $null
+$uniqueContainerName = $null
 $keyCreated = $false
 $csrPath = $null
 $manifestPath = $null
@@ -82,6 +83,12 @@ try {
     if ($containerName -ne $containerPrefix) {
         throw 'Windows returned an unexpected temporary key-container name.'
     }
+    $uniqueContainerName = [string]$key.UniqueContainerName
+    if ([string]::IsNullOrWhiteSpace($uniqueContainerName) -or
+        $uniqueContainerName.Length -gt 2048 -or
+        $uniqueContainerName.IndexOf([char]0) -ge 0) {
+        throw 'The KSP did not return a bounded unique container name for logon testing.'
+    }
     $now = [DateTime]::UtcNow
     $manifest = [ordered]@{
         version = 1
@@ -97,6 +104,7 @@ try {
         provider_type = 0
         key_spec = 0
         key_container = $containerName
+        key_unique_name = $uniqueContainerName
         machine_key = $true
         exportable = $false
     }
@@ -145,6 +153,7 @@ try {
         csr_path = $csrPath
         csr_sha256 = $digest
         key_container = $containerName
+        key_unique_name = $uniqueContainerName
         provider_name = $providerName
         expires_utc = $manifest.expires_utc
     } | ConvertTo-Json -Compress
@@ -170,6 +179,7 @@ catch {
                     provider_type = 0
                     key_spec = 0
                     key_container = $containerName
+                    key_unique_name = $uniqueContainerName
                     machine_key = $true
                     exportable = $false
                 }

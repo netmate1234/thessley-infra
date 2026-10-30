@@ -21,6 +21,11 @@ The key permits both signing and decryption/key exchange, as required for an
 RSA smart-card logon certificate. Its CNG key-spec metadata remains zero; the
 separate `KERB_SMARTCARD_CSP_INFO.KeySpec` value used during logon is an
 independent legacy selector and is tested by the isolated serialization probe.
+The manifest records both `key_container` (the requested name used for
+cleanup) and `key_unique_name` (the KSP's unique backing-key name). Use the
+latter in the Kerberos serialization; Microsoft's `UniqueContainerName`
+property returns the unique backing name for a CNG KSP key
+([IX509PrivateKey::get_UniqueContainerName](https://learn.microsoft.com/en-us/windows/win32/api/certenroll/nf-certenroll-ix509privatekey-get_uniquecontainername)).
 
 The service's CSR validator accepts the Windows generator's RSA-3072/SHA-256
 profile and P-256 ECDSA/SHA-256 as a future Android Keystore candidate. The

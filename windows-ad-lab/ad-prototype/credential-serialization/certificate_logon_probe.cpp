@@ -1,6 +1,6 @@
 // Disposable lab probe: ask the Windows Kerberos package to perform an
-// interactive certificate logon using a specified CryptoAPI/CNG key
-// container. It writes no certificate, key, PIN, or token data to disk.
+// interactive certificate logon using a specified CryptoAPI/CNG unique key
+// container name. It writes no certificate, key, PIN, or token data to disk.
 // Run only as LocalSystem on a disposable domain-joined test client.
 
 #include <windows.h>
@@ -33,16 +33,17 @@ bool ValidName(const wchar_t* value, size_t limit) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc != 6) {
-        std::fputs("usage: certificate_logon_probe.exe <domain> <user> <container> <provider> <key-spec-1-or-2>\n",
+        std::fputs("usage: certificate_logon_probe.exe <domain> <user> <KSP-unique-container> <provider-or-dash> <key-spec-1-or-2>\n",
                    stderr);
         return 2;
     }
     if (!ValidName(argv[1], 255) || !ValidName(argv[2], 255) ||
-        !ValidName(argv[3], 255) || !ValidName(argv[4], 255)) {
-        std::fputs("domain, user, container and provider must be bounded non-empty names\n",
+        !ValidName(argv[3], 2048) || !ValidName(argv[4], 255)) {
+        std::fputs("domain, user, unique container and provider selector must be bounded names\n",
                    stderr);
         return 2;
     }
+    const wchar_t* providerName = std::wcscmp(argv[4], L"-") == 0 ? L"" : argv[4];
     wchar_t* end = nullptr;
     const unsigned long keySpecValue = std::wcstoul(argv[5], &end, 10);
     if (end == argv[5] || *end != L'\0' ||
@@ -83,7 +84,7 @@ int wmain(int argc, wchar_t** argv) {
     const CLSID probeClsid = {0x341d2b0e, 0x1e18, 0x4f39,
                               {0xa3, 0x1f, 0xf3, 0xb2, 0x59, 0x7c, 0x0c, 0x72}};
     const HRESULT buildHr = BuildKerbCertificateSerialization(
-        argv[1], argv[2], L"", L"", L"", argv[3], argv[4],
+        argv[1], argv[2], L"", L"", L"", argv[3], providerName,
         static_cast<DWORD>(keySpecValue), false, nullptr, packageId,
         probeClsid, &serialization, true);
     if (FAILED(buildHr)) {
@@ -122,6 +123,9 @@ int wmain(int argc, wchar_t** argv) {
         &quotas, &subStatus);
     PrintStatus("lsa_logon_user", status);
     PrintStatus("lsa_substatus", subStatus);
+    std::printf("provider_name_present=%u\n", providerName[0] ? 1u : 0u);
+    std::printf("kerb_csp_key_spec=%lu\n",
+                static_cast<unsigned long>(keySpecValue));
     std::printf("serialization_bytes=%lu\n",
                 static_cast<unsigned long>(serialization.cbSerialization));
     std::printf("profile_bytes=%lu\n", static_cast<unsigned long>(profileBytes));
