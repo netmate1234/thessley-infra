@@ -20,7 +20,8 @@ HRESULT BuildKerbCertificateSerialization(
     const LUID* logonId,
     ULONG authenticationPackage,
     const CLSID& credentialProviderClsid,
-    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization);
+    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization,
+    bool allowEmptyPin = false);
 
 // Securely discards a serialization if it has not been handed to LogonUI.
 void FreeKerbCertificateSerialization(

@@ -121,7 +121,8 @@ HRESULT BuildKerbCertificateSerialization(
     PCWSTR providerName, DWORD keySpec, bool unlockScenario,
     const LUID* logonId, ULONG authenticationPackage,
     const CLSID& credentialProviderClsid,
-    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization) {
+    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization,
+    bool allowEmptyPin) {
     if (serialization == nullptr) return E_POINTER;
     ZeroMemory(serialization, sizeof(*serialization));
 
@@ -130,14 +131,31 @@ HRESULT BuildKerbCertificateSerialization(
     if (FAILED(hr)) return hr;
     hr = ValidateInput(user, true, &userChars);
     if (FAILED(hr)) return hr;
-    hr = ValidateInput(protectedPin, true, &pinChars);
+    const bool emptyPin = protectedPin != nullptr && protectedPin[0] == L'\0';
+    if (emptyPin && !allowEmptyPin) return E_INVALIDARG;
+    if (protectedPin == nullptr) return E_INVALIDARG;
+    hr = ValidateInput(protectedPin, !allowEmptyPin, &pinChars);
     if (FAILED(hr)) return hr;
     if (unlockScenario && logonId == nullptr) return E_INVALIDARG;
 
-    CRED_PROTECTION_TYPE protection = CredUnprotected;
-    if (!CredIsProtectedW(const_cast<PWSTR>(protectedPin), &protection) ||
-        protection == CredUnprotected)
+    if (!emptyPin) {
+        CRED_PROTECTION_TYPE protection = CredUnprotected;
+        if (!CredIsProtectedW(const_cast<PWSTR>(protectedPin), &protection) ||
+            protection == CredUnprotected)
+            return HRESULT_FROM_WIN32(ERROR_INVALID_PASSWORD);
+    } else if (!allowEmptyPin) {
         return HRESULT_FROM_WIN32(ERROR_INVALID_PASSWORD);
+    } else {
+        const bool noReader = (!cardName || !*cardName) &&
+                              (!readerName || !*readerName);
+        const bool softwareProvider =
+            _wcsicmp(providerName, L"Microsoft Enhanced RSA and AES Cryptographic Provider") == 0;
+        // KERB_SMARTCARD_CSP_INFO carries the legacy CSP KeySpec values
+        // AT_KEYEXCHANGE/AT_SIGNATURE. Keep this probe on the matching CAPI
+        // provider until CNG/KSP serialization is independently established.
+        // Never let this switch bypass a smart-card PIN.
+        if (!noReader || !softwareProvider) return E_ACCESSDENIED;
+    }
 
     std::vector<BYTE> cspInfo;
     hr = BuildCspInfo(cardName, readerName, containerName, providerName,

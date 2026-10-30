@@ -119,6 +119,30 @@ ticket_logon_probe.exe 0x18d8d0 HOST/COMPUTER.example.test interactive
 
 Do not use this probe to capture or export tickets from production sessions.
 
+The build also creates `/tmp/thessley-ad-certificate-logon-probe.exe`. This
+separate disposable probe calls `LsaLogonUser(Interactive)` with a
+`KERB_CERTIFICATE_LOGON` serialization naming a machine key container and
+provider, with no card or reader. It reports only NTSTATUS values, buffer and
+profile lengths, and the temporary logon LUID. It does not export certificate,
+key, PIN, or token data, and it does not register a Credential Provider.
+Run it only as LocalSystem on Clone 1 after a low-privilege lab account has a
+short-lived, strongly SID-mapped Smart Card Logon certificate associated with
+the exact machine key. Example:
+
+```text
+certificate_logon_probe.exe lab.thessley.test adqrproof <TEMP-KEY-CONTAINER> "Microsoft Platform Crypto Provider" 1
+```
+
+Use `Microsoft Enhanced RSA and AES Cryptographic Provider` with KeySpec `1`
+for the first software-key test. `KERB_SMARTCARD_CSP_INFO` defines the legacy
+CAPI `AT_KEYEXCHANGE`/`AT_SIGNATURE` values; the CNG Platform Crypto Provider
+is not a valid first comparison until its serialization semantics are proven.
+The builder permits an empty PIN only for this isolated, no-reader CAPI probe;
+the existing smart-card path still requires a CredProtect-protected PIN. A
+successful direct LSA probe establishes only that this provider and certificate
+can authenticate through the KDC. LogonUI handoff, phone-bound issuance,
+request binding, cleanup, and offline behavior remain separate proof gates.
+
 References: Microsoft's [`CRYPT_KEY_PROV_INFO`](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-crypt_key_prov_info)
 documentation describes `dwProvType = 0` as CNG and passes `dwKeySpec` to
 `NCryptOpenKey`; the [`KERB_SMARTCARD_CSP_INFO`](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info)

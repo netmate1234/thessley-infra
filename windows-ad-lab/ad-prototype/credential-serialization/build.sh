@@ -8,6 +8,7 @@ client_out="/tmp/thessley-ad-approval-client.o"
 ticket_out="/tmp/thessley-ad-kerb-ticket-serialization.o"
 probe_out="/tmp/thessley-ad-ticket-logon-probe.exe"
 broker_out="/tmp/thessley-ad-ticket-broker.exe"
+certificate_probe_out="/tmp/thessley-ad-certificate-logon-probe.exe"
 
 "${tool_prefix}-g++" \
   -std=c++17 -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0601 \
@@ -48,5 +49,15 @@ broker_out="/tmp/thessley-ad-ticket-broker.exe"
   -municode -mwindows -ladvapi32 -lsecur32 -lwtsapi32 \
   -o "$broker_out"
 
+"${tool_prefix}-g++" \
+  -std=c++17 -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0601 \
+  -Wall -Wextra -Werror -Os -s -static-libgcc -static-libstdc++ \
+  -I"$root" \
+  "$root/certificate_logon_probe.cpp" \
+  "$root/kerb_certificate_serialization.cpp" \
+  -municode -ladvapi32 -lsecur32 -lcredui -lcrypt32 -lole32 \
+  -o "$certificate_probe_out"
+
 printf 'Built isolated certificate serializer: %s\nBuilt isolated approval client: %s\nBuilt isolated Kerberos ticket serializer: %s\nBuilt LSA ticket-logon probe: %s\nBuilt Clone 1-only volatile ticket broker: %s\n' \
   "$out" "$client_out" "$ticket_out" "$probe_out" "$broker_out"
+printf 'Built disposable Windows certificate logon probe: %s\n' "$certificate_probe_out"
