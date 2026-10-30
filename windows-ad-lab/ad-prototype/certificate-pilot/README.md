@@ -36,6 +36,13 @@ certificates, and it does not prove that the phone owns the key. The current
 Windows script still creates a PC-held RSA key; no Android CSR flow is wired
 to this pilot.
 
+The AD service rejects any returned logon certificate whose encoded validity
+period exceeds four hours, even if the selected CA template allows a longer
+period. The CA template must therefore be configured for a period of four
+hours or less. This cap limits the lifetime of the temporary PC-held logon
+credential; it does not replace CA template permissions, SID binding, or
+phone approval.
+
 The manifest and non-exportable machine key are retained for at most 24 hours
 from CSR creation so an approved CA request can finish asynchronously. This is
 bounded local key retention; it is not a sign-in session or approval pass. To

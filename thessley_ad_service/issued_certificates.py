@@ -23,6 +23,7 @@ _TEMPLATE_EXTENSION_OID = ObjectIdentifier("1.3.6.1.4.1.311.21.7")
 _SID_EXTENSION_OID = ObjectIdentifier("1.3.6.1.4.1.311.25.2")
 _SID_OTHER_NAME_OID = "1.3.6.1.4.1.311.25.2.1"
 _SMART_CARD_LOGON_OID = ObjectIdentifier("1.3.6.1.4.1.311.20.2.2")
+MAX_ISSUED_CERTIFICATE_VALIDITY_SECONDS = 4 * 60 * 60
 
 
 class IssuedCertificateError(ValueError):
@@ -187,6 +188,13 @@ def validate_issued_certificate(
             raise IssuedCertificateError("The configured CA certificate is not currently valid.")
         if not certificate.not_valid_before_utc <= current <= certificate.not_valid_after_utc:
             raise IssuedCertificateError("The issued certificate is not currently valid.")
+        validity_seconds = (
+            certificate.not_valid_after_utc - certificate.not_valid_before_utc
+        ).total_seconds()
+        if not 0 < validity_seconds <= MAX_ISSUED_CERTIFICATE_VALIDITY_SECONDS:
+            raise IssuedCertificateError(
+                "The issued certificate exceeds the four-hour AD logon lifetime limit."
+            )
         # EOBO's RequesterName is used by AD CS to construct the issued subject.
         # The approved CSR deliberately has a random temporary subject, so it is
         # incorrect to require the issued subject to equal the CSR subject. Bind
