@@ -15,6 +15,8 @@ HRESULT BuildKerbTicketSerialization(
     size_t serviceTicketLength,
     const BYTE* forwardedTgtKrbCred,
     size_t forwardedTgtKrbCredLength,
+    bool unlockScenario,
+    const LUID* logonId,
     ULONG kerberosAuthenticationPackage,
     const CLSID& credentialProviderClsid,
     CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization);

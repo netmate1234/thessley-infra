@@ -121,3 +121,29 @@ References: Microsoft's [`CRYPT_KEY_PROV_INFO`](https://learn.microsoft.com/en-u
 documentation describes `dwProvType = 0` as CNG and passes `dwKeySpec` to
 `NCryptOpenKey`; the [`KERB_SMARTCARD_CSP_INFO`](https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info)
 documentation defines the credential serialization fields.
+
+### Clone 1 ticket handoff investigation (2026-10-30)
+
+The broker successfully returned a 1435-byte HOST ticket for the explicitly
+configured test account. Direct `LsaLogonUser(Interactive)` probes succeeded
+with both Kerberos and Negotiate, returning a primary token. Negotiate's
+package ID on this machine is **0**, which is valid; serializers must not
+reject zero as an invalid package ID. The probe now accepts an optional
+`negotiate` argument to reproduce this without another phone approval.
+
+Other defects corrected during this investigation: SID validation now checks
+the `S-` prefix correctly; automatic submission uses the ticket path without a
+saved password; and the broker captures again on workstation lock. The ticket
+serializer now selects the Kerberos package and uses the correct
+`KERB_TICKET_LOGON` or `KERB_TICKET_UNLOCK_LOGON` structure for the active
+scenario. Its temporary ticket lifetime remains three minutes. Restarting the
+broker clears its in-memory cache.
+
+Direct LSA success does **not** prove the LogonUI handoff works. Clone 1's
+first screen attempt reached ReportResult with `STATUS_LOGON_FAILURE` /
+`STATUS_INTERNAL_ERROR` after the broker successfully delivered the ticket.
+The provider was using Negotiate and an unlock-sized header for a fresh logon.
+The current correction switches to Kerberos and chooses the structure based on
+the active logon/unlock scenario. End-to-end screen login with that correction
+remains to be verified. Broker and provider diagnostics record stage, SID, and
+status codes, never ticket bytes or passwords.

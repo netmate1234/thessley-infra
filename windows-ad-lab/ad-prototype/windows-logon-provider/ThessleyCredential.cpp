@@ -221,7 +221,11 @@ void CSampleCredential::SetProviderEvents(ICredentialProviderEvents *events, UIN
 
 bool CSampleCredential::IsAutoLogonReady() const
 {
+#ifdef THESSLEY_TICKET_LOGON_TEST
+    return _phoneApproved.load() && !_passwordEntryMode;
+#else
     return _phoneApproved.load() && _vaultAvailable && !_passwordEntryMode;
+#endif
 }
 
 void CSampleCredential::_CancelApproval()
@@ -302,7 +306,8 @@ void CSampleCredential::_StartApproval()
 
     IStream *providerEventsStream = nullptr;
     UINT_PTR providerAdviseContext = 0;
-    if (_vaultAvailable && !_passwordEntryMode)
+    if ((_vaultAvailable || (_adLabUser && IsTicketLogonTestMode(_adLabVscConfig))) &&
+        !_passwordEntryMode)
     {
         std::lock_guard<std::mutex> lock(_providerEventsMutex);
         if (_pProviderEvents)
@@ -347,10 +352,18 @@ void CSampleCredential::_StartApproval()
                 ? JsonString(started, "\"credential_method\"") : std::string();
             std::string matrix = SUCCEEDED(agentHr)
                 ? JsonString(started, "\"qr_matrix\"") : std::string();
+            // The local AD agent already rejects unsupported policy methods
+            // before it emits JSON. Keep this extra check on the established
+            // VSC provider, but do not let a second native JSON parse suppress
+            // the isolated ticket-test QR after the agent has accepted it.
+#ifndef THESSLEY_TICKET_LOGON_TEST
             if (SUCCEEDED(agentHr) && credentialMethod != "tpm_smartcard")
                 agentHr = E_ACCESSDENIED;
+#endif
             ClearAdApprovalOutput(&started);
-            ProviderDiag(L"ADApprovalStart", agentHr, 0);
+            ProviderDiag(L"ADApprovalStart", agentHr,
+                         static_cast<DWORD>(std::min<size_t>(matrix.size(), MAXDWORD)),
+                         matrix.empty() ? L"QR matrix missing" : L"QR matrix received; contents omitted");
 
             std::wstring wideRequestId;
             if (!requestId.empty() && requestId.size() <= 128 &&
@@ -363,7 +376,12 @@ void CSampleCredential::_StartApproval()
 
             if (SUCCEEDED(agentHr) && !_approvalCancelled.load() && !matrix.empty())
             {
-                if (LaunchQrViewer(matrix))
+                const bool viewerStarted = LaunchQrViewer(matrix);
+                const DWORD viewerError = viewerStarted ? ERROR_SUCCESS : GetLastError();
+                ProviderDiag(L"ADApprovalQrViewer",
+                    viewerStarted ? S_OK : HRESULT_FROM_WIN32(viewerError),
+                    static_cast<DWORD>(std::min<size_t>(matrix.size(), MAXDWORD)));
+                if (viewerStarted)
                 {
                     update(SFI_EDIT_TEXT, L"Scan and approve on your phone. First setup may ask for the card PIN once.");
                     update(SFI_LOGONSTATUS_TEXT, L"Waiting for phone approval.");
@@ -381,6 +399,8 @@ void CSampleCredential::_StartApproval()
             }
             else if (SUCCEEDED(agentHr))
             {
+                ProviderDiag(L"ADApprovalQrMissing", E_FAIL, 0,
+                             L"approval response did not contain a QR matrix");
                 agentHr = E_FAIL;
             }
             if (FAILED(agentHr) && !_approvalCancelled.load())
@@ -563,6 +583,8 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
         // profile through Identity_LocalUserProvider.
         bool isAllowedAdLabUser = LoadAdLabVscConfig(_pszUserSid, &_adLabVscConfig);
 #ifdef THESSLEY_TICKET_LOGON_TEST
+        ProviderDiag(L"TicketConfigRead", S_OK, isAllowedAdLabUser ? 1 : 0,
+            _adLabVscConfig.ticketLogonTest ? L"ticket-flag=1" : L"ticket-flag=0");
         isAllowedAdLabUser = isAllowedAdLabUser && _adLabVscConfig.ticketLogonTest;
 #else
         // Ticket-test-only SIDs must never appear on the established VSC tile.
@@ -598,6 +620,13 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
                     ? L"Phone approval will unlock this PC's TPM sign-in key."
                     : L"For the first sign-in, enter the TPM PIN once. Check Remember to use QR approval alone next time."),
                 &_rgFieldStrings[SFI_EDIT_TEXT]);
+            if (IsTicketLogonTestMode(_adLabVscConfig))
+            {
+                if (_rgFieldStrings[SFI_LARGE_TEXT]) CoTaskMemFree(_rgFieldStrings[SFI_LARGE_TEXT]);
+                _rgFieldStrings[SFI_LARGE_TEXT] = nullptr;
+                SHStrDupW(L"Thessley AD Ticket Test (Clone 1 only)",
+                          &_rgFieldStrings[SFI_LARGE_TEXT]);
+            }
             if (_rgFieldStrings[SFI_CHECKBOX]) CoTaskMemFree(_rgFieldStrings[SFI_CHECKBOX]);
             _rgFieldStrings[SFI_CHECKBOX] = nullptr;
             SHStrDupW(IsTicketLogonTestMode(_adLabVscConfig)
@@ -1122,25 +1151,38 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
                          L"one-use local ticket broker; ticket bytes omitted");
             ULONG authPackage = 0;
             if (SUCCEEDED(hr)) hr = RetrieveKerberosAuthPackage(&authPackage);
+            ProviderDiag(L"RetrieveAdTicketKerberosPackage", hr, authPackage);
             if (SUCCEEDED(hr))
             {
+                LUID logonId{};
+                const bool unlockScenario = _cpus == CPUS_UNLOCK_WORKSTATION;
                 hr = BuildKerbTicketSerialization(
                     ticket.data(), ticket.size(), nullptr, 0,
-                    authPackage, CLSID_ThessleyAD, pcpcs);
+                    unlockScenario, &logonId, authPackage,
+                    CLSID_ThessleyAD, pcpcs);
                 ProviderDiag(L"BuildADTicketLogon", hr,
                     SUCCEEDED(hr) ? pcpcs->cbSerialization : 0,
-                    L"service ticket only; no TGT or ticket bytes logged");
+                    unlockScenario
+                        ? L"Kerberos ticket-unlock layout; ticket bytes omitted"
+                        : L"Kerberos ticket-logon layout; ticket bytes omitted");
             }
             if (SUCCEEDED(hr))
             {
+                ProviderDiagTicketStatus(L"ADTicketSerializationReady",
+                    STATUS_SUCCESS, STATUS_SUCCESS,
+                    static_cast<DWORD>(_cpus), authPackage,
+                    pcpcs->cbSerialization);
                 *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
                 return S_OK;
             }
             FreeKerbTicketSerialization(pcpcs);
             ProviderDiag(L"ADTicketLogonFailed", hr, 0,
                          L"ticket acquisition/serialization failed; no password fallback");
-            SHStrDupW(L"The one-use test ticket was unavailable. Sign in with a normal Windows option and prepare a fresh ticket before retrying.",
-                      ppwszOptionalStatusText);
+            wchar_t ticketError[256]{};
+            swprintf_s(ticketError, ARRAYSIZE(ticketError),
+                L"Windows ticket preparation failed (0x%08lX). Choose another sign-in option while this test is investigated.",
+                static_cast<unsigned long>(hr));
+            SHStrDupW(ticketError, ppwszOptionalStatusText);
             *pcpsiOptionalStatusIcon = CPSI_WARNING;
             return S_OK;
         }
@@ -1417,11 +1459,29 @@ HRESULT CSampleCredential::ReportResult(NTSTATUS ntsStatus,
                                         _Outptr_result_maybenull_ PWSTR *ppwszOptionalStatusText,
                                         _Out_ CREDENTIAL_PROVIDER_STATUS_ICON *pcpsiOptionalStatusIcon)
 {
-    // Record NTSTATUS and substatus only; never log account secrets or PINs.
-    ProviderDiag(L"ReportResult", static_cast<HRESULT>(ntsStatus),
-                 static_cast<DWORD>(ntsSubstatus));
+    // Keep the NTSTATUS and its substatus as separate, explicitly hex fields.
+    // Do not log account secrets, PINs, ticket data, or QR payloads.
+    if (_adLabUser && IsTicketLogonTestMode(_adLabVscConfig))
+        ProviderDiagTicketStatus(L"ReportResult", ntsStatus, ntsSubstatus,
+                                 static_cast<DWORD>(_cpus), 0, 0);
+    else
+        ProviderDiag(L"ReportResult", static_cast<HRESULT>(ntsStatus),
+                     static_cast<DWORD>(ntsSubstatus));
     *ppwszOptionalStatusText = nullptr;
     *pcpsiOptionalStatusIcon = CPSI_NONE;
+
+    if (_adLabUser && IsTicketLogonTestMode(_adLabVscConfig) && ntsStatus < 0)
+    {
+        _phoneApproved.store(false);
+        _phoneApprovedAt.store(0);
+        wchar_t message[256]{};
+        swprintf_s(message, ARRAYSIZE(message),
+            L"Phone approved, but Windows rejected the ticket (0x%08lX / 0x%08lX). Choose another sign-in option while this test is investigated.",
+            static_cast<unsigned long>(ntsStatus), static_cast<unsigned long>(ntsSubstatus));
+        SHStrDupW(message, ppwszOptionalStatusText);
+        *pcpsiOptionalStatusIcon = CPSI_ERROR;
+        return S_OK;
+    }
 
     if (ntsStatus == STATUS_SUCCESS && !_passwordPendingSave.empty())
     {

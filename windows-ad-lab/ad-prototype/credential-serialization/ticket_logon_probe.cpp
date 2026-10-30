@@ -84,10 +84,37 @@ void Wipe(std::vector<BYTE>* bytes) {
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 4) {
-        std::fputs("usage: ticket_logon_probe.exe <luid-low-hex> <host-spn> <interactive|network>\n",
+    if (argc < 4 || argc > 6) {
+        std::fputs("usage: ticket_logon_probe.exe <luid-low-hex> <host-spn> <interactive|network> [kerberos|negotiate] [native-pointers|raw-offsets]\n",
                    stderr);
         return 2;
+    }
+
+    bool negotiatePackage = false;
+    bool rawOffsets = false;
+    bool packageChoiceSeen = false;
+    bool pointerChoiceSeen = false;
+    for (int i = 4; i < argc; ++i) {
+        if (std::wcscmp(argv[i], L"kerberos") == 0 ||
+            std::wcscmp(argv[i], L"negotiate") == 0) {
+            if (packageChoiceSeen) {
+                std::fputs("specify only one authentication package\n", stderr);
+                return 2;
+            }
+            packageChoiceSeen = true;
+            negotiatePackage = std::wcscmp(argv[i], L"negotiate") == 0;
+        } else if (std::wcscmp(argv[i], L"native-pointers") == 0 ||
+                   std::wcscmp(argv[i], L"raw-offsets") == 0) {
+            if (pointerChoiceSeen) {
+                std::fputs("specify only one pointer mode\n", stderr);
+                return 2;
+            }
+            pointerChoiceSeen = true;
+            rawOffsets = std::wcscmp(argv[i], L"raw-offsets") == 0;
+        } else {
+            std::fputs("unknown optional argument\n", stderr);
+            return 2;
+        }
     }
 
     wchar_t* end = nullptr;
@@ -140,6 +167,21 @@ int wmain(int argc, wchar_t** argv) {
         return 5;
     }
 
+    if (negotiatePackage) {
+        char name[] = "Negotiate";
+        LSA_STRING negotiateName{};
+        negotiateName.Buffer = name;
+        negotiateName.Length = sizeof(name) - 1;
+        negotiateName.MaximumLength = sizeof(name);
+        status = LsaLookupAuthenticationPackage(lsa, &negotiateName, &packageId);
+        if (status < 0) {
+            PrintStatus("lookup_negotiate_package", status);
+            Wipe(&serviceTicket);
+            LsaDeregisterLogonProcess(lsa);
+            return 4;
+        }
+    }
+    std::printf("authentication_package_id=%lu\n", static_cast<unsigned long>(packageId));
     TOKEN_SOURCE source{};
     std::memcpy(source.SourceName, "TSHLYTKT", sizeof(source.SourceName));
     if (!AllocateLocallyUniqueId(&source.SourceIdentifier)) {
@@ -167,7 +209,8 @@ int wmain(int argc, wchar_t** argv) {
     const CLSID probeClsid = {0x6f0de0cc, 0x3645, 0x4f21,
                               {0x9d, 0x5c, 0x9f, 0x57, 0x38, 0x2f, 0x92, 0x1b}};
     const HRESULT buildHr = BuildKerbTicketSerialization(
-        serviceTicket.data(), serviceTicket.size(), nullptr, 0, packageId,
+        serviceTicket.data(), serviceTicket.size(), nullptr, 0, false, nullptr,
+        packageId,
         probeClsid, &serialization);
     Wipe(&serviceTicket);
     if (FAILED(buildHr)) {
@@ -177,9 +220,8 @@ int wmain(int argc, wchar_t** argv) {
         return 6;
     }
 
-    // Credential Provider blobs store pointer members as offsets. Winlogon
-    // converts those offsets to pointers before LSA consumes the buffer; do
-    // the same fixup here to test our exact packed serialization.
+    // Compare native LSA pointers with the unchanged serialized offsets.
+    // Success after fixup alone does not prove Winlogon performs that fixup.
     if (serialization.cbSerialization < sizeof(KERB_TICKET_LOGON)) {
         FreeKerbTicketSerialization(&serialization);
         LsaDeregisterLogonProcess(lsa);
@@ -198,7 +240,8 @@ int wmain(int argc, wchar_t** argv) {
         LsaDeregisterLogonProcess(lsa);
         return 6;
     }
-    logon->ServiceTicket = serialization.rgbSerialization + serviceOffset;
+    if (!rawOffsets) logon->ServiceTicket = serialization.rgbSerialization + serviceOffset;
+    std::printf("pointer_mode=%s\n", rawOffsets ? "raw-offsets" : "native-pointers");
     logon->TicketGrantingTicket = nullptr;
 
     status = LsaLogonUser(

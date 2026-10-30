@@ -26,8 +26,11 @@ The broker writes `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\broker.log
 It records session capture attempts, the HOST-ticket lookup result, ticket-cache
 misses/expiry, and one-use delivery status. The provider's
 `provider.log` records the HRESULT returned while consuming and serializing the
-ticket. Both logs include timestamps, status codes, and the test account SID;
-neither log includes ticket contents, passwords, PINs, or key material.
+ticket. For the ticket experiment, `ADTicketSerializationReady` and
+`ReportResult` now write separate hexadecimal `status` and `substatus` fields,
+plus the credential-provider scenario, authentication-package ID, and
+serialized byte count. The broker log includes the test account SID. Neither
+log includes ticket contents, passwords, PINs, or key material.
 
 `Windows ticket preparation failed (0x80070490)` means the broker had no
 unexpired ticket cached for that account SID when LogonUI requested it. Check
@@ -38,6 +41,14 @@ then sign out and try the ticket tile within the broker's three-minute cache
 window. A cold sign-in with no existing session cannot manufacture its own
 Kerberos ticket.
 
+`Phone approved, but Windows rejected the ticket (0xC000006D / 0xC00000E5)`
+means the broker delivered the ticket but Winlogon/LSA rejected the handoff.
+`0xC00000E5` is `STATUS_INTERNAL_ERROR`; inspect the provider's
+`RetrieveAdTicketKerberosPackage`, `BuildADTicketLogon`, and `ReportResult`
+events alongside the broker's `TicketDelivered` event. The provider now uses
+the Kerberos authentication package and emits the correct `KERB_TICKET_LOGON`
+or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
+
 ## Current state
 
 - LSA accepted the exact ticket serialization and returned a primary token on
@@ -46,8 +57,16 @@ Kerberos ticket.
   only after phone approval.
 - The volatile broker and the separate ticket-test DLL compile on Linux with
   MinGW. Clone 1 reached the ticket tile, but the first attempt failed because
-  no cached ticket was available (`ERROR_NOT_FOUND`, 0x80070490). The broker now
-  records the capture/delivery path so the next attempt shows where it failed.
+  no cached ticket was available (`ERROR_NOT_FOUND`, 0x80070490). In the next
+  failed run, the broker captured and delivered a 1,435-byte ticket; the
+  provider reported a 1,475-byte serialization and LSA returned
+  `STATUS_LOGON_FAILURE` / `STATUS_INTERNAL_ERROR` (`0xC00000E5` substatus).
+  The 40-byte difference is the size of `KERB_TICKET_UNLOCK_LOGON`, while
+  `CPUS_LOGON` requires the 32-byte `KERB_TICKET_LOGON` header. The corrected
+  provider now selects the header by scenario; that version is loaded on Clone
+  1 but still needs an end-to-end screen test. The ticket probe also accepts
+  explicit `kerberos|negotiate` and `native-pointers|raw-offsets` choices, so
+  both pointer representations can be compared with the Kerberos package.
 - The next test must use a disposable, low-privilege AD account with its own
   phone approval. Do not use `Administrator` or the everyday `martin` account.
 - A successful sign-in would only prove the Clone 1 Winlogon handoff. It would

@@ -28,6 +28,8 @@ HRESULT BuildKerbTicketSerialization(
     size_t serviceTicketLength,
     const BYTE* forwardedTgtKrbCred,
     size_t forwardedTgtKrbCredLength,
+    bool unlockScenario,
+    const LUID* logonId,
     ULONG kerberosAuthenticationPackage,
     const CLSID& credentialProviderClsid,
     CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization) {
@@ -38,9 +40,12 @@ HRESULT BuildKerbTicketSerialization(
     if (FAILED(hr)) return hr;
     hr = ValidateTicket(forwardedTgtKrbCred, forwardedTgtKrbCredLength, true);
     if (FAILED(hr)) return hr;
-    if (kerberosAuthenticationPackage == 0) return E_INVALIDARG;
+    if (unlockScenario && logonId == nullptr) return E_INVALIDARG;
+    // Authentication package IDs are opaque LSA values; Negotiate may be 0.
 
-    constexpr size_t headerBytes = sizeof(KERB_TICKET_LOGON);
+    const size_t headerBytes = unlockScenario
+        ? sizeof(KERB_TICKET_UNLOCK_LOGON)
+        : sizeof(KERB_TICKET_LOGON);
     if (serviceTicketLength > std::numeric_limits<size_t>::max() - headerBytes ||
         headerBytes + serviceTicketLength >
             std::numeric_limits<size_t>::max() - forwardedTgtKrbCredLength)
@@ -56,7 +61,9 @@ HRESULT BuildKerbTicketSerialization(
     ZeroMemory(buffer, totalBytes);
 
     auto* logon = reinterpret_cast<PKERB_TICKET_LOGON>(buffer);
-    logon->MessageType = KerbTicketLogon;
+    logon->MessageType = unlockScenario
+        ? KerbTicketUnlockLogon
+        : KerbTicketLogon;
     logon->Flags = 0;
     logon->ServiceTicketLength = static_cast<ULONG>(serviceTicketLength);
     logon->TicketGrantingTicketLength =
@@ -66,6 +73,10 @@ HRESULT BuildKerbTicketSerialization(
     logon->TicketGrantingTicket = forwardedTgtKrbCredLength == 0
         ? nullptr
         : reinterpret_cast<PUCHAR>(static_cast<ULONG_PTR>(tgtOffset));
+    if (unlockScenario) {
+        auto* unlock = reinterpret_cast<PKERB_TICKET_UNLOCK_LOGON>(buffer);
+        unlock->LogonId = *logonId;
+    }
 
     memcpy(buffer + headerBytes, serviceTicket, serviceTicketLength);
     memcpy(buffer + tgtOffset, forwardedTgtKrbCred, forwardedTgtKrbCredLength);
