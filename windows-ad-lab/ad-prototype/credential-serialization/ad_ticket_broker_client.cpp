@@ -35,8 +35,8 @@ bool ReadExact(HANDLE pipe, void* data, DWORD bytes) {
 
 bool ValidSidText(const wchar_t* sid, size_t* chars) {
     if (!sid || !chars || sid[0] != L'S' || sid[1] != L'-') return false;
-    size_t count = 0;
-    for (const wchar_t* p = sid; *p; ++p) {
+    size_t count = 2; // Include the S- prefix in the wire length.
+    for (const wchar_t* p = sid + 2; *p; ++p) {
         if (*p != L'-' && (*p < L'0' || *p > L'9')) return false;
         if (++count > 184) return false;
     }

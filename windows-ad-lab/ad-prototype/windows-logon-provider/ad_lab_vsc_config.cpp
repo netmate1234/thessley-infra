@@ -11,7 +11,7 @@ bool IsCanonicalSidText(const wchar_t *sid)
 {
     if (!sid || sid[0] != L'S' || sid[1] != L'-') return false;
     size_t length = 0;
-    for (const wchar_t *p = sid; *p; ++p)
+    for (const wchar_t *p = sid + 2; *p; ++p)
     {
         if (*p != L'-' && (*p < L'0' || *p > L'9')) return false;
         if (++length > 184) return false;

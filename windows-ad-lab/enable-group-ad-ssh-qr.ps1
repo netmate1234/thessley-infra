@@ -7,7 +7,7 @@ SSH public key), a phone enrolled for this computer, and membership in the
 AD group authorized by the Thessley AD API. This script adds that AD group to
 the PC's local Administrators group, replaces the prototype's per-user AD
 Match block with a group Match block, validates sshd_config, and arms an
-automatic rollback before restarting sshd.
+automatic rollback before restarting sshd unless -NoRollback is specified.
 #>
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]{0,14}$')]
@@ -15,7 +15,8 @@ param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')]
     [string]$GroupSamAccountName = 'ThessleyQRWorkstationAdmins',
     [ValidateRange(5, 60)]
-    [int]$RollbackMinutes = 15
+    [int]$RollbackMinutes = 15,
+    [switch]$NoRollback
 )
 $ErrorActionPreference = 'Stop'
 
@@ -44,7 +45,9 @@ foreach ($path in @($config, $sshd, $forceCommandFile, $pythonGate)) {
 if (-not (Get-ScheduledTask -TaskName 'ThessleyPamWin' -ErrorAction SilentlyContinue)) {
     throw 'The Thessley SYSTEM approval service is not installed.'
 }
-if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+if ($NoRollback) {
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+} elseif (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     throw "A rollback is already armed for $qualifiedGroup. Confirm or let it expire first."
 }
 
@@ -88,12 +91,13 @@ $backup = Join-Path $backupDir "sshd_config.ad-group.$stamp.bak"
 Copy-Item -LiteralPath $config -Destination $backup
 $existingAdminGroup = @(Get-LocalGroupMember -Group $administrators | Where-Object { $_.SID.Value -eq $groupSid.Value })
 $addedAdminGroup = -not [bool]$existingAdminGroup
-$rollbackScript = Join-Path $root "rollback-ad-ssh-group-$stamp.ps1"
-$backupLiteral = "'" + $backup.Replace("'", "''") + "'"
-$configLiteral = "'" + $config.Replace("'", "''") + "'"
-$taskLiteral = "'" + $taskName.Replace("'", "''") + "'"
-$groupLiteral = "'" + $qualifiedGroup.Replace("'", "''") + "'"
-$rollbackBody = @"
+if (-not $NoRollback) {
+    $rollbackScript = Join-Path $root "rollback-ad-ssh-group-$stamp.ps1"
+    $backupLiteral = "'" + $backup.Replace("'", "''") + "'"
+    $configLiteral = "'" + $config.Replace("'", "''") + "'"
+    $taskLiteral = "'" + $taskName.Replace("'", "''") + "'"
+    $groupLiteral = "'" + $qualifiedGroup.Replace("'", "''") + "'"
+    $rollbackBody = @"
 `$ErrorActionPreference = 'Stop'
 Copy-Item -LiteralPath $backupLiteral -Destination $configLiteral -Force
 Restart-Service sshd -Force
@@ -104,26 +108,27 @@ Unregister-ScheduledTask -TaskName $taskLiteral -Confirm:`$false -ErrorAction Si
 Write-Output 'Original SSH config restored by Thessley AD group rollback.'
 "@
 
-# Build and verify the rollback task before the first live change.
-$powerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-Set-Content -LiteralPath $rollbackScript -Value $rollbackBody -Encoding ascii
-$action = New-ScheduledTaskAction -Execute $powerShell -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$rollbackScript`""
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes($RollbackMinutes)
-$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
-    -Description "Restores the prior AD SSH configuration unless group QR SSH is verified." | Out-Null
-try {
-    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-    $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop
-    $principalSid = ([Security.Principal.NTAccount]::new([string]$task.Principal.UserId)).Translate([Security.Principal.SecurityIdentifier]).Value
-    if (-not $task.Settings.Enabled -or $principalSid -ne 'S-1-5-18' -or
-        $taskInfo.NextRunTime -le (Get-Date) -or $taskInfo.NextRunTime -gt (Get-Date).AddMinutes($RollbackMinutes + 2)) {
-        throw 'Rollback task verification failed.'
+    # Build and verify the rollback task before the first live change.
+    $powerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    Set-Content -LiteralPath $rollbackScript -Value $rollbackBody -Encoding ascii
+    $action = New-ScheduledTaskAction -Execute $powerShell -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$rollbackScript`""
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes($RollbackMinutes)
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
+        -Description "Restores the prior AD SSH configuration unless group QR SSH is verified." | Out-Null
+    try {
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop
+        $principalSid = ([Security.Principal.NTAccount]::new([string]$task.Principal.UserId)).Translate([Security.Principal.SecurityIdentifier]).Value
+        if (-not $task.Settings.Enabled -or $principalSid -ne 'S-1-5-18' -or
+            $taskInfo.NextRunTime -le (Get-Date) -or $taskInfo.NextRunTime -gt (Get-Date).AddMinutes($RollbackMinutes + 2)) {
+            throw 'Rollback task verification failed.'
+        }
+    } catch {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        throw "SSH configuration was not changed because its rollback could not be verified: $($_.Exception.Message)"
     }
-} catch {
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-    throw "SSH configuration was not changed because its rollback could not be verified: $($_.Exception.Message)"
 }
 
 try {
@@ -146,12 +151,18 @@ try {
     if ($addedAdminGroup) {
         Remove-LocalGroupMember -Group $administrators -Member $qualifiedGroup -ErrorAction SilentlyContinue
     }
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    if (-not $NoRollback) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
     throw
 }
 
 Write-Host "AD QR SSH approval and local Administrators membership enabled for $qualifiedGroup."
 Write-Host "Config backup: $backup"
-Write-Host "Automatic rollback in $RollbackMinutes minutes. Keep the maintenance SSH session open and test a new domain-account SSH session."
-Write-Host "After the QR test succeeds, confirm with: Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false"
+if ($NoRollback) {
+    Write-Host 'No automatic rollback task is armed; configuration and group mapping are retained.'
+} else {
+    Write-Host "Automatic rollback in $RollbackMinutes minutes. Keep the maintenance SSH session open and test a new domain-account SSH session."
+    Write-Host "After the QR test succeeds, confirm with: Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false"
+}
 Write-Host 'SFTP is not supported by this ForceCommand shell gate.'
