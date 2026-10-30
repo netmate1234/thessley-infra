@@ -109,6 +109,16 @@ try {
             Add-Check 'SmartcardLogon certificate' $state $detail
         }
     }
+    $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SmartCardCredentialProvider'
+    $eccPolicy = Get-ItemProperty -LiteralPath $policyPath -ErrorAction SilentlyContinue
+    $eccProperty = if ($eccPolicy) { $eccPolicy.PSObject.Properties['EnumerateECCCerts'] } else { $null }
+    if ($eccProperty -and [int]$eccProperty.Value -eq 1) {
+        Add-Check 'ECC smart-card logon policy' 'PASS' 'EnumerateECCCerts=1; ECDSA smart-card certificates may be enumerated for domain sign-in.'
+    } elseif ($eccProperty -and [int]$eccProperty.Value -notin @(0, 1)) {
+        Add-Check 'ECC smart-card logon policy' 'WARN' "EnumerateECCCerts has unexpected value '$($eccProperty.Value)'."
+    } else {
+        Add-Check 'ECC smart-card logon policy' 'WARN' 'ECC smart-card domain sign-in is disabled or not configured. Enable it only on the isolated test client before testing an ECDSA logon certificate; RSA/password recovery is unaffected.'
+    }
 } catch {
     Add-Check 'User certificate' 'WARN' $_.Exception.Message
 }
