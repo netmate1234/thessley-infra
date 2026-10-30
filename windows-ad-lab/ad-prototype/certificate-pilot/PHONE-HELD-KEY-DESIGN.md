@@ -124,9 +124,10 @@ Microsoft documents that Credential Providers serialize credentials for an
 authentication package, and that the Kerberos package accepts
 `KERB_TICKET_LOGON` through `LsaLogonUser`. That structure carries the KDC's
 host service ticket for `host/<computer>` and optionally a forwarded TGT in a
-`KRB_CRED`. The service ticket's PAC is what Windows uses to build the user's
-logon token. This suggests a network-only flow that keeps the phone key as the
-actual AD credential without a smart-card driver:
+`KRB_CRED`. Its documentation describes a network logon; it does not establish
+that a third-party Credential Provider can use it to create an interactive
+desktop session. This is a network-only hypothesis to test, not a promised
+login mechanism:
 
 1. Windows starts a single-use request bound to the selected AD SID and this
    computer's host SPN, then displays its QR.
@@ -135,19 +136,41 @@ actual AD credential without a smart-card driver:
 3. Android requests the host service ticket, packages that ticket and the
    forwarded TGT, and delivers them over the authenticated, machine-bound
    request channel.
-4. The Windows Credential Provider serializes `KERB_TICKET_LOGON` for the
-   built-in Kerberos package. LSA/Kerberos validates the KDC-issued ticket and
-   creates the interactive logon session.
+4. The Windows Credential Provider tries to serialize `KERB_TICKET_LOGON` for
+   the built-in Kerberos package. The experiment must establish whether
+   Winlogon/LSA accepts it for `CPUS_LOGON` and creates a usable interactive
+   desktop session, not merely a network token or cached ticket.
 
-This is a **candidate, not a verified implementation**. The Microsoft API
-documentation describes ticket logon and the credential serialization
-contract, but does not explicitly document this exact custom Credential
-Provider desktop-logon combination. The first gate is a disposable Windows
-test account: obtain real KDC tickets using the existing TPM smart-card
-credential, pass them through a minimal `KERB_TICKET_LOGON` Credential
-Provider, and verify an interactive desktop session plus a valid ticket cache.
-Only after that succeeds should the flow be changed to phone PKINIT. Keep all
+This is a **candidate, not a verified implementation**. Microsoft describes
+`KERB_TICKET_LOGON` as a network logon and separately documents Credential
+Provider serialization; it does not document this custom desktop-logon
+combination. The first gate is a disposable Windows test account on Clone 1:
+obtain real KDC tickets using the existing TPM smart-card credential, pass
+them through a minimal `KERB_TICKET_LOGON` Credential Provider, and verify
+that `CPUS_LOGON` creates a desktop session with the expected SID and a valid
+ticket cache. A successful network token or ticket cache alone is not a pass.
+If Winlogon rejects this path or creates no interactive desktop, stop this
+route and return to the documented smart-card credential path; do not issue
+the phone-key certificate or enable a sign-in policy. Only after the desktop
+test succeeds should the ticket source be changed to phone PKINIT. Keep all
 tickets in memory, wipe them after one use, and never log or persist them.
+
+Microsoft's [KERB_TICKET_LOGON documentation](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_ticket_logon)
+explicitly describes a network-logon structure. The [LsaLogonUser
+documentation](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-lsalogonuser)
+distinguishes it from `KERB_INTERACTIVE_LOGON`, which is documented for
+interactive authentication. That distinction is why the Clone 1 test must
+verify an actual desktop session, not infer one from a valid ticket or token.
+
+### Clone 1 test precondition (2026-10-30)
+
+The current SSH session to Clone 1 has an S4U cache but no usable TGT.
+`klist get HOST/MARTIN-WM.lab.thessley.test` returned `0x8009030e` (no
+credentials available). SSH therefore cannot supply the real tickets needed
+for the interactive Credential Provider experiment. Obtain tickets in a
+disposable interactive test logon first; this read-only check made no sign-in
+or DC changes. Clone 1 is only the isolated development proof; the production
+target remains an ordinary physical Windows PC.
 
 The QR request and ticket delivery must be short-lived, single-use, and bound
 to the selected SID, exact host SPN, phone credential, and current machine.

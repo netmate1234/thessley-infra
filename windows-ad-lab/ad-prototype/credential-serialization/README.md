@@ -42,10 +42,11 @@ VSC serializer. The new ticket serializer supports a different candidate:
 Android performs PKINIT with its TEE-held key, requests the exact computer
 host ticket, then delivers that KDC-issued ticket and a forwarded TGT for
 `KERB_TICKET_LOGON`. This avoids asking Windows to call a remote private-key
-provider. The exact interactive Credential Provider path is unproven; validate
-it with a disposable test account before issuing the phone-key certificate or
-enabling the policy. The existing TPM VSC path remains the only proven
-credential path. End-to-end requirements are in
+provider. Microsoft describes `KERB_TICKET_LOGON` as a *network logon*; the
+documentation does not promise that this serialization produces a usable
+interactive desktop session through a third-party Credential Provider. Treat
+it as a feasibility experiment only. The existing TPM VSC path remains the
+only proven interactive credential path. End-to-end requirements are in
 [`certificate-pilot/PHONE-HELD-KEY-DESIGN.md`](../certificate-pilot/PHONE-HELD-KEY-DESIGN.md).
 
 ## Current lab blocker
