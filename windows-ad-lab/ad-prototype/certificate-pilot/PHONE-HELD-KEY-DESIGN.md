@@ -591,15 +591,52 @@ reg delete HKLM\SOFTWARE\Policies\Microsoft\Windows\SmartCardCredentialProvider 
 reg delete HKLM\SOFTWARE\Policies\Microsoft\Windows\SmartCardCredentialProvider /v AllowSignatureOnlyKeys /f
 ```
 
-The DC's isolated `ThessleyPhoneKeyPilot` template remains unpublished. A
-read-only check confirmed version 4, four-hour validity, minimum key size
-2048, CNG default key spec (`0`), digital-signature and key-encipherment key
-usage, and Smart Card Logon plus Client Authentication EKUs. It is not yet
-proven that this template issues a usable ECDSA certificate for the enrolled
-phone key. No such certificate has been issued. The phone app already has a
-biometric-gated `NONEwithECDSA` helper for a 32-byte PIV SHA-256 digest, but
-no Windows-to-phone PIV signing request path calls it. The next decisive test
-is to issue a short-lived certificate matching the enrolled phone key, expose
-it through PIV key reference `9A` with algorithm `11`, and confirm Windows
-requests an ECDSA signature and the DC records PKINIT. This first test is
-online; offline ECC logon would additionally require an associated ECDH key.
+### Direct phone-key certificate issuance (2026-10-30)
+
+The Android app created a PKCS#10 request after the phone biometrically signed
+the request-info bytes with the already-enrolled `THESSLEYLAB\startmenutest`
+P-256 TEE key. The CSR signature verified with both OpenSSL and Python
+`cryptography`. Its DER SHA-256 was
+`351a1a2be9dff62b457bef9fb2c7983e1e984698b6861b3fc5c065b9a00de1ce`; its SPKI
+SHA-256 was `3ba18d16a94a44cc51a81eceaeb2592a8da19394b89d5a0d7a12010d91b3177a`,
+matching the active verified phone-key record. No private key was exported.
+
+The isolated version-4 `ThessleyPhoneKeyPilot` template was changed from RSA
+to `ECDSA_P256`, SHA-256, 256-bit minimum, and digital-signature-only key
+usage. It retains the four-hour validity, Smart Card Logon and Client
+Authentication EKUs, AD-derived subject, UPN SAN, and SID security extension.
+Only `startmenutest` received a direct Enroll ACE. The template was published
+only for the request, then unpublished and that ACE removed immediately after
+issuance. The shared SmartcardLogon template was not changed. The pilot
+template object remains in AD, unpublished, with the ECDSA test settings.
+
+The CA issued request 26, serial
+`120000001abf60982543cd1afb00000000001a`, as a four-hour certificate from
+`THESSLEY-LAB-CA`. On Clone 1, the certificate's EC point exactly matched the
+phone CSR key; the subject was `CN=Start Menu Test`; the UPN SAN was
+`startmenutest@lab.thessley.test`; the SID extension matched the account SID;
+and the certificate contained the expected template OID, Smart Card Logon EKU,
+and digital-signature-only Key Usage. Validity was 2026-10-30 20:26:32 through
+2026-10-31 00:26:32 local time. `certutil -verify -urlfetch` built the chain
+to the lab CA, but could not retrieve LDAP AIA/CDP data from the SSH logon
+token (`ERROR_LOGON_FAILURE`), so that command did not establish revocation
+status. The certificate itself was issued and its identity/key bindings were
+verified locally.
+
+A separate temporary ECDSA control certificate was issued to the same
+low-privilege test account from an OpenSSL-generated P-256 CSR, then revoked
+with Certificate Hold and a new CRL was published. Its private key and files
+were deleted. The first phone-CSR submission was rejected; rewriting the
+exact CSR bytes to Clone 1 and confirming the SHA-256 before resubmitting
+produced the successful request 26. This indicates a transfer error in the
+first attempt, not a failure of the phone CSR or CA's ECDSA support.
+
+This is a real phone-key-bound certificate, but not yet a working Windows
+sign-in. The certificate remains on Clone 1 as public material for the next
+PIV test. There is still no Windows-to-phone signing relay, no completed
+PIV-backed PKINIT, and no proof of domain sign-in without a password.
+The next milestone is to expose this certificate through the disposable PIV
+reader and route the card's signing operation to the phone's verified TEE key;
+only a matching DC PKINIT event and successful Windows session will prove the
+login path. Offline ECC logon would additionally require an associated ECDH
+key.
