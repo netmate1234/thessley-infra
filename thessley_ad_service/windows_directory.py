@@ -265,7 +265,9 @@ $root.Dispose()
         script = rf"""
 $ErrorActionPreference = 'Stop'
 try {{
-    $allowed = @([Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('{encoded_groups}')) | ConvertFrom-Json)
+    $allowedJson = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('{encoded_groups}'))
+    $allowed = ConvertFrom-Json -InputObject $allowedJson
+    if ($allowed -isnot [System.Array]) {{ $allowed = @($allowed) }}
     $authority = [Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('{encoded_authority}'))
     $limit = {limit}
     $timeoutSeconds = {self.timeout_seconds}
@@ -387,7 +389,7 @@ try {{
     $root.Dispose()
     [Console]::Out.WriteLine((ConvertTo-Json -InputObject ([PSCustomObject]@{{ domain = $domain; users = @($users); truncated = $truncated }}) -Compress -Depth 4))
 }} catch {{
-    [Console]::Error.WriteLine('Active Directory user listing failed.')
+    [Console]::Error.WriteLine(('Active Directory user listing failed: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message))
     exit 1
 }}
 """
@@ -402,7 +404,9 @@ try {{
         except (OSError, subprocess.SubprocessError) as exc:
             raise DirectoryUnavailable("Windows could not query the AD user directory") from exc
         if result.returncode:
-            raise DirectoryUnavailable("Windows could not query the AD user directory")
+            detail = result.stderr.strip()[-1200:]
+            cause = RuntimeError(detail) if detail else None
+            raise DirectoryUnavailable("Windows could not query the AD user directory") from cause
         try:
             payload = json.loads(result.stdout.strip())
             users = payload.get("users") if isinstance(payload, dict) else None

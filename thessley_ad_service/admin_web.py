@@ -652,6 +652,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         try:
             snapshot = self.directory.list_users(self.allowed_group_sids, limit=1000)
         except Exception:
+            _LOG.exception("admin_directory_query_failed sid=%s", session.get("sid", "unknown"))
             return self._response(503, self._page("Directory unavailable", '<section class="card error">Active Directory could not be queried. Try again shortly.</section>'))
         content = f"""<div class="row" style="justify-content:space-between"><h1>AD accounts</h1>
 <form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><button class="danger">Sign out</button></form></div>
