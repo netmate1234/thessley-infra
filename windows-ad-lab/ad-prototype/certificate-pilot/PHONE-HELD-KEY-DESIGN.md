@@ -133,11 +133,23 @@ Overview](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/s
 The QR carries only a short-lived, single-use request locator and challenge;
 it never contains a private key or a reusable credential. The phone app uses
 the separately enrolled Android Keystore key. There is no NFC path. The
-Android app and DC now implement the admin-started key enrollment and code
-confirmation flow, and the release is installed on the test phone. A fresh
-enrollment has not yet been completed end to end. This flow proves account
-binding, key possession, and attestation status; it is not yet a QR-mediated
-Windows logon protocol or a Windows-usable certificate key.
+Android app and DC implement admin-started key enrollment and code
+confirmation. On 2026-10-30, the active `THESSLEYLAB\Administrator` key was
+confirmed as `verified_tee`. The phone generated a 223-byte DER PKCS#10 CSR;
+its ECDSA signature verified, and its SPKI SHA-256 matched the active key in
+the DC registry. This proves that the exported CSR uses that enrolled phone
+key while the private key remains in Android Keystore.
+
+The CSR exposed a service validation bug: the validator required at least 256
+DER bytes and a randomized Windows-pilot subject, while this valid P-256 phone
+CSR is 223 bytes and uses `CN=Thessley AD Logon Key`. The local source now
+accepts that exact EC profile and requires its SPKI digest to match an active
+AD key for the approved SID at upload, issuer claim, and certificate
+acceptance. Focused tests pass. This change has not yet been deployed to the
+DC. The live service config still has `certificate_template` unset, so it
+cannot issue a certificate, and the phone-key sign-in policy remains disabled.
+The CSR is public material; no certificate or Windows sign-in credential has
+been created.
 
 The next proof must bind a fresh Windows sign-in challenge to the QR request,
 have the phone sign it after biometric approval, and demonstrate that the

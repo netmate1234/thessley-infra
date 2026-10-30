@@ -76,6 +76,7 @@ def _certificate_claim(machine_id: str, request_id: str) -> int:
         raise RuntimeError("The protected AD service state is unavailable.")
     from .challenges import CERTIFICATE_ISSUANCE_RETENTION_SECONDS, ChallengeStore
     from .phone_registry import PhoneRegistry
+    from .ad_logon_keys import AdLogonKeyRegistry
     from .state_permissions import verify_private_windows_paths
 
     verify_private_windows_paths([ROOT, STATE_DB])
@@ -104,12 +105,15 @@ def _certificate_claim(machine_id: str, request_id: str) -> int:
     claimed = None
     try:
         phones = PhoneRegistry(STATE_DB)
-        challenges = ChallengeStore(STATE_DB, phones.public_key_for)
+        ad_logon_keys = AdLogonKeyRegistry(STATE_DB)
+        challenges = ChallengeStore(
+            STATE_DB, phones.public_key_for, ad_logon_keys.active_key_matches_public_key,
+        )
         claimed = challenges.claim_certificate_issuance(machine_id=machine_id, request_id=request_id)
         if claimed is None:
             raise RuntimeError("No unclaimed, delivered, approved certificate request is available.")
         csr_der = claimed["certificate_request_der"]
-        if not isinstance(csr_der, bytes) or not 256 <= len(csr_der) <= 32 * 1024:
+        if not isinstance(csr_der, bytes) or not 128 <= len(csr_der) <= 32 * 1024:
             raise RuntimeError("The approved certificate request is unavailable or malformed.")
         csr_path = job_dir / "request.csr.der"
         job = {
@@ -220,7 +224,7 @@ def _certificate_import(machine_id: str, request_id: str, certificate_path: str,
         raise RuntimeError("The protected issuer job fields are invalid.")
     try:
         csr_der = base64.b64decode(job["csr_der_b64"].encode("ascii"), validate=True)
-        if (not 256 <= len(csr_der) <= 32 * 1024
+        if (not 128 <= len(csr_der) <= 32 * 1024
                 or base64.b64encode(csr_der).decode("ascii") != job["csr_der_b64"]
                 or not hmac.compare_digest(hashlib.sha256(csr_der).hexdigest(),
                                            job["certificate_request_sha256"])):
@@ -246,7 +250,11 @@ def _certificate_import(machine_id: str, request_id: str, certificate_path: str,
         raise RuntimeError("The returned certificate, issuer certificate, or approved CSR is invalid.") from exc
 
     phones = PhoneRegistry(STATE_DB)
-    challenges = ChallengeStore(STATE_DB, phones.public_key_for)
+    from .ad_logon_keys import AdLogonKeyRegistry
+    ad_logon_keys = AdLogonKeyRegistry(STATE_DB)
+    challenges = ChallengeStore(
+        STATE_DB, phones.public_key_for, ad_logon_keys.active_key_matches_public_key,
+    )
     receipt = challenges.complete_certificate_issuance(
         machine_id=machine_id, request_id=request_id,
         certificate_der=certificate_der,

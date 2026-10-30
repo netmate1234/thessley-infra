@@ -14,6 +14,8 @@ from cryptography.x509.oid import NameOID
 
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _PILOT_SUBJECT = re.compile(r"^Thessley temporary sign-in [a-f0-9]{32}$")
+_PHONE_KEY_SUBJECT = "Thessley AD Logon Key"
+_MIN_CSR_DER_SIZE = 128
 _RSA_SHA256_SIGNATURE_OID = "1.2.840.113549.1.1.11"
 _ECDSA_SHA256_SIGNATURE_OID = "1.2.840.10045.4.3.2"
 
@@ -27,12 +29,12 @@ def validate_approved_csr(der: bytes, expected_sha256: str) -> dict[str, str | i
 
     This function does not authorize the principal, consume phone approval,
     contact a CA, or issue a certificate. Its constraints match the isolated
-    Windows machine-key generator and a possible Android Keystore key: one
-    random CN, no requested extensions, and either RSA-3072/SHA-256 or
-    ECDSA P-256/SHA-256. This validates syntax and proof of possession; it
-    does not establish which device owns the private key.
+    Windows machine-key generator (random CN) and the Android phone-key CSR
+    (fixed CN): no requested extensions, and either RSA-3072/SHA-256 or
+    ECDSA P-256/SHA-256. Callers handling an EC request must separately bind
+    its SPKI digest to an active AD logon key for the challenge SID.
     """
-    if not isinstance(der, bytes) or not 256 <= len(der) <= 64 * 1024:
+    if not isinstance(der, bytes) or not _MIN_CSR_DER_SIZE <= len(der) <= 64 * 1024:
         raise CertificateRequestError("The DER certificate request has an invalid size.")
     if not isinstance(expected_sha256, str) or not _SHA256.fullmatch(expected_sha256):
         raise CertificateRequestError("The approved CSR digest is malformed.")
@@ -50,11 +52,14 @@ def validate_approved_csr(der: bytes, expected_sha256: str) -> dict[str, str | i
         ec_profile = (isinstance(public_key, ec.EllipticCurvePublicKey)
                       and isinstance(public_key.curve, ec.SECP256R1)
                       and request.signature_algorithm_oid.dotted_string == _ECDSA_SHA256_SIGNATURE_OID)
-        if (not request.is_signature_valid
-                or not (rsa_profile or ec_profile)
-                or len(subject_attributes) != 1 or len(common_names) != 1
-                or not _PILOT_SUBJECT.fullmatch(common_names[0].value)
-                or len(request.extensions) != 0):
+        subject_valid = (
+            len(subject_attributes) == 1 and len(common_names) == 1 and (
+                (rsa_profile and _PILOT_SUBJECT.fullmatch(common_names[0].value) is not None)
+                or (ec_profile and common_names[0].value == _PHONE_KEY_SUBJECT)
+            )
+        )
+        if (not request.is_signature_valid or not (rsa_profile or ec_profile)
+                or not subject_valid or len(request.extensions) != 0):
             raise CertificateRequestError("The CSR does not match the approved RSA-3072 or EC P-256 profile.")
     except CertificateRequestError:
         raise

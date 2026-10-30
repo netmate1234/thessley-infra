@@ -527,3 +527,27 @@ class AdLogonKeyRegistry:
             return None
         finally:
             connection.close()
+
+    def active_key_matches_public_key(self, principal_id: str, public_key_sha256: str) -> bool:
+        """Return whether this exact SPKI belongs to an active key for a SID.
+
+        The hash is over canonical SubjectPublicKeyInfo DER, matching the
+        value stored during phone-key enrollment. Attestation classification
+        remains visible to policy/UI; this lookup only enforces that the CSR
+        cannot substitute a different, unregistered signing key.
+        """
+        if (not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id)
+                or not isinstance(public_key_sha256, str) or not _SHA256.fullmatch(public_key_sha256)):
+            return False
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT 1 FROM ad_logon_keys WHERE principal_id = ? AND public_key_sha256 = ? "
+                "AND revoked_at IS NULL LIMIT 1",
+                (principal_id, public_key_sha256),
+            ).fetchone()
+            return row is not None
+        except sqlite3.Error:
+            return False
+        finally:
+            connection.close()

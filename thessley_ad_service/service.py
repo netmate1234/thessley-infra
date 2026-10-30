@@ -74,7 +74,9 @@ def main() -> int:
     login_policy = LoginPolicyStore(STATE_DB)
     phones = PhoneRegistry(STATE_DB)
     ad_logon_keys = AdLogonKeyRegistry(STATE_DB)
-    challenges = ChallengeStore(STATE_DB, phones.public_key_for)
+    challenges = ChallengeStore(
+        STATE_DB, phones.public_key_for, ad_logon_keys.active_key_matches_public_key,
+    )
     challenges.purge_expired()
     replay_store = SQLiteReplayStore(STATE_DB)
     directory = ActiveDirectory(DirectoryConfig(**directory_config))

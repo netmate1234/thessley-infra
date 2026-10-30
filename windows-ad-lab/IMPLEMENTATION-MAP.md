@@ -558,3 +558,36 @@ client into test-signing mode to try the upstream driver.
   refuse Thessley sign-in and leave Windows recovery providers available.
 - Never store or release a domain password in the standalone AD path.
 
+## Phone-held Administrator CSR proof (2026-10-30)
+
+- Clone 1 was reachable over the existing SSH key as `THESSLEYLAB\martin`;
+  the current token includes local Administrators. The installed
+  `thessley-ad-test.cmd` was zero bytes, so it was backed up and regenerated
+  from the checked-in launcher contract. The launcher now runs the installed
+  AD CLI and its `--help` import check succeeds. The backup is beside the
+  launcher with suffix `.before-repair-20261030010301`.
+- The phone's active `THESSLEYLAB\Administrator` key is `verified_tee` in the
+  DC registry. The Android app exported a public PKCS#10 CSR using that key.
+  Its ECDSA self-signature verified, and its SPKI SHA-256 exactly matches the
+  active DC key record. The private key remained in Android Keystore.
+- The CSR was 223 bytes DER with `CN=Thessley AD Logon Key`. The source had
+  incorrectly required at least 256 bytes and the Windows pilot's randomized
+  subject, so it rejected the valid phone request. The local source now accepts
+  this EC profile and checks its SPKI hash against an active AD logon key for
+  the approved SID before CSR upload, issuer claim, and certificate acceptance.
+  The HTTP base64 lower bound and issuer CLI size checks now admit this valid
+  request size.
+- Focused CSR/challenge tests pass. The full service test suite still has
+  unrelated environment failures: sandbox socket creation is denied in HTTPS
+  tests, and existing untracked directory/enrollment tests have expectation
+  mismatches. The service change has not been deployed.
+- The live DC config has `certificate_template: null`; the certificate method
+  remains disabled and no certificate was issued. The published template list
+  does not include the existing duplicate Smart Card Logon template; its
+  current configuration has auto-enrollment enabled and broad ACLs, so do not
+  publish it as-is. The next CA step is a dedicated duplicate with automatic
+  enrollment off and narrowly scoped enrollment rights, followed by a
+  restricted Enrollment Agent path. Windows sign-in still requires a supported
+  phone-backed Kerberos signing bridge and must not be marked active before a
+  real interactive PKINIT test.
+

@@ -39,11 +39,27 @@ class ChallengeStore:
     authenticate the machine before polling its result.
     """
 
-    def __init__(self, path: str | os.PathLike[str], public_key_lookup: Callable[[str, str, str], str | None]):
+    def __init__(self, path: str | os.PathLike[str],
+                 public_key_lookup: Callable[[str, str, str], str | None],
+                 ad_logon_key_matches: Callable[[str, str], bool] | None = None):
         self.path = Path(path)
         self.public_key_lookup = public_key_lookup
+        self.ad_logon_key_matches = ad_logon_key_matches
         self._prepare_file()
         self._initialize()
+
+    def _validate_certificate_csr(self, principal_id: str, der: bytes,
+                                  expected_digest: str) -> dict[str, str | int]:
+        from .certificate_requests import CertificateRequestError, validate_approved_csr
+
+        metadata = validate_approved_csr(der, expected_digest)
+        if metadata["public_key_algorithm"] == "ec-p256":
+            if (self.ad_logon_key_matches is None
+                    or not self.ad_logon_key_matches(principal_id, str(metadata["public_key_spki_sha256"]))):
+                raise CertificateRequestError(
+                    "The EC CSR key is not an active AD logon key for the approved account."
+                )
+        return metadata
 
     def _prepare_file(self) -> None:
         prepare_private_sqlite(self.path, description="AD challenge database")
@@ -266,14 +282,12 @@ class ChallengeStore:
                     or not isinstance(response_at, (int, float)) or current > response_at + 180
                     or not isinstance(expected_digest, str) or not _CERTIFICATE_SHA256.fullmatch(expected_digest)
                     or not isinstance(template, str) or not _CERTIFICATE_TEMPLATE.fullmatch(template)
-                    or not isinstance(csr_der, bytes) or not 256 <= len(csr_der) <= 32 * 1024
+                    or not isinstance(csr_der, bytes) or not 128 <= len(csr_der) <= 32 * 1024
                     or not isinstance(csr_received_at, (int, float)) or current > csr_received_at + 600
                     or claimed_at is not None):
                 connection.execute("ROLLBACK")
                 return None
-            from .certificate_requests import validate_approved_csr
-
-            metadata = validate_approved_csr(csr_der, expected_digest)
+            metadata = self._validate_certificate_csr(principal_id, csr_der, expected_digest)
             cursor = connection.execute(
                 "UPDATE login_challenges SET certificate_issuance_claimed_at = ? "
                 "WHERE request_id = ? AND machine_id = ? AND certificate_issuance_claimed_at IS NULL",
@@ -334,7 +348,7 @@ class ChallengeStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT principal_sid, certificate_request_sha256, certificate_template, "
+                "SELECT principal_id, principal_sid, certificate_request_sha256, certificate_template, "
                 "certificate_request_der, certificate_request_received_at, certificate_issuance_claimed_at, "
                 "certificate_issued_der FROM login_challenges "
                 "WHERE request_id = ? AND machine_id = ? AND status = 'approve' AND delivered_at IS NOT NULL",
@@ -343,7 +357,7 @@ class ChallengeStore:
             if row is None:
                 connection.execute("ROLLBACK")
                 return None
-            sid, csr_sha256, template, csr_der, csr_received_at, claimed_at, existing_certificate = row
+            principal_id, sid, csr_sha256, template, csr_der, csr_received_at, claimed_at, existing_certificate = row
             if (not isinstance(sid, str) or not isinstance(csr_sha256, str)
                     or not isinstance(template, str) or not isinstance(csr_der, bytes)
                     or not isinstance(csr_received_at, (int, float))
@@ -359,6 +373,7 @@ class ChallengeStore:
             from .issued_certificates import IssuedCertificateError, validate_issued_certificate
 
             try:
+                self._validate_certificate_csr(principal_id, csr_der, csr_sha256)
                 metadata = validate_issued_certificate(
                     certificate_der=certificate_der,
                     csr_der=csr_der,
@@ -369,7 +384,7 @@ class ChallengeStore:
                     expected_issuer_sha256=expected_issuer_sha256,
                     now=None,
                 )
-            except IssuedCertificateError:
+            except (IssuedCertificateError, ValueError):
                 connection.execute("ROLLBACK")
                 return None
             cursor = connection.execute(
@@ -585,28 +600,26 @@ class ChallengeStore:
         """
         if (not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)
                 or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
-                or not isinstance(der, bytes) or not 256 <= len(der) <= 32 * 1024):
+                or not isinstance(der, bytes) or not 128 <= len(der) <= 32 * 1024):
             return None
         current = time.time() if now is None else now
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT certificate_request_sha256, certificate_template, status, delivered_at, response_at, "
+                "SELECT principal_id, certificate_request_sha256, certificate_template, status, delivered_at, response_at, "
                 "certificate_request_der FROM login_challenges WHERE request_id = ? AND machine_id = ?",
                 (request_id, machine_id),
             ).fetchone()
             if row is None:
                 connection.execute("ROLLBACK")
                 return None
-            expected_sha256, template, status, delivered_at, response_at, existing_der = row
+            principal_id, expected_sha256, template, status, delivered_at, response_at, existing_der = row
             if (not expected_sha256 or not template or status != "approve" or delivered_at is None
                     or not isinstance(response_at, (int, float)) or current > response_at + 180):
                 connection.execute("ROLLBACK")
                 return None
-            from .certificate_requests import validate_approved_csr
-
-            metadata = validate_approved_csr(der, expected_sha256)
+            metadata = self._validate_certificate_csr(principal_id, der, expected_sha256)
             if existing_der is not None:
                 connection.execute("ROLLBACK")
                 return metadata if secrets.compare_digest(existing_der, der) else None

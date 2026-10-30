@@ -502,7 +502,7 @@ def certificate_csr_submit_route(registry: "MachineRegistry", replay_guard: "Rep
                 or not isinstance(body.get("request_id"), str)
                 or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", body["request_id"])
                 or not isinstance(body.get("csr_der_b64"), str)
-                or not 344 <= len(body["csr_der_b64"]) <= 43692):
+                or not 172 <= len(body["csr_der_b64"]) <= 43692):
             return 400, {"result": "error", "message": "Invalid certificate request upload."}
         machine_id = auth_headers["x-thessley-machine-id"]
         if not _authenticated_machine(

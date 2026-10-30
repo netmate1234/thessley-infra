@@ -170,7 +170,9 @@ def main() -> int:
             raise RuntimeError("Could not reconcile AD logon keys against active phone credentials")
         if reconciled_ad_keys:
             logging.warning("revoked_orphaned_ad_logon_keys count=%d", reconciled_ad_keys)
-        challenges = ChallengeStore(STATE_PATH, phones.public_key_for)
+        challenges = ChallengeStore(
+            STATE_PATH, phones.public_key_for, ad_logon_keys.active_key_matches_public_key,
+        )
         challenges.purge_expired()
         replay_store = SQLiteReplayStore(STATE_PATH)
         directory = WindowsActiveDirectory(WindowsDirectoryConfig(config["authority"]))
