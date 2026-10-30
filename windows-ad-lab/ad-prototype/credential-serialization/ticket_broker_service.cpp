@@ -9,6 +9,7 @@
 #include <ntsecapi.h>
 #include <sddl.h>
 #include <wtsapi32.h>
+#include <strsafe.h>
 
 #include <algorithm>
 #include <atomic>
@@ -44,9 +45,44 @@ std::mutex g_captureMutex;
 std::vector<std::thread> g_captureThreads;
 void CaptureSession(DWORD sessionId);
 
+// Diagnostic log contains state, account SID and status codes only. Ticket
+// contents, credentials, tokens and key material are never written to disk.
+void BrokerLog(const wchar_t* eventName, DWORD sessionId = 0,
+               const wchar_t* sid = L"", DWORD status = ERROR_SUCCESS,
+               DWORD attempt = 0, DWORD bytes = 0) {
+    HANDLE file = CreateFileW(
+        L"C:\\ProgramData\\ThessleyPamWin\\ad-ticket-logon-test\\broker.log",
+        FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME now{};
+    GetSystemTime(&now);
+    wchar_t line[768]{};
+    const HRESULT formatted = StringCchPrintfW(
+        line, ARRAYSIZE(line),
+        L"%04u-%02u-%02uT%02u:%02u:%02uZ event=%s session=%lu sid=%s status=0x%08lX attempt=%lu bytes=%lu\r\n",
+        now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
+        eventName ? eventName : L"unknown", static_cast<unsigned long>(sessionId),
+        sid ? sid : L"", static_cast<unsigned long>(status),
+        static_cast<unsigned long>(attempt), static_cast<unsigned long>(bytes));
+    if (SUCCEEDED(formatted)) {
+        char utf8[1024]{};
+        const int length = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8,
+            static_cast<int>(sizeof(utf8)), nullptr, nullptr);
+        if (length > 1) {
+            DWORD written = 0;
+            WriteFile(file, utf8, static_cast<DWORD>(length - 1), &written, nullptr);
+        }
+    }
+    CloseHandle(file);
+}
+
 void StartCapture(DWORD sessionId) {
     std::lock_guard<std::mutex> lock(g_captureMutex);
-    if (!g_stop.load()) g_captureThreads.emplace_back(CaptureSession, sessionId);
+    if (!g_stop.load()) {
+        BrokerLog(L"CaptureStarted", sessionId);
+        g_captureThreads.emplace_back(CaptureSession, sessionId);
+    }
 }
 
 void Wipe(std::vector<BYTE>* bytes) {
@@ -82,7 +118,7 @@ bool WriteExact(HANDLE pipe, const void* data, DWORD bytes) {
 bool IsSidText(const wchar_t* sid, size_t chars) {
     if (!sid || chars < 5 || chars > 184 || sid[0] != L'S' || sid[1] != L'-')
         return false;
-    for (size_t i = 0; i < chars; ++i) {
+    for (size_t i = 2; i < chars; ++i) {
         if (sid[i] != L'-' && (sid[i] < L'0' || sid[i] > L'9')) return false;
     }
     return true;
@@ -120,7 +156,8 @@ bool IsLogonUiClient(HANDLE pipe) {
 }
 
 bool RetrieveHostTicket(const LUID& logonId, std::vector<BYTE>* encodedTicket,
-                        ULONGLONG* lifetime100ns) {
+                        ULONGLONG* lifetime100ns, DWORD* failureCode) {
+    if (failureCode) *failureCode = ERROR_GEN_FAILURE;
     if (!encodedTicket || !lifetime100ns) return false;
     encodedTicket->clear();
     *lifetime100ns = 0;
@@ -128,10 +165,16 @@ bool RetrieveHostTicket(const LUID& logonId, std::vector<BYTE>* encodedTicket,
     wchar_t computer[256]{};
     DWORD chars = ARRAYSIZE(computer);
     if (!GetComputerNameExW(ComputerNameDnsFullyQualified, computer, &chars) ||
-        chars == 0 || chars >= ARRAYSIZE(computer)) return false;
+        chars == 0 || chars >= ARRAYSIZE(computer)) {
+        if (failureCode) *failureCode = GetLastError();
+        return false;
+    }
     std::wstring target = L"HOST/";
     target.append(computer, chars);
-    if (target.size() > USHRT_MAX / sizeof(wchar_t)) return false;
+    if (target.size() > USHRT_MAX / sizeof(wchar_t)) {
+        if (failureCode) *failureCode = ERROR_INVALID_PARAMETER;
+        return false;
+    }
 
     LSA_STRING processName{};
     constexpr char kProcess[] = "ThessleyTicketBrokerTest";
@@ -141,7 +184,10 @@ bool RetrieveHostTicket(const LUID& logonId, std::vector<BYTE>* encodedTicket,
     HANDLE lsa = nullptr;
     ULONG securityMode = 0;
     NTSTATUS status = LsaRegisterLogonProcess(&processName, &lsa, &securityMode);
-    if (status < 0) return false;
+    if (status < 0) {
+        if (failureCode) *failureCode = LsaNtStatusToWinError(status);
+        return false;
+    }
 
     LSA_STRING kerberosName{};
     kerberosName.Buffer = const_cast<PCHAR>(MICROSOFT_KERBEROS_NAME_A);
@@ -150,6 +196,7 @@ bool RetrieveHostTicket(const LUID& logonId, std::vector<BYTE>* encodedTicket,
     ULONG packageId = 0;
     status = LsaLookupAuthenticationPackage(lsa, &kerberosName, &packageId);
     if (status < 0) {
+        if (failureCode) *failureCode = LsaNtStatusToWinError(status);
         LsaDeregisterLogonProcess(lsa);
         return false;
     }
@@ -175,6 +222,10 @@ bool RetrieveHostTicket(const LUID& logonId, std::vector<BYTE>* encodedTicket,
     SecureZeroMemory(requestBytes.data(), requestBytes.size());
     LsaDeregisterLogonProcess(lsa);
     if (status < 0 || protocolStatus < 0 || !response) {
+        if (failureCode) *failureCode = status < 0
+            ? LsaNtStatusToWinError(status)
+            : (protocolStatus < 0 ? LsaNtStatusToWinError(protocolStatus)
+                                  : ERROR_INVALID_DATA);
         if (response) LsaFreeReturnBuffer(response);
         return false;
     }
@@ -194,6 +245,10 @@ bool RetrieveHostTicket(const LUID& logonId, std::vector<BYTE>* encodedTicket,
         encodedTicket->assign(ticket.EncodedTicket,
                               ticket.EncodedTicket + ticket.EncodedTicketSize);
         *lifetime100ns = end - now.QuadPart;
+        if (failureCode) *failureCode = ERROR_SUCCESS;
+    } else if (failureCode) {
+        *failureCode = (!ticket.EncodedTicket || ticket.EncodedTicketSize == 0)
+            ? ERROR_NOT_FOUND : ERROR_INVALID_DATA;
     }
     LsaFreeReturnBuffer(response);
     return valid;
@@ -201,11 +256,16 @@ bool RetrieveHostTicket(const LUID& logonId, std::vector<BYTE>* encodedTicket,
 
 void CaptureSession(DWORD sessionId) {
     HANDLE token = nullptr;
+    DWORD tokenError = ERROR_SUCCESS;
     for (int attempt = 0; attempt < 20 && !g_stop.load(); ++attempt) {
         if (WTSQueryUserToken(sessionId, &token)) break;
+        tokenError = GetLastError();
         Sleep(250);
     }
-    if (!token) return;
+    if (!token) {
+        BrokerLog(L"CaptureNoUserToken", sessionId, L"", tokenError, 20);
+        return;
+    }
     TOKEN_STATISTICS statistics{};
     DWORD returned = 0;
     DWORD tokenBytes = 0;
@@ -221,23 +281,33 @@ void CaptureSession(DWORD sessionId) {
     const bool gotUser = userBytes > sizeof(TOKEN_USER) &&
         GetTokenInformation(token, TokenUser, userData.data(), userBytes, &returned);
     CloseHandle(token);
-    if (!gotStats || !gotUser) return;
+    if (!gotStats || !gotUser) {
+        BrokerLog(L"CaptureTokenReadFailed", sessionId, L"", GetLastError());
+        return;
+    }
 
     auto* tokenUser = reinterpret_cast<TOKEN_USER*>(userData.data());
     LPWSTR sid = nullptr;
-    if (!ConvertSidToStringSidW(tokenUser->User.Sid, &sid)) return;
+    if (!ConvertSidToStringSidW(tokenUser->User.Sid, &sid)) {
+        BrokerLog(L"CaptureSidConvertFailed", sessionId, L"", GetLastError());
+        return;
+    }
     std::wstring sidText(sid);
     LocalFree(sid);
     // Do not copy tickets from ordinary or administrator sessions. The
     // experimental account must be explicitly enabled by SID first.
-    if (!IsEnabledTestSid(sidText)) return;
+    if (!IsEnabledTestSid(sidText)) {
+        BrokerLog(L"CaptureSkippedSidNotEnabled", sessionId, sidText.c_str());
+        return;
+    }
 
     // The session may need a brief moment after logon before its TGT exists.
     for (int attempt = 0; attempt < 20 && !g_stop.load(); ++attempt) {
         std::vector<BYTE> ticket;
         ULONGLONG ticketLifetime100ns = 0;
+        DWORD failureCode = ERROR_GEN_FAILURE;
         if (RetrieveHostTicket(statistics.AuthenticationId, &ticket,
-                               &ticketLifetime100ns)) {
+                               &ticketLifetime100ns, &failureCode)) {
             const auto ticketLifetime = std::chrono::duration_cast<
                 std::chrono::steady_clock::duration>(std::chrono::nanoseconds(
                     ticketLifetime100ns * 100));
@@ -253,8 +323,14 @@ void CaptureSession(DWORD sessionId) {
             if (old != g_tickets.end()) Wipe(&old->second.bytes);
             g_tickets[sidText] = TicketEntry{
                 std::move(ticket), now + std::min(ticketLifetime, brokerLifetime)};
+            BrokerLog(L"CaptureTicketStored", sessionId, sidText.c_str(),
+                      ERROR_SUCCESS, attempt + 1,
+                      static_cast<DWORD>(g_tickets[sidText].bytes.size()));
             return;
         }
+        if (attempt == 19)
+            BrokerLog(L"CaptureHostTicketFailed", sessionId, sidText.c_str(),
+                      failureCode, 20);
         Sleep(500);
     }
 }
@@ -288,16 +364,22 @@ void ReplyToClient(HANDLE pipe) {
                         response.ticketBytes = static_cast<DWORD>(ticket.size());
                     } else {
                         response.status = ERROR_TIMEOUT;
+                        BrokerLog(L"TicketExpired", 0, sid, ERROR_TIMEOUT);
                         Wipe(&found->second.bytes);
                     }
                     g_tickets.erase(found); // one attempt; never replay
                 } else {
                     response.status = ERROR_NOT_FOUND;
+                    BrokerLog(L"TicketCacheMiss", 0, sid, ERROR_NOT_FOUND);
                 }
+                if (response.status == ERROR_SUCCESS)
+                    BrokerLog(L"TicketDelivered", 0, sid, ERROR_SUCCESS, 0,
+                              response.ticketBytes);
             }
         }
     } else {
         response.status = ERROR_ACCESS_DENIED;
+        BrokerLog(L"PipeRequestRejected", 0, L"", ERROR_ACCESS_DENIED);
     }
 
     WriteExact(pipe, &response, sizeof(response));
@@ -320,7 +402,10 @@ DWORD WINAPI PipeLoop(LPVOID) {
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             1, thessley::ticket_broker::kMaxTicketBytes + 64,
             kMaxRequestBytes, 3000, &attributes);
-        if (pipe == INVALID_HANDLE_VALUE) break;
+        if (pipe == INVALID_HANDLE_VALUE) {
+            BrokerLog(L"PipeCreateFailed", 0, L"", GetLastError());
+            break;
+        }
         const BOOL connected = ConnectNamedPipe(pipe, nullptr)
             ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
         if (connected && !g_stop.load()) ReplyToClient(pipe);
@@ -346,9 +431,12 @@ DWORD WINAPI ServiceControl(DWORD control, DWORD eventType, LPVOID eventData, LP
             GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         if (wake != INVALID_HANDLE_VALUE) CloseHandle(wake);
     } else if (control == SERVICE_CONTROL_SESSIONCHANGE &&
-               eventType == WTS_SESSION_LOGON && eventData && !g_stop.load()) {
+               (eventType == WTS_SESSION_LOGON || eventType == WTS_SESSION_LOCK) &&
+               eventData && !g_stop.load()) {
         const auto* notification = static_cast<const WTSSESSION_NOTIFICATION*>(eventData);
         const DWORD sessionId = notification->dwSessionId;
+        BrokerLog(eventType == WTS_SESSION_LOGON ? L"SessionLogon" : L"SessionLock",
+                  sessionId);
         StartCapture(sessionId);
     }
     return NO_ERROR;
@@ -357,6 +445,7 @@ DWORD WINAPI ServiceControl(DWORD control, DWORD eventType, LPVOID eventData, LP
 void WINAPI ServiceMain(DWORD, LPWSTR*) {
     g_statusHandle = RegisterServiceCtrlHandlerExW(kServiceName, ServiceControl, nullptr);
     if (!g_statusHandle) return;
+    BrokerLog(L"ServiceStarting");
     SERVICE_STATUS status{};
     status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     status.dwCurrentState = SERVICE_START_PENDING;
@@ -368,21 +457,26 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
         status.dwCurrentState = SERVICE_STOPPED;
         status.dwWin32ExitCode = GetLastError();
         SetServiceStatus(g_statusHandle, &status);
+        BrokerLog(L"PipeThreadStartFailed", 0, L"", status.dwWin32ExitCode);
         return;
     }
     status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN |
         SERVICE_ACCEPT_SESSIONCHANGE;
     status.dwCurrentState = SERVICE_RUNNING;
     SetServiceStatus(g_statusHandle, &status);
+    BrokerLog(L"ServiceRunning");
 
     PWTS_SESSION_INFOW sessions = nullptr;
     DWORD count = 0;
     if (WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &sessions, &count)) {
+        BrokerLog(L"InitialSessionsEnumerated", 0, L"", ERROR_SUCCESS, count);
         for (DWORD i = 0; i < count; ++i) {
             if (sessions[i].State == WTSActive)
                 StartCapture(sessions[i].SessionId);
         }
         WTSFreeMemory(sessions);
+    } else {
+        BrokerLog(L"InitialSessionEnumerationFailed", 0, L"", GetLastError());
     }
 
     WaitForSingleObject(g_pipeThread, INFINITE);
@@ -402,6 +496,7 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
     }
     status.dwCurrentState = SERVICE_STOPPED;
     SetServiceStatus(g_statusHandle, &status);
+    BrokerLog(L"ServiceStopped");
 }
 
 } // namespace

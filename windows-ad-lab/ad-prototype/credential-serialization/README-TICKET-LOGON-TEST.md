@@ -20,6 +20,24 @@ does not replace the existing TPM/VSC tile. The ordinary Windows password and
 PIN sign-in providers are not modified. A SYSTEM scheduled rollback removes
 only the experimental ticket provider and broker service.
 
+## Diagnostics
+
+The broker writes `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\broker.log`.
+It records session capture attempts, the HOST-ticket lookup result, ticket-cache
+misses/expiry, and one-use delivery status. The provider's
+`provider.log` records the HRESULT returned while consuming and serializing the
+ticket. Both logs include timestamps, status codes, and the test account SID;
+neither log includes ticket contents, passwords, PINs, or key material.
+
+`Windows ticket preparation failed (0x80070490)` means the broker had no
+unexpired ticket cached for that account SID when LogonUI requested it. Check
+`broker.log` for `CaptureTicketStored` versus `CaptureHostTicketFailed` or
+`TicketCacheMiss`. This test captures a ticket from an already authenticated
+interactive session. The normal password/PIN login must therefore happen first;
+then sign out and try the ticket tile within the broker's three-minute cache
+window. A cold sign-in with no existing session cannot manufacture its own
+Kerberos ticket.
+
 ## Current state
 
 - LSA accepted the exact ticket serialization and returned a primary token on
@@ -27,7 +45,9 @@ only the experimental ticket provider and broker service.
 - The provider now has a per-SID, opt-in ticket mode and calls a local broker
   only after phone approval.
 - The volatile broker and the separate ticket-test DLL compile on Linux with
-  MinGW. They have **not** been installed or exercised through LogonUI yet.
+  MinGW. Clone 1 reached the ticket tile, but the first attempt failed because
+  no cached ticket was available (`ERROR_NOT_FOUND`, 0x80070490). The broker now
+  records the capture/delivery path so the next attempt shows where it failed.
 - The next test must use a disposable, low-privilege AD account with its own
   phone approval. Do not use `Administrator` or the everyday `martin` account.
 - A successful sign-in would only prove the Clone 1 Winlogon handoff. It would
