@@ -91,9 +91,54 @@ invalid evidence is shown as unverified rather than treated as hardware-backed.
 At the Windows sign-in screen, the client must be able to reach the phone or a
 relay that can reach the phone. A VPN that requires an interactive browser login
 after Windows sign-in cannot provide that path before sign-in. The first pilot
-must therefore use either a shared local network, a pre-logon-capable network
-path, or a deliberately designed USB transport. The design must state which
-one it supports; it must not silently fall back to password or a PC-held key.
+must therefore use a shared local network or a pre-logon-capable network path.
+This project targets ordinary physical Windows PCs and network communication
+with the phone; USB and NFC are out of scope. It must not silently fall back to
+password or a PC-held key.
+
+## Physical Windows PCs: network-only constraint (2026-10-30)
+
+Microsoft's supported Web sign-in provider requires Windows 11 devices joined
+to Microsoft Entra ID and internet access; Microsoft explicitly excludes
+hybrid-joined and AD-domain-joined devices. Windows Hello for Business cloud
+Kerberos trust also requires Microsoft Entra Kerberos and does not support a
+pure on-premises AD DS deployment. These are not drop-in routes for this lab.
+
+For pure AD DS and network-only phone communication, the phone's private key
+needs to sign the KDC authentication challenge through a Windows-supported
+smart-card/key-provider path. A Credential Provider can collect and serialize
+credentials, but it does not itself provide the private-key signing operation
+that LSA/Kerberos performs. A remote signing bridge therefore needs a Windows
+component in the authentication path. The supported smart-card minidriver path
+is subject to Microsoft's protected-LSA signing requirements; a Credential
+Provider alone cannot replace it. Do not weaken LSA protection or describe a
+QR approval as direct phone-key PKINIT.
+
+The connected A52s LineageOS 24 build was inspected read-only over ADB on
+2026-10-30. Its kernel exposes `/dev/ccid_ctrl` and `/dev/ccid_bulk`, but the
+phone is not rooted (`su` is unavailable), its current USB mode is `adb`, and
+the CCID gadget endpoints are root-owned. This does not provide the required
+network-only Windows bridge; no USB-based setup is being pursued.
+
+The practical network-only fallback is to use the phone's verified TEE key to
+sign a fresh, machine- and account-bound login approval, then have Windows use
+its existing TPM-backed smart-card credential for the actual AD/Kerberos
+logon. This is phone-approved login with a PC-held logon key; it is **not**
+direct phone-key PKINIT. If direct phone-key PKINIT remains mandatory, the
+remaining work is a supported, signed Windows key-provider/minidriver bridge
+plus its network relay, or an applicable Microsoft Entra deployment. Do not
+issue a phone-key logon certificate or enable that policy before one of those
+paths is available.
+
+For the requested `THESSLEYLAB\Administrator` test, the phone key is already
+enrolled and verified TEE, but the service configuration still has no
+`certificate_template`, no certificate has been issued, and the phone-key
+logon method remains disabled. The last read-only DC check confirmed
+`CertSvc` is running and listed existing published templates including
+`ThessleyVscLogon`; it did not configure or change the CA. Therefore there is
+no direct phone-key Administrator login to try yet. Keep the existing
+password/TPM recovery options available while the network-only bridge is
+resolved.
 
 ## Compatibility questions for the Windows bridge
 
