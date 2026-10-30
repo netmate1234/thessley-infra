@@ -81,20 +81,22 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
   Its full SHA-256 is
   `ae1c970a52a898b4e76112eb8be7a439290571ae3f777dfc3b620a859096af73`.
 - The next diagnostic must isolate the serialization representation. The
-  direct `ticket_logon_probe` can submit the same structure with native
-  pointers or with the packed offsets unchanged. The checked-in CLI accepts
-  `kerberos raw-offsets` and `kerberos native-pointers`; use both against the
-  same freshly captured ticket if possible. Native success plus raw-offset
-  failure would implicate LogonUI/Winlogon's pointer relocation for this
-  package-specific structure. If both modes fail, investigate the ticket
-  semantics and the `KERB_TICKET_LOGON`/interactive-logon combination instead.
-  No ticket bytes should be logged or persisted.
+  direct `ticket_logon_probe` can now submit the same captured ticket twice,
+  using separate wiped buffers: first with native pointers, then with packed
+  offsets unchanged. Run it as LocalSystem with
+  `ticket_logon_probe.exe <luid-low-hex> <host-spn> interactive kerberos both-pointer-modes`.
+  Native success plus raw-offset failure would implicate pointer relocation at
+  the LSA boundary, though it would not alone prove what Winlogon does. If both
+  modes fail, investigate ticket semantics and the
+  `KERB_TICKET_LOGON`/interactive-logon combination instead. No ticket bytes
+  should be logged or persisted.
 - Tie future logs to the registered DLL's full SHA-256, not only the shortened
   filename suffix. The local source now logs the message type, flags, ticket
   lengths, and pointer-field values at serialization time, without logging
-  ticket bytes; that diagnostic build has not yet been installed on Clone 1.
-  Do not repeat the password-seeded test after a cache miss unless the broker
-  log first confirms a fresh `CaptureTicketStored` event.
+  ticket bytes. The local broker source also records the session LUID with
+  `CaptureTicketStored`; neither diagnostic build has yet been installed on
+  Clone 1. Do not repeat the password-seeded test after a cache miss unless
+  the broker log first confirms a fresh `CaptureTicketStored` event.
 - The local `ticket_logon_probe.cpp` parser already accepts the Kerberos
   package and pointer mode independently, in either optional-argument order.
   For clarity, use the explicit form

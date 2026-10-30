@@ -49,7 +49,8 @@ void CaptureSession(DWORD sessionId);
 // contents, credentials, tokens and key material are never written to disk.
 void BrokerLog(const wchar_t* eventName, DWORD sessionId = 0,
                const wchar_t* sid = L"", DWORD status = ERROR_SUCCESS,
-               DWORD attempt = 0, DWORD bytes = 0) {
+               DWORD attempt = 0, DWORD bytes = 0,
+               const LUID* authenticationId = nullptr) {
     HANDLE file = CreateFileW(
         L"C:\\ProgramData\\ThessleyPamWin\\ad-ticket-logon-test\\broker.log",
         FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
@@ -60,11 +61,13 @@ void BrokerLog(const wchar_t* eventName, DWORD sessionId = 0,
     wchar_t line[768]{};
     const HRESULT formatted = StringCchPrintfW(
         line, ARRAYSIZE(line),
-        L"%04u-%02u-%02uT%02u:%02u:%02uZ event=%s session=%lu sid=%s status=0x%08lX attempt=%lu bytes=%lu\r\n",
+        L"%04u-%02u-%02uT%02u:%02u:%02uZ event=%s session=%lu sid=%s status=0x%08lX attempt=%lu bytes=%lu luid=%08lX:%08lX\r\n",
         now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
         eventName ? eventName : L"unknown", static_cast<unsigned long>(sessionId),
         sid ? sid : L"", static_cast<unsigned long>(status),
-        static_cast<unsigned long>(attempt), static_cast<unsigned long>(bytes));
+        static_cast<unsigned long>(attempt), static_cast<unsigned long>(bytes),
+        static_cast<unsigned long>(authenticationId ? authenticationId->HighPart : 0),
+        static_cast<unsigned long>(authenticationId ? authenticationId->LowPart : 0));
     if (SUCCEEDED(formatted)) {
         char utf8[1024]{};
         const int length = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8,
@@ -325,7 +328,8 @@ void CaptureSession(DWORD sessionId) {
                 std::move(ticket), now + std::min(ticketLifetime, brokerLifetime)};
             BrokerLog(L"CaptureTicketStored", sessionId, sidText.c_str(),
                       ERROR_SUCCESS, attempt + 1,
-                      static_cast<DWORD>(g_tickets[sidText].bytes.size()));
+                      static_cast<DWORD>(g_tickets[sidText].bytes.size()),
+                      &statistics.AuthenticationId);
             return;
         }
         if (attempt == 19)

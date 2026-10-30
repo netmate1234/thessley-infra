@@ -85,13 +85,14 @@ void Wipe(std::vector<BYTE>* bytes) {
 
 int wmain(int argc, wchar_t** argv) {
     if (argc < 4 || argc > 6) {
-        std::fputs("usage: ticket_logon_probe.exe <luid-low-hex> <host-spn> <interactive|network> [kerberos|negotiate] [native-pointers|raw-offsets]\n",
+        std::fputs("usage: ticket_logon_probe.exe <luid-low-hex> <host-spn> <interactive|network> [kerberos|negotiate] [native-pointers|raw-offsets|both-pointer-modes]\n",
                    stderr);
         return 2;
     }
 
     bool negotiatePackage = false;
     bool rawOffsets = false;
+    bool bothPointerModes = false;
     bool packageChoiceSeen = false;
     bool pointerChoiceSeen = false;
     for (int i = 4; i < argc; ++i) {
@@ -104,13 +105,16 @@ int wmain(int argc, wchar_t** argv) {
             packageChoiceSeen = true;
             negotiatePackage = std::wcscmp(argv[i], L"negotiate") == 0;
         } else if (std::wcscmp(argv[i], L"native-pointers") == 0 ||
-                   std::wcscmp(argv[i], L"raw-offsets") == 0) {
+                   std::wcscmp(argv[i], L"raw-offsets") == 0 ||
+                   std::wcscmp(argv[i], L"both-pointer-modes") == 0) {
             if (pointerChoiceSeen) {
                 std::fputs("specify only one pointer mode\n", stderr);
                 return 2;
             }
             pointerChoiceSeen = true;
             rawOffsets = std::wcscmp(argv[i], L"raw-offsets") == 0;
+            bothPointerModes =
+                std::wcscmp(argv[i], L"both-pointer-modes") == 0;
         } else {
             std::fputs("unknown optional argument\n", stderr);
             return 2;
@@ -184,13 +188,6 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("authentication_package_id=%lu\n", static_cast<unsigned long>(packageId));
     TOKEN_SOURCE source{};
     std::memcpy(source.SourceName, "TSHLYTKT", sizeof(source.SourceName));
-    if (!AllocateLocallyUniqueId(&source.SourceIdentifier)) {
-        std::printf("allocate_token_source=0x%08lx\n",
-                    static_cast<unsigned long>(GetLastError()));
-        Wipe(&serviceTicket);
-        LsaDeregisterLogonProcess(lsa);
-        return 7;
-    }
 
     LSA_STRING originName{};
     constexpr char kOrigin[] = "ThessleyTicketProbe";
@@ -240,39 +237,68 @@ int wmain(int argc, wchar_t** argv) {
         LsaDeregisterLogonProcess(lsa);
         return 6;
     }
-    if (!rawOffsets) logon->ServiceTicket = serialization.rgbSerialization + serviceOffset;
-    std::printf("pointer_mode=%s\n", rawOffsets ? "raw-offsets" : "native-pointers");
-    logon->TicketGrantingTicket = nullptr;
-
-    status = LsaLogonUser(
-        lsa, &originName, logonType,
-        serialization.ulAuthenticationPackage,
-        serialization.rgbSerialization, serialization.cbSerialization,
-        nullptr, &source, &profile, &profileBytes, &newLogonId, &token,
-        &quotas, &subStatus);
-    FreeKerbTicketSerialization(&serialization);
-    PrintStatus("lsa_logon_user", status);
-    PrintStatus("lsa_substatus", subStatus);
-    std::printf("logon_type=%s\n",
-                logonType == Interactive ? "interactive" : "network");
-    if (profile && status >= 0) {
-        const auto* ticketProfile = static_cast<const KERB_TICKET_PROFILE*>(profile);
-        std::printf("profile_type=%lu\n",
-                    static_cast<unsigned long>(
-                        ticketProfile->Profile.MessageType));
-        std::printf("new_logon_luid=%08lx:%08lx\n",
-                    static_cast<unsigned long>(newLogonId.HighPart),
-                    static_cast<unsigned long>(newLogonId.LowPart));
-        TOKEN_TYPE tokenType{};
-        DWORD returned = 0;
-        if (token && GetTokenInformation(token, TokenType, &tokenType,
-                                         sizeof(tokenType), &returned)) {
-            std::printf("token_type=%s\n",
-                        tokenType == TokenPrimary ? "primary" : "impersonation");
+    bool anyFailure = false;
+    const int modeCount = bothPointerModes ? 2 : 1;
+    for (int modeIndex = 0; modeIndex < modeCount; ++modeIndex) {
+        const bool useRawOffsets = bothPointerModes
+            ? modeIndex == 1 : rawOffsets;
+        std::vector<BYTE> attemptBuffer(
+            serialization.rgbSerialization,
+            serialization.rgbSerialization + serialization.cbSerialization);
+        auto* attemptLogon = reinterpret_cast<PKERB_TICKET_LOGON>(
+            attemptBuffer.data());
+        attemptLogon->ServiceTicket = useRawOffsets
+            ? reinterpret_cast<PUCHAR>(serviceOffset)
+            : attemptBuffer.data() + serviceOffset;
+        attemptLogon->TicketGrantingTicket = nullptr;
+        if (!AllocateLocallyUniqueId(&source.SourceIdentifier)) {
+            std::printf("allocate_token_source=0x%08lx\n",
+                        static_cast<unsigned long>(GetLastError()));
+            anyFailure = true;
+            Wipe(&attemptBuffer);
+            break;
         }
+        profile = nullptr;
+        profileBytes = 0;
+        newLogonId = {};
+        token = nullptr;
+        subStatus = 0;
+        status = LsaLogonUser(
+            lsa, &originName, logonType,
+            serialization.ulAuthenticationPackage,
+            attemptBuffer.data(), static_cast<ULONG>(attemptBuffer.size()),
+            nullptr, &source, &profile, &profileBytes, &newLogonId, &token,
+            &quotas, &subStatus);
+        std::printf("pointer_mode=%s\n",
+                    useRawOffsets ? "raw-offsets" : "native-pointers");
+        PrintStatus("lsa_logon_user", status);
+        PrintStatus("lsa_substatus", subStatus);
+        std::printf("logon_type=%s\n",
+                    logonType == Interactive ? "interactive" : "network");
+        if (profile && status >= 0) {
+            const auto* ticketProfile =
+                static_cast<const KERB_TICKET_PROFILE*>(profile);
+            std::printf("profile_type=%lu\n",
+                static_cast<unsigned long>(ticketProfile->Profile.MessageType));
+            std::printf("new_logon_luid=%08lx:%08lx\n",
+                static_cast<unsigned long>(newLogonId.HighPart),
+                static_cast<unsigned long>(newLogonId.LowPart));
+            TOKEN_TYPE tokenType{};
+            DWORD returned = 0;
+            if (token && GetTokenInformation(token, TokenType, &tokenType,
+                                             sizeof(tokenType), &returned)) {
+                std::printf("token_type=%s\n",
+                    tokenType == TokenPrimary ? "primary" : "impersonation");
+            }
+        }
+        if (status < 0) anyFailure = true;
+        if (token) CloseHandle(token);
+        if (profile) LsaFreeReturnBuffer(profile);
+        token = nullptr;
+        profile = nullptr;
+        Wipe(&attemptBuffer);
     }
-    if (token) CloseHandle(token);
-    if (profile) LsaFreeReturnBuffer(profile);
+    FreeKerbTicketSerialization(&serialization);
     LsaDeregisterLogonProcess(lsa);
-    return status < 0 ? 8 : 0;
+    return anyFailure ? 8 : 0;
 }
