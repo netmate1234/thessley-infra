@@ -35,7 +35,8 @@ probe_out="/tmp/thessley-ad-ticket-logon-probe.exe"
   -ffunction-sections -fdata-sections \
   -I"$root" \
   "$root/ticket_logon_probe.cpp" \
-  -municode -ladvapi32 -lsecur32 -Wl,--gc-sections \
+  "$root/kerb_ticket_serialization.cpp" \
+  -municode -ladvapi32 -lsecur32 -lole32 -Wl,--gc-sections \
   -o "$probe_out"
 
 printf 'Built isolated certificate serializer: %s\nBuilt isolated approval client: %s\nBuilt isolated Kerberos ticket serializer: %s\nBuilt LSA ticket-logon probe: %s\n' \

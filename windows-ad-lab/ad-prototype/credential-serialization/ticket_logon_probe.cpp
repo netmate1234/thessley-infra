@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "kerb_ticket_serialization.h"
+
 namespace {
 
 void PrintStatus(const char* label, NTSTATUS status) {
@@ -161,32 +163,51 @@ int wmain(int argc, wchar_t** argv) {
     QUOTA_LIMITS quotas{};
     NTSTATUS subStatus = 0;
 
-    // LsaLogonUser requires its input buffers to be contiguous. This native
-    // LSA probe uses an in-buffer pointer; the separate Credential Provider
-    // serializer represents the same buffer members as offsets.
-    if (serviceTicket.size() >
-        std::numeric_limits<ULONG>::max() - sizeof(KERB_TICKET_LOGON)) {
-        Wipe(&serviceTicket);
+    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION serialization{};
+    const CLSID probeClsid = {0x6f0de0cc, 0x3645, 0x4f21,
+                              {0x9d, 0x5c, 0x9f, 0x57, 0x38, 0x2f, 0x92, 0x1b}};
+    const HRESULT buildHr = BuildKerbTicketSerialization(
+        serviceTicket.data(), serviceTicket.size(), nullptr, 0, packageId,
+        probeClsid, &serialization);
+    Wipe(&serviceTicket);
+    if (FAILED(buildHr)) {
+        std::printf("build_serialization=0x%08lx\n",
+                    static_cast<unsigned long>(buildHr));
         LsaDeregisterLogonProcess(lsa);
         return 6;
     }
-    std::vector<BYTE> input(sizeof(KERB_TICKET_LOGON) + serviceTicket.size(), 0);
-    auto* logon = reinterpret_cast<PKERB_TICKET_LOGON>(input.data());
-    logon->MessageType = KerbTicketLogon;
-    logon->Flags = 0;
-    logon->ServiceTicketLength = static_cast<ULONG>(serviceTicket.size());
-    logon->TicketGrantingTicketLength = 0;
-    logon->ServiceTicket = input.data() + sizeof(KERB_TICKET_LOGON);
+
+    // Credential Provider blobs store pointer members as offsets. Winlogon
+    // converts those offsets to pointers before LSA consumes the buffer; do
+    // the same fixup here to test our exact packed serialization.
+    if (serialization.cbSerialization < sizeof(KERB_TICKET_LOGON)) {
+        FreeKerbTicketSerialization(&serialization);
+        LsaDeregisterLogonProcess(lsa);
+        return 6;
+    }
+    auto* logon = reinterpret_cast<PKERB_TICKET_LOGON>(
+        serialization.rgbSerialization);
+    const ULONG_PTR serviceOffset =
+        reinterpret_cast<ULONG_PTR>(logon->ServiceTicket);
+    if (serviceOffset < sizeof(KERB_TICKET_LOGON) ||
+        serviceOffset > serialization.cbSerialization ||
+        logon->ServiceTicketLength >
+            serialization.cbSerialization - serviceOffset ||
+        logon->TicketGrantingTicketLength != 0) {
+        FreeKerbTicketSerialization(&serialization);
+        LsaDeregisterLogonProcess(lsa);
+        return 6;
+    }
+    logon->ServiceTicket = serialization.rgbSerialization + serviceOffset;
     logon->TicketGrantingTicket = nullptr;
-    std::memcpy(logon->ServiceTicket, serviceTicket.data(), serviceTicket.size());
-    Wipe(&serviceTicket);
 
     status = LsaLogonUser(
         lsa, &originName, logonType,
-        packageId, input.data(), static_cast<ULONG>(input.size()),
+        serialization.ulAuthenticationPackage,
+        serialization.rgbSerialization, serialization.cbSerialization,
         nullptr, &source, &profile, &profileBytes, &newLogonId, &token,
         &quotas, &subStatus);
-    Wipe(&input);
+    FreeKerbTicketSerialization(&serialization);
     PrintStatus("lsa_logon_user", status);
     PrintStatus("lsa_substatus", subStatus);
     std::printf("logon_type=%s\n",

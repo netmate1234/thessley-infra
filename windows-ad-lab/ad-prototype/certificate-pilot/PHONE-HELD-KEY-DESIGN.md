@@ -169,11 +169,16 @@ credentials available). After the user signed in at the Clone 1 console, a
 LocalSystem probe queried the interactive logon LUID and cached host ticket.
 For `LsaLogonUser(Interactive, KerbTicketLogon)` with that PAC-bearing service
 ticket and no TGT, LSA returned success, profile type 2
-(`KerbInteractiveProfile`), and a primary token. The same request with
-`Network` returned an impersonation token. The probe reads ticket bytes into
-memory and writes only statuses and token metadata; its one-shot scheduled
-task and temporary files were removed. No Credential Provider, sign-in
-setting, phone credential, or DC configuration was changed.
+(`KerbInteractiveProfile`), and a primary token. The `Network` form returned
+an impersonation token. The probe then exercised the actual packed
+`BuildKerbTicketSerialization` output: it checked the in-buffer offsets,
+converted them to pointers in that same buffer, and submitted the result to
+LSA. That also returned success with a primary token. This validates the
+serializer's contents at the LSA boundary, but not Winlogon's handling of the
+Credential Provider blob. The probe reads ticket bytes into memory and writes
+only statuses and token metadata; its one-shot scheduled task and temporary
+files were removed. No Credential Provider, sign-in setting, phone
+credential, or DC configuration was changed.
 
 The probe used `THESSLEYLAB\martin`, who has workstation-admin rights, so the
 LSA check should be repeated with a dedicated low-privilege account. The test
