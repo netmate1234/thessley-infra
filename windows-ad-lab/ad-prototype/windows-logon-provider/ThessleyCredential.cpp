@@ -1159,7 +1159,7 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
                 hr = BuildKerbTicketSerialization(
                     ticket.data(), ticket.size(), nullptr, 0,
                     unlockScenario, &logonId, authPackage,
-                    CLSID_ThessleyAD, pcpcs);
+                    CLSID_ThessleyAD, pcpcs, true);
                 wchar_t layoutDetail[256]{};
                 if (SUCCEEDED(hr) && pcpcs->rgbSerialization &&
                     pcpcs->cbSerialization >= sizeof(KERB_TICKET_LOGON))
@@ -1168,7 +1168,7 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
                         reinterpret_cast<const KERB_TICKET_LOGON*>(
                             pcpcs->rgbSerialization);
                     swprintf_s(layoutDetail, ARRAYSIZE(layoutDetail),
-                        L"scenario=%s message_type=%lu flags=0x%08lX service_len=%lu service_pointer_field=0x%llX tgt_len=%lu tgt_pointer_field=0x%llX ticket_bytes_omitted",
+                        L"scenario=%s pointer_mode=native message_type=%lu flags=0x%08lX service_len=%lu service_pointer_field=0x%llX tgt_len=%lu tgt_pointer_field=0x%llX ticket_bytes_omitted",
                         unlockScenario ? L"unlock" : L"logon",
                         static_cast<unsigned long>(ticketLogon->MessageType),
                         static_cast<unsigned long>(ticketLogon->Flags),

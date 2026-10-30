@@ -19,7 +19,8 @@ HRESULT BuildKerbTicketSerialization(
     const LUID* logonId,
     ULONG kerberosAuthenticationPackage,
     const CLSID& credentialProviderClsid,
-    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization);
+    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization,
+    bool nativePointerFields = false);
 
 // Securely discards a ticket serialization before it is handed to LogonUI.
 void FreeKerbTicketSerialization(

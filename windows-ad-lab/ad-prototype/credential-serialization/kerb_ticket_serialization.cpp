@@ -32,7 +32,8 @@ HRESULT BuildKerbTicketSerialization(
     const LUID* logonId,
     ULONG kerberosAuthenticationPackage,
     const CLSID& credentialProviderClsid,
-    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization) {
+    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* serialization,
+    bool nativePointerFields) {
     if (serialization == nullptr) return E_POINTER;
     ZeroMemory(serialization, sizeof(*serialization));
 
@@ -68,11 +69,14 @@ HRESULT BuildKerbTicketSerialization(
     logon->ServiceTicketLength = static_cast<ULONG>(serviceTicketLength);
     logon->TicketGrantingTicketLength =
         static_cast<ULONG>(forwardedTgtKrbCredLength);
-    logon->ServiceTicket = reinterpret_cast<PUCHAR>(
-        static_cast<ULONG_PTR>(headerBytes));
+    logon->ServiceTicket = nativePointerFields
+        ? buffer + headerBytes
+        : reinterpret_cast<PUCHAR>(static_cast<ULONG_PTR>(headerBytes));
     logon->TicketGrantingTicket = forwardedTgtKrbCredLength == 0
         ? nullptr
-        : reinterpret_cast<PUCHAR>(static_cast<ULONG_PTR>(tgtOffset));
+        : nativePointerFields
+            ? buffer + tgtOffset
+            : reinterpret_cast<PUCHAR>(static_cast<ULONG_PTR>(tgtOffset));
     if (unlockScenario) {
         auto* unlock = reinterpret_cast<PKERB_TICKET_UNLOCK_LOGON>(buffer);
         unlock->LogonId = *logonId;

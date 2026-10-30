@@ -54,8 +54,10 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
 
 ## Current state
 
-- LSA accepted the exact ticket serialization and returned a primary token on
-  Clone 1.
+- The direct LSA probe accepted the ticket when its embedded pointer was a
+  native address into the input buffer and returned a primary token on Clone
+  1. It rejected the same bytes with an offset in that field; this is not an
+  end-to-end Credential Provider sign-in.
 - The provider now has a per-SID, opt-in ticket mode and calls a local broker
   only after phone approval.
 - The 12:14 UTC failure used DLL build `458c6a61`: the trace says
@@ -76,27 +78,54 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
   Winlogon reported `0xC000000D` (`STATUS_INVALID_PARAMETER`), with substatus
   zero. This is the first current-build end-to-end rejection; it is not a
   cache miss and does not prove a successful desktop logon.
-- The provider registration on Clone 1 points to
-  `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketTestCredentialProvider-ae1c970a52a898b4.dll`.
-  Its full SHA-256 is
+- At 14:20 CEST (13:20 UTC), while `THESSLEYLAB\startmenutest` was signed in at console
+  session 3, the SYSTEM-only pointer probe used that session's LUID
+  `00000000:005678DC` and the `HOST/MARTIN-WM.lab.thessley.test` ticket. With
+  Kerberos package ID 2 and `Interactive` logon, the native-pointer buffer
+  returned `STATUS_SUCCESS`, profile type 2, and a primary token. The same
+  ticket and header with the serialized `ServiceTicket` value left as offset
+  `0x20` returned `STATUS_INVALID_PARAMETER` (`0xC000000D`). This isolates a
+  concrete difference at the direct `LsaLogonUser` boundary: LSA accepts the
+  in-buffer native pointer and rejects the bare offset. It does not yet prove
+  whether Winlogon rebases pointer fields for Credential Provider
+  serializations; the current provider's offset form still fails in the actual
+  sign-in path. No ticket bytes were logged, and the one-shot SYSTEM task was
+  removed after the probe.
+- The direct pointer comparison is complete. A separate ticket-provider build
+  now passes the native in-buffer pointer form. It is registered at
+  `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketTestCredentialProvider-73002320d8b9511d.dll`
+  with SHA-256
+  `73002320d8b9511de099cc19d575db2713c3f5477a08de96125bdafffb9c24bc`.
+  The prior offset-based DLL remains at
+  `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketTestCredentialProvider-ae1c970a52a898b4.dll`
+  with SHA-256
   `ae1c970a52a898b4e76112eb8be7a439290571ae3f777dfc3b620a859096af73`.
-- The next diagnostic must isolate the serialization representation. The
-  direct `ticket_logon_probe` can now submit the same captured ticket twice,
-  using separate wiped buffers: first with native pointers, then with packed
-  offsets unchanged. Run it as LocalSystem with
-  `ticket_logon_probe.exe <luid-low-hex> <host-spn> interactive kerberos both-pointer-modes`.
-  Native success plus raw-offset failure would implicate pointer relocation at
-  the LSA boundary, though it would not alone prove what Winlogon does. If both
-  modes fail, investigate ticket semantics and the
-  `KERB_TICKET_LOGON`/interactive-logon combination instead. No ticket bytes
-  should be logged or persisted.
+  SYSTEM rollback task `Thessley-Ticket-Native-Pointer-Rollback` was verified
+  and is due at 14:40 CEST on 2026-10-30. No sign-in attempt has been made with
+  the native-pointer provider yet. The existing TPM/VSC provider and Windows
+  password/PIN options remain registered. After a fresh password sign-in
+  captures a ticket, sign out and immediately test the experimental QR tile.
+  Success would prove this pointer representation works in the actual
+  Credential Provider handoff; failure would rule out this ticket
+  serialization route and return focus to the supported certificate/PKINIT
+  approach.
 - Tie future logs to the registered DLL's full SHA-256, not only the shortened
   filename suffix. The local source now logs the message type, flags, ticket
   lengths, and pointer-field values at serialization time, without logging
   ticket bytes. The local broker source also records the session LUID with
-  `CaptureTicketStored`; neither diagnostic build has yet been installed on
-  Clone 1. Do not repeat the password-seeded test after a cache miss unless
-  the broker log first confirms a fresh `CaptureTicketStored` event.
+  `CaptureTicketStored`. The new broker, direct probe, native-pointer provider,
+  and rollback script are staged on Clone 1. The broker is running
+  with SHA-256
+  `abcba3fa1e3344b215b6c1ec9d33222fa06e493877d3c607e1358dbaa28c31a2`; its
+  previous executable is backed up as
+  `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketBroker.before-20261030-141710.exe`.
+  The probe SHA-256 is
+  `93a751534b17deefdb69bcf68d22be16ec5dc00e1b1ece3c4dff47085dcfdfa8`.
+  The ordinary `startmenutest` session is currently active; its password sign-in
+  was only needed to seed this diagnostic ticket. This is not a product
+  sign-in requirement. Do not repeat the password-seeded test after a cache
+  miss unless the broker log first confirms a fresh `CaptureTicketStored`
+  event.
 - The local `ticket_logon_probe.cpp` parser already accepts the Kerberos
   package and pointer mode independently, in either optional-argument order.
   For clarity, use the explicit form
