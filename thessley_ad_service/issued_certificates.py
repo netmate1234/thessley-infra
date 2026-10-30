@@ -92,6 +92,8 @@ def _sequence_values(data: bytes) -> list[tuple[int, bytes]]:
 
 
 def _template_oid(extension: x509.Extension) -> str:
+    if isinstance(extension.value, x509.MSCertificateTemplate):
+        return extension.value.template_id.dotted_string
     values = _sequence_values(extension.value.value)
     if not 1 <= len(values) <= 3 or values[0][0] != 0x06:
         raise ValueError("invalid certificate template extension")
@@ -103,19 +105,26 @@ def _template_oid(extension: x509.Extension) -> str:
 
 
 def _sid_from_extension(extension: x509.Extension) -> str:
+    # AD CS emits this extension as GeneralNames containing an OtherName:
+    # SEQUENCE { [0] { type-id OID, value [0] EXPLICIT OCTET STRING } }.
+    # The OCTET STRING contains the canonical textual SID (for example
+    # "S-1-5-21-..."). Parse every wrapper and reject trailing/unknown data.
     values = _sequence_values(extension.value.value)
-    if (len(values) != 2 or values[0][0] != 0x06 or values[1][0] != 0x04
-            or _decode_oid(values[0][1]) != _SID_OTHER_NAME_OID):
-        raise ValueError("invalid AD SID extension")
-    raw = values[1][1]
-    if len(raw) < 12 or raw[0] != 1 or not 1 <= raw[1] <= 15 or len(raw) != 8 + 4 * raw[1]:
-        raise ValueError("invalid binary AD SID")
-    authority = int.from_bytes(raw[2:8], "big")
-    subauthorities = [
-        str(int.from_bytes(raw[8 + index * 4:12 + index * 4], "little"))
-        for index in range(raw[1])
-    ]
-    return "S-" + "-".join([str(raw[0]), str(authority), *subauthorities])
+    if len(values) != 1 or values[0][0] != 0xA0:
+        raise ValueError("invalid AD SID GeneralNames wrapper")
+    other_name = values[0][1]
+    oid_tag, oid_value, cursor = _read_tlv(other_name, 0)
+    explicit_tag, explicit_value, end = _read_tlv(other_name, cursor)
+    if (oid_tag != 0x06 or _decode_oid(oid_value) != _SID_OTHER_NAME_OID
+            or explicit_tag != 0xA0 or end != len(other_name)):
+        raise ValueError("invalid AD SID OtherName")
+    octet_tag, raw_sid, octet_end = _read_tlv(explicit_value, 0)
+    if octet_tag != 0x04 or octet_end != len(explicit_value):
+        raise ValueError("invalid AD SID OtherName value")
+    sid = raw_sid.decode("ascii", "strict")
+    if not _SID.fullmatch(sid):
+        raise ValueError("invalid AD SID text")
+    return sid
 
 
 def validate_issued_certificate(

@@ -10,7 +10,7 @@ from cryptography import x509
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtensionOID, NameOID
 
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _PILOT_SUBJECT = re.compile(r"^Thessley temporary sign-in [a-f0-9]{32}$")
@@ -58,8 +58,21 @@ def validate_approved_csr(der: bytes, expected_sha256: str) -> dict[str, str | i
                 or (ec_profile and common_names[0].value == _PHONE_KEY_SUBJECT)
             )
         )
+        extensions_valid = len(request.extensions) == 0
+        # Windows' machine-key PKCS#10 encoder adds the RFC 5280 Subject Key
+        # Identifier request extension. It is derived from the public key and
+        # carries no caller-selected identity or usage, so accept that one
+        # exact, noncritical extension while continuing to reject all others.
+        if len(request.extensions) == 1:
+            extension = request.extensions[0]
+            extensions_valid = (
+                extension.oid == ExtensionOID.SUBJECT_KEY_IDENTIFIER
+                and not extension.critical
+                and extension.value.digest
+                == x509.SubjectKeyIdentifier.from_public_key(public_key).digest
+            )
         if (not request.is_signature_valid or not (rsa_profile or ec_profile)
-                or not subject_valid or len(request.extensions) != 0):
+                or not subject_valid or not extensions_valid):
             raise CertificateRequestError("The CSR does not match the approved RSA-3072 or EC P-256 profile.")
     except CertificateRequestError:
         raise

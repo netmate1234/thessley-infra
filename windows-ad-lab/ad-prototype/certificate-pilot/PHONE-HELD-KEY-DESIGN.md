@@ -284,10 +284,12 @@ is identified. The harness also required an ordinary password sign-in on
 Clone 1 to seed its HOST-ticket cache, so it cannot prove the requested
 passwordless-across-PCs experience even if the handoff were made to work.
 
-For the requested `THESSLEYLAB\Administrator` test, the phone key is already
-enrolled and verified TEE, but the service configuration still has no
-`certificate_template`, no certificate has been issued, and the phone-key
-logon method remains disabled. The last read-only DC check confirmed
+For the requested `THESSLEYLAB\Administrator` phone-key test, the phone key is
+already enrolled and verified TEE, but the service configuration still has no
+`certificate_template`, no phone-key certificate has been issued, and the
+phone-key logon method remains disabled. A separate PC-key certificate was
+issued and revoked for `startmenutest` in the later experiment below; it did
+not use the phone key. The last read-only DC check confirmed
 `CertSvc` is running and listed existing published templates including
 `ThessleyVscLogon`; it did not configure or change the CA. Therefore there is
 no phone-key Administrator login to try yet. Keep the existing password/TPM
@@ -349,17 +351,17 @@ validator accepted the Android CSR, verified its signature, and confirmed its
 SPKI hash matched an active key for the tested SID. This was a read-only
 validation; it did not claim an issuance job or contact AD CS.
 
-There is still **no certificate**. The live service configuration has
-`certificate_template` unset, the phone-key sign-in policy remains disabled,
-and no certificate was issued. The CSR and active key used for that check
-belong to `THESSLEYLAB\Administrator`; do not use that privileged account for
-a certificate-issuance experiment. `THESSLEYLAB\qrtestadmin` is enabled and
-belongs to the workstation-admin group, but has no active AD logon key yet.
-It is not a Domain Admin, but it still has elevated rights on enrolled
-workstations. Use a dedicated test identity with only the rights needed for
-the pilot and enroll its own TEE key before CA issuance. A certificate by
-itself would still not enable Windows sign-in because the phone-signing bridge
-is not implemented.
+At the time of the phone-key CSR validation, no certificate had been issued.
+The live service configuration still has `certificate_template` unset and
+phone-key sign-in remains disabled. A later, separate Software KSP experiment
+issued a four-hour certificate for the disposable `startmenutest` identity;
+it used a PC-generated key and did not involve the phone key. See the Clone 1
+probe results below. Do not use the privileged `THESSLEYLAB\Administrator`
+account for certificate experiments. `THESSLEYLAB\qrtestadmin` is enabled
+and belongs to the workstation-admin group, but has no active AD logon key.
+It is not a Domain Admin, but still has elevated rights on enrolled
+workstations. A certificate by itself does not provide a phone-signing bridge
+for Windows sign-in.
 
 The next proof must bind a fresh Windows sign-in challenge to the QR request,
 have the phone sign it after biometric approval, and demonstrate that the
@@ -401,3 +403,122 @@ The lab provider's SID and TPM container values are now read from protected
 per-account configuration; they remain TPM VSC test mappings, not phone-key
 credentials or product defaults. Keep that provider isolated under
 `windows-logon-provider/`.
+
+### PIV reader proof on Clone 1 (2026-10-30)
+
+The Windows 11 Pro Clone 1 reached the PIV private-key operation through the
+inbox smart-card sign-in path. The disposable loopback card stub recorded a
+successful test-PIN verification, followed by a chained `GENERAL AUTHENTICATE`
+command for key reference `9A` and algorithm `07`. NIST SP 800-73-5 identifies
+that combination as the PIV Authentication key using RSA-2048. The stub
+intentionally has no signing key and rejected the operation, so this proves
+Windows read the certificate, accepted the test PIN, and requested a signature;
+it does **not** prove a valid signature, a Kerberos request, or an AD logon.
+
+This test used a self-signed parser-test certificate and an explicitly
+disposable PIN. It must not be used as an account credential. The next bridge
+test must use a certificate whose public key matches the dedicated phone AD
+logon key, after restricted issuance and account SID mapping are in place. The
+phone's existing AD logon key is P-256 ECDSA, whereas this first Windows test
+certificate is RSA-2048. NIST defines PIV algorithm `11` for ECDSA P-256; test
+that certificate/key path separately before changing the phone key profile.
+Windows domain smart-card sign-in has an ECC enumeration policy; test it on the
+lab clone with network access to the DC. Offline cached sign-in is a separate
+requirement because Windows documents an associated ECDH key for offline ECC
+logon.
+
+Evidence references: the diagnostic is `C:\Users\Public\piv-cert-stub.log`
+on Clone 1. The relevant entries at 2026-10-30 16:50:24 UTC were `TEST PIN
+0000 accepted` and a `GENERAL AUTHENTICATE` APDU beginning `10 87 07 9A`; PIN
+and challenge contents are omitted here. NIST SP 800-73-5, Part 2, Appendix
+A.3/A.4 defines the cardholder-signature operation; Microsoft's [smart-card
+sign-in flow](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration)
+describes the subsequent smart-card private-key call and Kerberos PKINIT path.
+
+The follow-up throwaway RSA test returned a correctly sized 256-byte RSA
+signature (`GENERAL AUTH signed; input_bytes=256 response_bytes=264`). The
+Windows client then recorded Security event 4625 for `@@@CN=Thessley PIV RSA
+sign test`, status `0xC000006D`, substatus `0xC0000064` (unknown account). That
+is consistent with the expected self-signed, unmapped test certificate and is
+past the previous card-operation failure. No matching 4768/4771 event appeared
+in the DC Security log during the queried 30-minute window; because auditing
+may be incomplete and the test cert is untrusted, this does not prove whether a
+Kerberos packet was sent. The diagnostic therefore validates the client-side
+PIV RSA operation only, not PKINIT or domain authentication.
+
+### Clone 1 CA connectivity and mapping check (2026-10-30)
+
+The earlier CA `certutil -ping` failure was not a VPN or firewall problem.
+Clone 1 resolves `THESSLEY-DC1.lab.thessley.test` to `192.168.1.79`; from
+Clone 1, the route to the DC used source `192.168.1.103`, and TCP 135, ADWS
+9389, and the CA's current RPC listener 49726 were reachable. The active CA
+service was listening on 49726, and the standard Certificate Services RPC,
+DCOM, and endpoint-mapper firewall rules were enabled. The temporary
+`Thessley-Temp-CA-RPC-PoC` rule was removed.
+
+`certutil -ping` failed with `0x800706BA` when run in either SSH session. The
+Clone 1 SSH logon cache held S4U service tickets but no user TGT. Clone 1
+already had an interactive `startmenutest` session with a primary
+`krbtgt/LAB.THESSLEY.TEST` ticket. Running the same `certutil -ping` from a
+short-lived scheduled task using that existing interactive token succeeded:
+`ICertRequest2 interface is alive`. The VPN was not involved. TCP reachability
+alone had not established authenticated DCOM access. Microsoft's [RPC error
+troubleshooting](https://learn.microsoft.com/en-us/troubleshoot/windows-client/networking/rpc-errors-troubleshooting)
+describes dynamic-port failures; its [AD CS 0x800706BA guide](https://learn.microsoft.com/en-us/troubleshoot/windows-server/certificates-and-public-key-infrastructure-pki/error-0x800706ba-certificate-enrollment)
+also lists DCOM identity and permission causes.
+
+A CSR made from the disposable RSA test key was submitted as `startmenutest`
+through that interactive token to the published `SmartcardLogon` template.
+The CA denied request 15 with `CERTSRV_E_TEMPLATE_DENIED`: the account lacks
+Enroll permission. **No certificate was issued or installed.** The template
+has a one-year validity, and the CA's `EDITF_ATTRIBUTEENDDATE` flag is off, so
+this shared template cannot safely provide the short-lived pilot certificate
+by request attribute. No CA, template, DCOM, or firewall configuration was
+changed during this check. The denied request's temporary CSR and response
+files were cleaned up; the CA's denied audit/database record remains.
+
+The shared `SmartcardLogon` template remains unchanged. The separate
+`ThessleyPhoneKeyPilot` template was created with four-hour validity and a
+direct Enroll grant only for `startmenutest`; it was published for this probe,
+then unpublished, and that direct Enroll grant was removed. The resulting CA
+template object remains in AD for possible later reuse; it is not currently
+published and grants no Enroll right to `startmenutest`.
+
+### Clone 1 Software KSP certificate-logon probe (2026-10-30)
+
+A restricted four-hour pilot certificate was issued to `startmenutest` from
+the new `ThessleyPhoneKeyPilot` template. Before installation, local checks
+verified its CSR signature and exact public-key match, direct signature by
+`THESSLEY-LAB-CA`, expected AD SID extension, Smart Card Logon EKU, template
+OID, and exact four-hour validity. The repository validators initially
+rejected this real Windows output: Windows' PKCS#10 request includes a
+derived Subject Key Identifier, AD CS wraps the SID `OtherName` in the
+GeneralNames context tag and encodes the SID text in its OCTET STRING, and
+`cryptography` decodes the template extension as `MSCertificateTemplate`.
+The validators now accept those exact formats while rejecting other CSR
+extensions and unexpected SID wrappers.
+
+The certificate was installed with its matching non-exportable machine key
+under `Microsoft Software Key Storage Provider`. The isolated
+`certificate_logon_probe.exe` ran as LocalSystem and called
+`LsaLogonUser(KerbCertificateLogon)` for `startmenutest`. All three attempts
+returned `lsa_logon_user=0xC000006D` and `lsa_substatus=0xC0000384`
+(`STATUS_SMARTCARD_NO_KEY_CONTAINER`): KeySpec 1 and 2 with the generated
+container name, and KeySpec 1 with the KSP unique name. No token was returned.
+The DC Security log query found no matching 4768 event. This is evidence that
+the software-KSP key did not get used by this smart-card logon path; it does
+not establish that every certificate-based phone-approval architecture is a
+dead end. Microsoft's `KERB_SMARTCARD_CSP_INFO` contract explicitly describes
+smart-card CSP data, so the next useful comparison is a disposable key in a
+legacy CryptoAPI CSP or the already-working PIV path—not more variations of
+the same KSP container string. See Microsoft's [CSP info structure]
+(https://learn.microsoft.com/en-us/windows/win32/secauthn/kerb-smartcard-csp-info)
+and [smart-card sign-in flow]
+(https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration).
+
+Cleanup completed: the certificate was revoked on the CA with reason
+Certificate Hold, a fresh CRL was published, and the Clone 1 certificate,
+machine key, CSR, manifest, and probe files were removed. The pilot template
+was unpublished and its direct Enroll grant removed. Its CA database issuance
+and revocation records remain as an audit trail; the certificate expires four
+hours after issuance.
