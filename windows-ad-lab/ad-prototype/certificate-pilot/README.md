@@ -17,6 +17,10 @@ Administrators. Each attempt gets a random container prefix and random subject;
 the account, domain name, and certificate template are not compiled or written
 into the request. The script writes DER PKCS#10 and a protected JSON manifest
 under `%ProgramData%\ThessleyPamWin\ad-agent\certificate-requests`.
+The key permits both signing and decryption/key exchange, as required for an
+RSA smart-card logon certificate. Its CNG key-spec metadata remains zero; the
+separate `KERB_SMARTCARD_CSP_INFO.KeySpec` value used during logon is an
+independent legacy selector and is tested by the isolated serialization probe.
 
 The service's CSR validator accepts the Windows generator's RSA-3072/SHA-256
 profile and P-256 ECDSA/SHA-256 as a future Android Keystore candidate. The

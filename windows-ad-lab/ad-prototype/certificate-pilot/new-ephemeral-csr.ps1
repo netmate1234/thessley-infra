@@ -66,12 +66,18 @@ try {
     $key.Length = 3072
     $key.KeySpec = 0
     $key.ExportPolicy = 0
-    $key.KeyUsage = 2
+    # RSA smart-card/PKINIT logon needs both signing and key exchange. In
+    # X509PrivateKeyUsageFlags these are ALLOW_SIGNING (0x2) and ALLOW_DECRYPT
+    # (0x1); this is distinct from KERB_SMARTCARD_CSP_INFO.KeySpec at logon.
+    $key.KeyUsage = 3
     $key.Silent = $true
     $key.ContainerName = $containerPrefix
     $key.SecurityDescriptor = 'D:P(A;;GA;;;SY)(A;;GA;;;BA)'
     $key.Create()
     $keyCreated = $true
+    if (($key.KeyUsage -band 3) -ne 3) {
+        throw 'The generated RSA key does not permit both signing and key exchange.'
+    }
     $containerName = [string]$key.ContainerName
     if ($containerName -ne $containerPrefix) {
         throw 'Windows returned an unexpected temporary key-container name.'
