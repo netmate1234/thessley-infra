@@ -130,18 +130,23 @@ short-lived, strongly SID-mapped Smart Card Logon certificate associated with
 the exact machine key. Example:
 
 ```text
-certificate_logon_probe.exe lab.thessley.test adqrproof <TEMP-KEY-CONTAINER> "Microsoft Platform Crypto Provider" 1
+certificate_logon_probe.exe lab.thessley.test adqrproof <TEMP-KEY-CONTAINER> "Microsoft Software Key Storage Provider" 1
 ```
 
-Use `Microsoft Enhanced RSA and AES Cryptographic Provider` with KeySpec `1`
-for the first software-key test. `KERB_SMARTCARD_CSP_INFO` defines the legacy
-CAPI `AT_KEYEXCHANGE`/`AT_SIGNATURE` values; the CNG Platform Crypto Provider
-is not a valid first comparison until its serialization semantics are proven.
-The builder permits an empty PIN only for this isolated, no-reader CAPI probe;
-the existing smart-card path still requires a CredProtect-protected PIN. A
-successful direct LSA probe establishes only that this provider and certificate
-can authenticate through the KDC. LogonUI handoff, phone-bound issuance,
-request binding, cleanup, and offline behavior remain separate proof gates.
+First use `Microsoft Software Key Storage Provider` with KeySpec `1`, matching
+the provider used by the existing ephemeral-CSR pilot. `KERB_SMARTCARD_CSP_INFO`
+defines its KeySpec field as the legacy `AT_KEYEXCHANGE`/`AT_SIGNATURE` selector;
+the certificate's CNG `dwKeySpec` is a separate value. Whether Kerberos can
+resolve a Software KSP container from this legacy field is exactly what this
+probe tests; do not infer support from successful CSR creation. The Microsoft
+Platform Crypto Provider may be tested separately if a TPM-key certificate is
+available. The CAPI RSA provider is a separate comparison and requires a key
+created by that provider. The builder permits an empty PIN only for an
+isolated no-reader probe using these explicit built-in providers; the existing
+smart-card path still requires a CredProtect-protected PIN. A successful direct
+LSA probe establishes only that this provider and certificate can authenticate
+through the KDC. LogonUI handoff, phone-bound issuance, request binding,
+cleanup, and offline behavior remain separate proof gates.
 
 References: Microsoft's [`CRYPT_KEY_PROV_INFO`](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-crypt_key_prov_info)
 documentation describes `dwProvType = 0` as CNG and passes `dwKeySpec` to

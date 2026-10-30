@@ -148,13 +148,15 @@ HRESULT BuildKerbCertificateSerialization(
     } else {
         const bool noReader = (!cardName || !*cardName) &&
                               (!readerName || !*readerName);
-        const bool softwareProvider =
+        const bool probeProvider =
+            _wcsicmp(providerName, L"Microsoft Software Key Storage Provider") == 0 ||
+            _wcsicmp(providerName, L"Microsoft Platform Crypto Provider") == 0 ||
             _wcsicmp(providerName, L"Microsoft Enhanced RSA and AES Cryptographic Provider") == 0;
-        // KERB_SMARTCARD_CSP_INFO carries the legacy CSP KeySpec values
-        // AT_KEYEXCHANGE/AT_SIGNATURE. Keep this probe on the matching CAPI
-        // provider until CNG/KSP serialization is independently established.
-        // Never let this switch bypass a smart-card PIN.
-        if (!noReader || !softwareProvider) return E_ACCESSDENIED;
+        // Empty PIN is limited to a disposable no-reader probe with an
+        // explicit built-in provider. KSP behavior through this legacy
+        // structure is experimental; this does not establish production
+        // smart-card compatibility. Never bypass a smart-card PIN.
+        if (!noReader || !probeProvider) return E_ACCESSDENIED;
     }
 
     std::vector<BYTE> cspInfo;
