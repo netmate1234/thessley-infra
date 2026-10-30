@@ -1,6 +1,7 @@
 param(
     [ValidateRange(5, 30)][int]$RollbackMinutes = 15,
-    [Parameter(Mandatory = $true)][switch]$ConfirmDisposableLabVm
+    [Parameter(Mandatory = $true)][switch]$ConfirmDisposableLabVm,
+    [switch]$KeepInstalled
 )
 $ErrorActionPreference = 'Stop'
 
@@ -20,7 +21,9 @@ $providerPath = "SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Creden
 $classPath = "SOFTWARE\Classes\CLSID\$providerId"
 $source = Split-Path -Parent $MyInvocation.MyCommand.Path
 $installDir = Join-Path $env:ProgramData 'ThessleyPamWin\ad-ticket-logon-test'
-$dllName = 'ThessleyADTicketTestCredentialProvider.dll'
+$sourceDllName = 'ThessleyADTicketTestCredentialProvider.dll'
+$dllHash = (Get-FileHash -LiteralPath (Join-Path $source $sourceDllName) -Algorithm SHA256).Hash.ToLowerInvariant().Substring(0, 16)
+$dllName = "ThessleyADTicketTestCredentialProvider-$dllHash.dll"
 $brokerName = 'ThessleyADTicketBroker.exe'
 $viewerName = 'ThessleyADQrViewer.exe'
 $rollbackName = 'rollback-ticket-logon-test.ps1'
@@ -54,14 +57,10 @@ if ($configuredSids.Count -ne 1) {
     throw "Enable TicketLogonTest for exactly one disposable low-privilege AD account SID first; found $($configuredSids.Count)."
 }
 
-foreach ($name in @($dllName, $brokerName, $viewerName, $rollbackName)) {
+foreach ($name in @($sourceDllName, $brokerName, $viewerName, $rollbackName)) {
     $path = Join-Path $source $name
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Package file is missing: $path" }
 }
-if (Test-Path -LiteralPath $installDir) {
-    throw "Ticket-test install folder already exists: $installDir"
-}
-
 $registeredTask = $false
 $registeredService = $false
 try {
@@ -75,24 +74,30 @@ try {
             'ContainerInherit,ObjectInherit', 'None', 'Allow'))
     }
     Set-Acl -LiteralPath $installDir -AclObject $acl
-    Copy-Item -LiteralPath (Join-Path $source $dllName),
-        (Join-Path $source $brokerName), (Join-Path $source $viewerName),
-        (Join-Path $source $rollbackName) -Destination $installDir
+    # Keep the old test DLL intact if LogonUI still has it mapped. Preserve
+    # diagnostic logs in a prior test folder when refreshing the experiment.
+    Copy-Item -LiteralPath (Join-Path $source $sourceDllName) `
+        -Destination (Join-Path $installDir $dllName) -Force
+    Copy-Item -LiteralPath (Join-Path $source $brokerName),
+        (Join-Path $source $viewerName), (Join-Path $source $rollbackName) `
+        -Destination $installDir -Force
 
     $rollbackPath = Join-Path $installDir $rollbackName
-    $at = (Get-Date).AddMinutes($RollbackMinutes)
-    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
-        -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$rollbackPath`" -FromTimer"
-    $trigger = New-ScheduledTaskTrigger -Once -At $at
-    $taskPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-        -Principal $taskPrincipal -Settings $settings `
-        -Description 'Removes only the isolated Thessley Kerberos ticket-logon test provider and broker.' | Out-Null
-    $registeredTask = $true
+    $taskInfo = $null
+    if (-not $KeepInstalled) {
+        $at = (Get-Date).AddMinutes($RollbackMinutes)
+        $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+            -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$rollbackPath`" -FromTimer"
+        $trigger = New-ScheduledTaskTrigger -Once -At $at
+        $taskPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+            -Principal $taskPrincipal -Settings $settings `
+            -Description 'Removes only the isolated Thessley Kerberos ticket-logon test provider and broker.' | Out-Null
+        $registeredTask = $true
 
-    $task = Get-ScheduledTask -TaskName $taskName
-    $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName
+        $task = Get-ScheduledTask -TaskName $taskName
+        $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName
     # TaskScheduler exposes this account under the Windows UI language (for
     # example, "Système" on French installs). Check the invariant SID from
     # the task XML first, then fall back to SID translation for older systems.
@@ -113,9 +118,10 @@ try {
             } catch { }
         }
     }
-    if ($task.State -ne 'Ready' -or $taskPrincipalSid -ne 'S-1-5-18' -or
-        $taskInfo.NextRunTime -le (Get-Date) -or $taskInfo.NextRunTime -gt $at.AddMinutes(2)) {
-        throw "Timed rollback verification failed (state=$($task.State), principalSID=$taskPrincipalSid, nextRun=$($taskInfo.NextRunTime)); no ticket provider or broker was activated."
+        if ($task.State -ne 'Ready' -or $taskPrincipalSid -ne 'S-1-5-18' -or
+            $taskInfo.NextRunTime -le (Get-Date) -or $taskInfo.NextRunTime -gt $at.AddMinutes(2)) {
+            throw "Timed rollback verification failed (state=$($task.State), principalSID=$taskPrincipalSid, nextRun=$($taskInfo.NextRunTime)); no ticket provider or broker was activated."
+        }
     }
 
     $brokerPath = Join-Path $installDir $brokerName
@@ -154,7 +160,11 @@ try {
     } finally { $registry.Dispose() }
 
     Write-Output "Experimental ticket tile registered only for SID $($configuredSids[0])."
-    Write-Output "Automatic rollback is armed for $($taskInfo.NextRunTime); do not stop that timer."
+    if ($KeepInstalled) {
+        Write-Output 'Automatic rollback is disabled by -KeepInstalled. Standard Windows password/PIN recovery remains enabled.'
+    } else {
+        Write-Output "Automatic rollback is armed for $($taskInfo.NextRunTime); do not stop that timer."
+    }
     Write-Output 'The existing TPM/VSC provider and Windows password/PIN sign-in options were left registered.'
     Write-Output 'This proves only the Clone 1 LogonUI handoff; it is not the phone PKINIT flow or physical-PC deployment.'
 } catch {
