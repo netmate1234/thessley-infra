@@ -144,16 +144,15 @@ login mechanism:
 This is a **candidate, not a verified implementation**. Microsoft describes
 `KERB_TICKET_LOGON` as a network logon and separately documents Credential
 Provider serialization; it does not document this custom desktop-logon
-combination. The first gate is a disposable Windows test account on Clone 1:
-obtain real KDC tickets using the existing TPM smart-card credential, pass
-them through a minimal `KERB_TICKET_LOGON` Credential Provider, and verify
-that `CPUS_LOGON` creates a desktop session with the expected SID and a valid
-ticket cache. A successful network token or ticket cache alone is not a pass.
-If Winlogon rejects this path or creates no interactive desktop, stop this
-route and return to the documented smart-card credential path; do not issue
-the phone-key certificate or enable a sign-in policy. Only after the desktop
-test succeeds should the ticket source be changed to phone PKINIT. Keep all
-tickets in memory, wipe them after one use, and never log or persist them.
+combination. The LSA token-creation substep has now passed on Clone 1; the
+remaining gate is to send the ticket through a minimal Credential Provider
+and verify that `CPUS_LOGON` creates a desktop session with the expected SID
+and ticket cache. A successful LSA token alone is not a pass. If Winlogon
+rejects this path or creates no interactive desktop, stop this route and
+return to the documented smart-card credential path; do not issue the
+phone-key certificate or enable a sign-in policy. Only after the desktop test
+succeeds should the ticket source be changed to phone PKINIT. Keep all tickets
+in memory, wipe them after one use, and never log or persist them.
 
 Microsoft's [KERB_TICKET_LOGON documentation](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_ticket_logon)
 explicitly describes a network-logon structure. The [LsaLogonUser
@@ -162,15 +161,28 @@ distinguishes it from `KERB_INTERACTIVE_LOGON`, which is documented for
 interactive authentication. That distinction is why the Clone 1 test must
 verify an actual desktop session, not infer one from a valid ticket or token.
 
-### Clone 1 test precondition (2026-10-30)
+### Clone 1 ticket diagnostics (2026-10-30)
 
 The current SSH session to Clone 1 has an S4U cache but no usable TGT.
 `klist get HOST/MARTIN-WM.lab.thessley.test` returned `0x8009030e` (no
-credentials available). SSH therefore cannot supply the real tickets needed
-for the interactive Credential Provider experiment. Obtain tickets in a
-disposable interactive test logon first; this read-only check made no sign-in
-or DC changes. Clone 1 is only the isolated development proof; the production
-target remains an ordinary physical Windows PC.
+credentials available). After the user signed in at the Clone 1 console, a
+LocalSystem probe queried the interactive logon LUID and cached host ticket.
+For `LsaLogonUser(Interactive, KerbTicketLogon)` with that PAC-bearing service
+ticket and no TGT, LSA returned success, profile type 2
+(`KerbInteractiveProfile`), and a primary token. The same request with
+`Network` returned an impersonation token. The probe reads ticket bytes into
+memory and writes only statuses and token metadata; its one-shot scheduled
+task and temporary files were removed. No Credential Provider, sign-in
+setting, phone credential, or DC configuration was changed.
+
+The probe used `THESSLEYLAB\martin`, who has workstation-admin rights, so the
+LSA check should be repeated with a dedicated low-privilege account. The test
+omitted the optional TGT; Microsoft's docs state that such a logon is local to
+the machine and supplies no domain ticket cache for network SSO. The
+`KERB_TICKET_LOGON` serializer still needs validation through Winlogon. Clone
+1 is only the isolated development proof; the production target remains an
+ordinary physical Windows PC. Probe source:
+[`ticket_logon_probe.cpp`](../credential-serialization/ticket_logon_probe.cpp).
 
 The QR request and ticket delivery must be short-lived, single-use, and bound
 to the selected SID, exact host SPN, phone credential, and current machine.

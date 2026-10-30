@@ -3,8 +3,9 @@
 This directory contains isolated helpers for the future AD-only Credential
 Provider. The certificate helper builds `KERB_CERTIFICATE_LOGON` or
 `KERB_CERTIFICATE_UNLOCK_LOGON`; the ticket helper builds `KERB_TICKET_LOGON`
-for the built-in Kerberos package. They do not call `LsaLogonUser`, perform
-PKINIT, talk to the approval service, register a provider, or alter a Windows
+for the built-in Kerberos package. The probe separately calls
+`LsaLogonUser` in an isolated lab; none of these helpers performs PKINIT,
+talks to the approval service, registers a provider, or alters a Windows
 sign-in path.
 
 `ad_approval_client.cpp` is the separate native adapter for the AD agent. It
@@ -44,9 +45,12 @@ host ticket, then delivers that KDC-issued ticket and a forwarded TGT for
 `KERB_TICKET_LOGON`. This avoids asking Windows to call a remote private-key
 provider. Microsoft describes `KERB_TICKET_LOGON` as a *network logon*; the
 documentation does not promise that this serialization produces a usable
-interactive desktop session through a third-party Credential Provider. Treat
-it as a feasibility experiment only. The existing TPM VSC path remains the
-only proven interactive credential path. End-to-end requirements are in
+interactive desktop through a third-party Credential Provider. An isolated
+LSA probe did return a primary token for an `Interactive` logon using a cached
+host ticket, but it did not exercise Winlogon or a Credential Provider. Treat
+the route as a feasibility experiment only. The existing TPM VSC path remains
+the only proven end-to-end interactive sign-in path. End-to-end requirements
+are in
 [`certificate-pilot/PHONE-HELD-KEY-DESIGN.md`](../certificate-pilot/PHONE-HELD-KEY-DESIGN.md).
 
 ## Current lab blocker
@@ -100,8 +104,18 @@ From the repository root on Linux with MinGW-w64 installed:
 bash infra/windows-ad-lab/ad-prototype/credential-serialization/build.sh
 ```
 
-The script writes two object files under `/tmp`; it does not produce or install
-a Credential Provider DLL.
+The script writes three object files and the self-contained lab probe
+`/tmp/thessley-ad-ticket-logon-probe.exe`; it does not produce or install a
+Credential Provider DLL. The probe must run as LocalSystem on a disposable
+lab machine. It accepts a cached logon LUID and host SPN, reads the ticket into
+memory, calls LSA, reports only status/token metadata, and wipes the ticket
+buffer. It does not write ticket data to disk. Example:
+
+```text
+ticket_logon_probe.exe 0x18d8d0 HOST/COMPUTER.example.test interactive
+```
+
+Do not use this probe to capture or export tickets from production sessions.
 
 References: Microsoft's [`CRYPT_KEY_PROV_INFO`](https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/ns-wincrypt-crypt_key_prov_info)
 documentation describes `dwProvType = 0` as CNG and passes `dwKeySpec` to

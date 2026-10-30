@@ -13,7 +13,8 @@ namespace {
 // lengths. Large PACs are valid, so the limit is deliberately generous.
 constexpr size_t kMaxTicketBytes = 1024 * 1024;
 
-HRESULT ValidateTicket(const BYTE* bytes, size_t length) {
+HRESULT ValidateTicket(const BYTE* bytes, size_t length, bool optional = false) {
+    if (optional && length == 0) return S_OK;
     if (bytes == nullptr || length == 0) return E_INVALIDARG;
     if (length > kMaxTicketBytes || length > std::numeric_limits<ULONG>::max())
         return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
@@ -35,7 +36,7 @@ HRESULT BuildKerbTicketSerialization(
 
     HRESULT hr = ValidateTicket(serviceTicket, serviceTicketLength);
     if (FAILED(hr)) return hr;
-    hr = ValidateTicket(forwardedTgtKrbCred, forwardedTgtKrbCredLength);
+    hr = ValidateTicket(forwardedTgtKrbCred, forwardedTgtKrbCredLength, true);
     if (FAILED(hr)) return hr;
     if (kerberosAuthenticationPackage == 0) return E_INVALIDARG;
 
@@ -62,8 +63,9 @@ HRESULT BuildKerbTicketSerialization(
         static_cast<ULONG>(forwardedTgtKrbCredLength);
     logon->ServiceTicket = reinterpret_cast<PUCHAR>(
         static_cast<ULONG_PTR>(headerBytes));
-    logon->TicketGrantingTicket = reinterpret_cast<PUCHAR>(
-        static_cast<ULONG_PTR>(tgtOffset));
+    logon->TicketGrantingTicket = forwardedTgtKrbCredLength == 0
+        ? nullptr
+        : reinterpret_cast<PUCHAR>(static_cast<ULONG_PTR>(tgtOffset));
 
     memcpy(buffer + headerBytes, serviceTicket, serviceTicketLength);
     memcpy(buffer + tgtOffset, forwardedTgtKrbCred, forwardedTgtKrbCredLength);
