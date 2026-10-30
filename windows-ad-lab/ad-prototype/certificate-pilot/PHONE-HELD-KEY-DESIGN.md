@@ -522,3 +522,84 @@ machine key, CSR, manifest, and probe files were removed. The pilot template
 was unpublished and its direct Enroll grant removed. Its CA database issuance
 and revocation records remain as an audit trail; the certificate expires four
 hours after issuance.
+
+### Clone 1 legacy CryptoAPI CSP comparison (2026-10-30)
+
+To distinguish a KSP-specific lookup failure from the legacy smart-card CSP
+path described by `KERB_SMARTCARD_CSP_INFO`, the unpublished four-hour pilot
+template was temporarily configured for the version-4 legacy-provider path:
+`pKIDefaultKeySpec=1`,
+`pKIDefaultCSPs="1,Microsoft Enhanced RSA and AES Cryptographic Provider"`,
+and `CT_FLAG_USE_LEGACY_PROVIDER` in `msPKI-Private-Key-Flag`. It was
+published only while `THESSLEYLAB\startmenutest` had the direct Enroll right.
+The shared `SmartcardLogon` template was not changed.
+
+Clone 1 generated a non-exportable 3072-bit machine key in the Microsoft
+Enhanced RSA and AES CryptoAPI provider (`ProviderType=24`, `AT_KEYEXCHANGE`)
+and submitted its CSR as `startmenutest`. The CA issued two four-hour
+certificates for the same low-privilege test account after the scheduled
+request task was started twice. The unused certificate was revoked with
+Certificate Hold before probing. The remaining certificate was checked for
+the expected `startmenutest` SID extension, Smart Card Logon EKU, pilot
+template OID, direct CA issuer, and four-hour validity, then linked to the
+non-exportable machine key with `certreq -accept`.
+
+The SYSTEM LSA probe used that provider, container, and `AT_KEYEXCHANGE`.
+`LsaLogonUser(KerbCertificateLogon)` returned
+`STATUS_LOGON_FAILURE` (`0xC000006D`) with
+`STATUS_SMARTCARD_SUBSYSTEM_FAILURE` (`0xC0000321`) as its substatus. This is
+different from the KSP test's `STATUS_SMARTCARD_NO_KEY_CONTAINER`. Microsoft's
+NTSTATUS reference describes `STATUS_SMARTCARD_SUBSYSTEM_FAILURE` as an error
+while Kerberos was attempting to use the smart-card subsystem
+([MS-ERREF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-erref/596a1078-e883-4972-9bbc-49e60bebca55)).
+The probe returned no token and the DC Security log had no matching 4768
+event, so this direct LSA call did not complete domain PKINIT. It does not
+prove a phone-backed smart-card provider cannot work; it shows that the
+generic software CryptoAPI key alone does not complete the logon. Further
+KSP container-name permutations are not useful. The remaining implementation
+work is on a real smart-card-provider path that can relay signing to the
+phone.
+
+Cleanup revoked the probed certificate with Certificate Hold and published a
+fresh CRL. Both issued probe certificates are recorded as revoked in the CA
+database. The local certificate, all `ThessleyCspProbe-*` key containers,
+temporary CSR/certificate files, and scheduled probe tasks were removed and
+verified absent. The pilot template was unpublished, its direct Enroll right
+for `startmenutest` was removed, and its cryptography fields were restored to
+their original CNG values. The template object remains in AD, unpublished;
+the shared template remains unchanged.
+
+### Clone 1 ECC sign-in policy preparation (2026-10-30)
+
+The existing phone AD logon key is P-256 ECDSA. Microsoft documents two
+separate computer policies that affect whether its certificate can be used at
+the sign-in screen: `EnumerateECCCerts` enables ECC certificate enumeration,
+and `AllowSignatureOnlyKeys` enables signature-only certificates to appear.
+Both were absent on Clone 1. The Microsoft policy reference says both are
+computer settings and do not require restart or sign-out
+([Smart Card Group Policy and Registry Settings](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-R2-and-2012/dn579258(v=ws.11))).
+
+On the disposable Clone 1 only, both were set to DWORD `1` under
+`HKLM\SOFTWARE\Policies\Microsoft\Windows\SmartCardCredentialProvider`.
+Read-back confirmed both values. This only permits Windows to enumerate ECC
+and signature-only smart-card certificates; it does not enroll a certificate,
+create a key, enable the Thessley tile, or remove password recovery. To undo
+this lab preparation, delete those two values:
+
+```cmd
+reg delete HKLM\SOFTWARE\Policies\Microsoft\Windows\SmartCardCredentialProvider /v EnumerateECCCerts /f
+reg delete HKLM\SOFTWARE\Policies\Microsoft\Windows\SmartCardCredentialProvider /v AllowSignatureOnlyKeys /f
+```
+
+The DC's isolated `ThessleyPhoneKeyPilot` template remains unpublished. A
+read-only check confirmed version 4, four-hour validity, minimum key size
+2048, CNG default key spec (`0`), digital-signature and key-encipherment key
+usage, and Smart Card Logon plus Client Authentication EKUs. It is not yet
+proven that this template issues a usable ECDSA certificate for the enrolled
+phone key. No such certificate has been issued. The phone app already has a
+biometric-gated `NONEwithECDSA` helper for a 32-byte PIV SHA-256 digest, but
+no Windows-to-phone PIV signing request path calls it. The next decisive test
+is to issue a short-lived certificate matching the enrolled phone key, expose
+it through PIV key reference `9A` with algorithm `11`, and confirm Windows
+requests an ECDSA signature and the DC records PKINIT. This first test is
+online; offline ECC logon would additionally require an associated ECDH key.
