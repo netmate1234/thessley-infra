@@ -1160,11 +1160,26 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
                     ticket.data(), ticket.size(), nullptr, 0,
                     unlockScenario, &logonId, authPackage,
                     CLSID_ThessleyAD, pcpcs);
+                wchar_t layoutDetail[256]{};
+                if (SUCCEEDED(hr) && pcpcs->rgbSerialization &&
+                    pcpcs->cbSerialization >= sizeof(KERB_TICKET_LOGON))
+                {
+                    const auto* ticketLogon =
+                        reinterpret_cast<const KERB_TICKET_LOGON*>(
+                            pcpcs->rgbSerialization);
+                    swprintf_s(layoutDetail, ARRAYSIZE(layoutDetail),
+                        L"scenario=%s message_type=%lu flags=0x%08lX service_len=%lu service_pointer_field=0x%llX tgt_len=%lu tgt_pointer_field=0x%llX ticket_bytes_omitted",
+                        unlockScenario ? L"unlock" : L"logon",
+                        static_cast<unsigned long>(ticketLogon->MessageType),
+                        static_cast<unsigned long>(ticketLogon->Flags),
+                        static_cast<unsigned long>(ticketLogon->ServiceTicketLength),
+                        static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(ticketLogon->ServiceTicket)),
+                        static_cast<unsigned long>(ticketLogon->TicketGrantingTicketLength),
+                        static_cast<unsigned long long>(reinterpret_cast<ULONG_PTR>(ticketLogon->TicketGrantingTicket)));
+                }
                 ProviderDiag(L"BuildADTicketLogon", hr,
                     SUCCEEDED(hr) ? pcpcs->cbSerialization : 0,
-                    unlockScenario
-                        ? L"Kerberos ticket-unlock layout; ticket bytes omitted"
-                        : L"Kerberos ticket-logon layout; ticket bytes omitted");
+                    layoutDetail[0] ? layoutDetail : L"serialization build failed");
             }
             if (SUCCEEDED(hr))
             {

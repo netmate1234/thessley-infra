@@ -195,6 +195,81 @@ The phone must display the account and computer and require local user
 verification before signing. Offline first logon is unavailable because the
 phone and PC need the DC; retain the normal recovery credential.
 
+#### Cache-miss run after broker restart (2026-10-30)
+
+The Clone 1 run at 12:44–12:46 UTC did **not** test ticket serialization or
+Windows logon. The broker restarted at 12:40 UTC, which cleared its
+in-memory-only ticket cache. Each later QR attempt reached the provider, but
+the broker logged `TicketCacheMiss` for the `startmenutest` SID and the
+provider returned `0x80070490` (`ERROR_NOT_FOUND`) before calling LSA. There
+was no `TicketDelivered`, `ADTicketSerializationReady`, or `ReportResult` for
+either attempt. The user was already signed out, so there was no active
+session from which this test broker could capture a ticket.
+
+This means the **temporary Clone 1 harness** needs a normal logon for that
+user on that PC to seed a three-minute ticket cache. It would need this on
+each PC after cache loss or expiry. That is a limitation of the harness, not
+a requirement of the intended QR design, and the harness must not be presented
+as a usable passwordless sign-in implementation. Do not ask for repeated
+password/PIN logons just to produce another cache-miss result.
+
+The passwordless design instead has the phone use its enrolled, non-exportable
+key for PKINIT directly with the domain controller on every sign-in, then
+obtain a fresh TGT and the target computer's host service ticket. It sends the
+short-lived tickets to that computer over an authenticated, machine-bound
+channel for the isolated `KERB_TICKET_LOGON` proof. This removes the need to
+seed each workstation with a previous user logon. Kerberos PKINIT is the
+standard public-key initial-authentication exchange; Windows smart-card
+domain sign-in uses PKINIT as well.
+
+Apache Kerby was inspected as a possible Java client and is **not suitable as
+a drop-in PKINIT implementation** in its current source state. Its identity
+parser recognizes `PKCS11:` but leaves PKCS#11 parsing and certificate loading
+as TODO/empty methods; the PKINIT request path's `signAuthPack()` wraps the
+AuthPack but does not call the separate helper that creates CMS signed data.
+Using Kerby would require completing and maintaining those security-critical
+paths before it could be evaluated with Android Keystore.
+
+MIT krb5 is a more credible implementation base to prototype: its PKINIT
+configuration accepts a `PKCS11:` identity and its PKINIT crypto plugin has a
+PKCS#11 signing path. A possible Android design is MIT krb5 for the protocol
+plus a small custom PKCS#11 module that exposes the phone certificate and
+forwards private-key signing to Android Keystore through JNI. This keeps the
+private key non-exportable, but is only a candidate: building and integrating
+the library for Android, bridging UI-bound key authorization safely, and
+proving interoperability with this AD CS/KDC setup remain open work. See the
+[MIT krb5 PKINIT identity configuration](https://github.com/krb5/krb5/blob/master/doc/admin/conf_files/krb5_conf.rst)
+and [MIT PKINIT PKCS#11 signing implementation](https://github.com/krb5/krb5/blob/master/src/plugins/preauth/pkinit/pkinit_crypto_openssl.c).
+
+The next implementation gates are: first, complete the isolated Clone 1
+`CPUS_LOGON` ticket-handoff test with the corrected provider; second, prototype
+phone-side PKINIT with the existing enrolled Android Keystore key. The phone
+prototype must obtain a TGT and `HOST/<computer>` ticket without exporting the
+key, then deliver those tickets through the provider and verify a real
+`CPUS_LOGON` desktop session. A normal logon used to seed the current
+three-minute Clone 1 harness cache is only test setup and does not meet the
+passwordless product requirement.
+
+#### Corrected Clone 1 provider reached Winlogon (2026-10-30)
+
+The 12:56:57Z broker event confirms a fresh `startmenutest` ticket was captured;
+the 1,435-byte ticket was delivered at 12:58:29Z. The registered provider
+reported `CPUS_LOGON` (`scenario=1`), Kerberos package ID 22, and a 1,467-byte
+serialization, matching the 32-byte `KERB_TICKET_LOGON` header plus ticket.
+Winlogon then returned `0xC000000D` (`STATUS_INVALID_PARAMETER`, substatus
+zero). Thus this run passed the cache and serialization-construction steps but
+did not create a desktop session. It does not justify another seeded login
+until the pointer representation is isolated.
+
+The next experiment is the already prepared direct LSA probe with the same
+ticket serialized in two forms: native pointers and self-relative offsets. If
+native pointers pass while offsets fail, Winlogon's handling of pointer fields
+in this package-specific blob is the likely boundary. If both fail, investigate
+the ticket's intended logon semantics and `CPUS_LOGON` compatibility. The
+checked-in probe accepts `kerberos raw-offsets` and `kerberos
+native-pointers`; its optional-argument parser does not require Negotiate for
+either case. Keep ticket bytes out of logs and files.
+
 For the requested `THESSLEYLAB\Administrator` test, the phone key is already
 enrolled and verified TEE, but the service configuration still has no
 `certificate_template`, no certificate has been issued, and the phone-key

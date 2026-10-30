@@ -36,10 +36,13 @@ log includes ticket contents, passwords, PINs, or key material.
 unexpired ticket cached for that account SID when LogonUI requested it. Check
 `broker.log` for `CaptureTicketStored` versus `CaptureHostTicketFailed` or
 `TicketCacheMiss`. This test captures a ticket from an already authenticated
-interactive session. The normal password/PIN login must therefore happen first;
-then sign out and try the ticket tile within the broker's three-minute cache
-window. A cold sign-in with no existing session cannot manufacture its own
-Kerberos ticket.
+interactive session. To run this **one Clone 1 harness test**, sign in once as
+the disposable test user, wait until `CaptureTicketStored` appears, then sign
+out and try the ticket tile within the broker's three-minute cache window. A
+cold sign-in with no existing session cannot manufacture its own Kerberos
+ticket. This setup step is a harness limitation, not an acceptable product
+requirement: the intended phone-PKINIT flow must obtain fresh tickets from the
+phone without first logging that user into every PC.
 
 `Phone approved, but Windows rejected the ticket (0xC000006D / 0xC00000E5)`
 means the broker delivered the ticket but Winlogon/LSA rejected the handoff.
@@ -55,18 +58,43 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
   Clone 1.
 - The provider now has a per-SID, opt-in ticket mode and calls a local broker
   only after phone approval.
-- The volatile broker and the separate ticket-test DLL compile on Linux with
-  MinGW. Clone 1 reached the ticket tile, but the first attempt failed because
-  no cached ticket was available (`ERROR_NOT_FOUND`, 0x80070490). In the next
-  failed run, the broker captured and delivered a 1,435-byte ticket; the
-  provider reported a 1,475-byte serialization and LSA returned
-  `STATUS_LOGON_FAILURE` / `STATUS_INTERNAL_ERROR` (`0xC00000E5` substatus).
-  The 40-byte difference is the size of `KERB_TICKET_UNLOCK_LOGON`, while
-  `CPUS_LOGON` requires the 32-byte `KERB_TICKET_LOGON` header. The corrected
-  provider now selects the header by scenario; that version is loaded on Clone
-  1 but still needs an end-to-end screen test. The ticket probe also accepts
-  explicit `kerberos|negotiate` and `native-pointers|raw-offsets` choices, so
-  both pointer representations can be compared with the Kerberos package.
+- The 12:14 UTC failure used DLL build `458c6a61`: the trace says
+  `CPUS_LOGON` but reports 1,475 serialized bytes for a 1,435-byte ticket.
+  That implies a 40-byte unlock header, inconsistent with both the scenario
+  and the committed source's expected 32-byte logon header (1,467 bytes). It
+  was an intermediate/unmatched DLL and is not a valid baseline for the current
+  source.
+- DLL build `ae1c970a` is the corrected provider currently registered on Clone
+  1. The 12:45 and 12:46 attempts stopped earlier: its broker had restarted at
+  12:40, clearing the volatile cache, and logged `TicketCacheMiss` for the
+  `startmenutest` SID. The provider returned `0x80070490` before serialization
+  or LSA. Those attempts did not test the corrected header or Winlogon handoff.
+- The 12:56–12:58 UTC run did reach the corrected provider. The broker logged
+  `CaptureTicketStored` for `startmenutest` at 12:56:57Z and delivered the
+  1,435-byte ticket at 12:58:29Z. The provider built the expected 1,467-byte
+  `CPUS_LOGON` serialization (`scenario=1`, Kerberos package ID 22), then
+  Winlogon reported `0xC000000D` (`STATUS_INVALID_PARAMETER`), with substatus
+  zero. This is the first current-build end-to-end rejection; it is not a
+  cache miss and does not prove a successful desktop logon.
+- The next diagnostic must isolate the serialization representation. The
+  direct `ticket_logon_probe` can submit the same structure with native
+  pointers or with the packed offsets unchanged. The checked-in CLI accepts
+  `kerberos raw-offsets` and `kerberos native-pointers`; use both against the
+  same freshly captured ticket if possible. Native success plus raw-offset
+  failure would implicate LogonUI/Winlogon's pointer relocation for this
+  package-specific structure. If both modes fail, investigate the ticket
+  semantics and the `KERB_TICKET_LOGON`/interactive-logon combination instead.
+  No ticket bytes should be logged or persisted.
+- Tie future logs to the registered DLL's full SHA-256, not only the shortened
+  filename suffix. Do not repeat the password-seeded test after a cache miss
+  unless the broker log first confirms a fresh `CaptureTicketStored` event.
+- The local `ticket_logon_probe.cpp` parser already accepts the Kerberos
+  package and pointer mode independently, in either optional-argument order.
+  For clarity, use the explicit form
+  `ticket_logon_probe.exe <luid-low-hex> <host-spn> interactive kerberos raw-offsets`
+  to test raw offsets with Kerberos, and replace `raw-offsets` with
+  `native-pointers` for the comparison. The earlier claim that this source
+  required Negotiate for raw offsets does not match the checked-in parser.
 - The next test must use a disposable, low-privilege AD account with its own
   phone approval. Do not use `Administrator` or the everyday `martin` account.
 - A successful sign-in would only prove the Clone 1 Winlogon handoff. It would
