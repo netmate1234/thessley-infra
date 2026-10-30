@@ -141,18 +141,37 @@ login mechanism:
    Winlogon/LSA accepts it for `CPUS_LOGON` and creates a usable interactive
    desktop session, not merely a network token or cached ticket.
 
-This is a **candidate, not a verified implementation**. Microsoft describes
+This was a **candidate, not a verified implementation**. Microsoft describes
 `KERB_TICKET_LOGON` as a network logon and separately documents Credential
 Provider serialization; it does not document this custom desktop-logon
-combination. The LSA token-creation substep has now passed on Clone 1; the
-remaining gate is to send the ticket through a minimal Credential Provider
-and verify that `CPUS_LOGON` creates a desktop session with the expected SID
-and ticket cache. A successful LSA token alone is not a pass. If Winlogon
-rejects this path or creates no interactive desktop, stop this route and
-return to the documented smart-card credential path; do not issue the
-phone-key certificate or enable a sign-in policy. Only after the desktop test
-succeeds should the ticket source be changed to phone PKINIT. Keep all tickets
-in memory, wipe them after one use, and never log or persist them.
+combination. Clone 1 testing now covers both pointer forms at direct LSA and
+the actual Credential Provider path:
+
+- Direct `LsaLogonUser(Interactive, KerbTicketLogon)` accepted a native
+  in-buffer pointer and returned a primary token; the same structure with a
+  raw `0x20` offset returned `STATUS_INVALID_PARAMETER`.
+- The offset-based Credential Provider returned
+  `STATUS_INVALID_PARAMETER` (`0xC000000D`) through LogonUI.
+- A separate provider build using a native pointer reached `ReportResult` but
+  returned `STATUS_LOGON_FAILURE` / `STATUS_INTERNAL_ERROR`
+  (`0xC000006D` / `0xC00000E5`). It did not create a desktop session.
+
+The direct probe and provider attempts used separate tickets for the same
+account and HOST SPN; the ticket bytes were not compared or logged. The native
+pointer error is consistent with the provider's address not being valid in the
+process that calls LSA, but the status alone does not prove Winlogon's exact
+copy/rebase behavior. No supported `KERB_TICKET_LOGON` packing contract for a
+Credential Provider was found. Do not repeat this experiment or start phone
+PKINIT work on top of this handoff unless a new documented or demonstrated
+Winlogon representation is identified. Even a successful run of this
+harness would require a password-seeded HOST ticket for each computer and
+would therefore miss the product requirement.
+
+The ticket route is not a working path. Keep all existing recovery providers
+available and keep phone-key certificate issuance/sign-in disabled. The next
+technical route to evaluate is the documented Kerberos certificate/smart-card
+logon path with a phone signing bridge; its production signing and cost
+requirements remain unresolved.
 
 Microsoft's [KERB_TICKET_LOGON documentation](https://learn.microsoft.com/en-us/windows/win32/api/ntsecapi/ns-ntsecapi-kerb_ticket_logon)
 explicitly describes a network-logon structure. The [LsaLogonUser
@@ -195,7 +214,7 @@ The phone must display the account and computer and require local user
 verification before signing. Offline first logon is unavailable because the
 phone and PC need the DC; retain the normal recovery credential.
 
-#### Cache-miss run after broker restart (2026-10-30)
+#### Earlier cache-miss diagnostic (2026-10-30)
 
 The Clone 1 run at 12:44–12:46 UTC did **not** test ticket serialization or
 Windows logon. The broker restarted at 12:40 UTC, which cleared its
@@ -213,14 +232,13 @@ a requirement of the intended QR design, and the harness must not be presented
 as a usable passwordless sign-in implementation. Do not ask for repeated
 password/PIN logons just to produce another cache-miss result.
 
-The passwordless design instead has the phone use its enrolled, non-exportable
-key for PKINIT directly with the domain controller on every sign-in, then
-obtain a fresh TGT and the target computer's host service ticket. It sends the
-short-lived tickets to that computer over an authenticated, machine-bound
-channel for the isolated `KERB_TICKET_LOGON` proof. This removes the need to
-seed each workstation with a previous user logon. Kerberos PKINIT is the
-standard public-key initial-authentication exchange; Windows smart-card
-domain sign-in uses PKINIT as well.
+An earlier proposal had the phone use its enrolled, non-exportable key for
+PKINIT directly with the domain controller and deliver tickets to the PC for
+`KERB_TICKET_LOGON`. The subsequent Clone 1 Credential Provider tests rejected
+both tested pointer representations, so that proposal is superseded and must
+not be treated as an implementation plan. Kerberos PKINIT remains the
+standard public-key initial-authentication exchange, but the Windows handoff
+for this design is unresolved.
 
 Apache Kerby was inspected as a possible Java client and is **not suitable as
 a drop-in PKINIT implementation** in its current source state. Its identity
@@ -241,34 +259,30 @@ proving interoperability with this AD CS/KDC setup remain open work. See the
 [MIT krb5 PKINIT identity configuration](https://github.com/krb5/krb5/blob/master/doc/admin/conf_files/krb5_conf.rst)
 and [MIT PKINIT PKCS#11 signing implementation](https://github.com/krb5/krb5/blob/master/src/plugins/preauth/pkinit/pkinit_crypto_openssl.c).
 
-The next implementation gates are: first, complete the isolated Clone 1
-`CPUS_LOGON` ticket-handoff test with the corrected provider; second, prototype
-phone-side PKINIT with the existing enrolled Android Keystore key. The phone
-prototype must obtain a TGT and `HOST/<computer>` ticket without exporting the
-key, then deliver those tickets through the provider and verify a real
-`CPUS_LOGON` desktop session. A normal logon used to seed the current
-three-minute Clone 1 harness cache is only test setup and does not meet the
-passwordless product requirement.
+Do not prototype phone-side PKINIT until a supported Windows handoff is
+identified and demonstrated to create a real `CPUS_LOGON` desktop session.
+The ticket experiment is paused at the Windows handoff boundary; the phone's
+TEE key and certificate must not be enabled as a Windows logon credential
+until that bridge is proven.
 
-#### Corrected Clone 1 provider reached Winlogon (2026-10-30)
+#### Clone 1 ticket handoff results (2026-10-30)
 
-The 12:56:57Z broker event confirms a fresh `startmenutest` ticket was captured;
-the 1,435-byte ticket was delivered at 12:58:29Z. The registered provider
-reported `CPUS_LOGON` (`scenario=1`), Kerberos package ID 22, and a 1,467-byte
-serialization, matching the 32-byte `KERB_TICKET_LOGON` header plus ticket.
-Winlogon then returned `0xC000000D` (`STATUS_INVALID_PARAMETER`, substatus
-zero). Thus this run passed the cache and serialization-construction steps but
-did not create a desktop session. It does not justify another seeded login
-until the pointer representation is isolated.
+The offset-based Credential Provider produced a 1,467-byte `CPUS_LOGON`
+serialization, then failed with `STATUS_INVALID_PARAMETER` (`0xC000000D`). A
+separate native-pointer provider attempt reached `ReportResult` but failed
+with `STATUS_LOGON_FAILURE` / `STATUS_INTERNAL_ERROR`
+(`0xC000006D` / `0xC00000E5`). Neither attempt created a desktop session.
+Direct LSA probing accepted a native in-buffer pointer and rejected a raw
+offset, but those probes and provider attempts used separate ticket instances;
+their ticket bytes were not compared.
 
-The next experiment is the already prepared direct LSA probe with the same
-ticket serialized in two forms: native pointers and self-relative offsets. If
-native pointers pass while offsets fail, Winlogon's handling of pointer fields
-in this package-specific blob is the likely boundary. If both fail, investigate
-the ticket's intended logon semantics and `CPUS_LOGON` compatibility. The
-checked-in probe accepts `kerberos raw-offsets` and `kerberos
-native-pointers`; its optional-argument parser does not require Negotiate for
-either case. Keep ticket bytes out of logs and files.
+These results do not establish exactly how Winlogon copies or rebases the
+serialized buffer, and Microsoft's documented Credential Provider contract
+does not specify a `KERB_TICKET_LOGON` pointer-packing convention. The
+experiment is paused; repeat it only if a new supported handoff representation
+is identified. The harness also required an ordinary password sign-in on
+Clone 1 to seed its HOST-ticket cache, so it cannot prove the requested
+passwordless-across-PCs experience even if the handoff were made to work.
 
 For the requested `THESSLEYLAB\Administrator` test, the phone key is already
 enrolled and verified TEE, but the service configuration still has no

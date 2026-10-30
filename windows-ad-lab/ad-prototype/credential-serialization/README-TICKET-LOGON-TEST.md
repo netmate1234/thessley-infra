@@ -48,9 +48,10 @@ phone without first logging that user into every PC.
 means the broker delivered the ticket but Winlogon/LSA rejected the handoff.
 `0xC00000E5` is `STATUS_INTERNAL_ERROR`; inspect the provider's
 `RetrieveAdTicketKerberosPackage`, `BuildADTicketLogon`, and `ReportResult`
-events alongside the broker's `TicketDelivered` event. The provider now uses
-the Kerberos authentication package and emits the correct `KERB_TICKET_LOGON`
-or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
+events alongside the broker's `TicketDelivered` event. In the recorded
+Clone 1 `CPUS_LOGON` tests, the provider emitted a 32-byte
+`KERB_TICKET_LOGON` header plus the ticket. The native-pointer and offset
+provider variants both failed, with different statuses.
 
 ## Current state
 
@@ -74,7 +75,7 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
 - The 12:56–12:58 UTC run did reach the corrected provider. The broker logged
   `CaptureTicketStored` for `startmenutest` at 12:56:57Z and delivered the
   1,435-byte ticket at 12:58:29Z. The provider built the expected 1,467-byte
-  `CPUS_LOGON` serialization (`scenario=1`, Kerberos package ID 22), then
+  `CPUS_LOGON` serialization (`scenario=1`, Kerberos package ID 2), then
   Winlogon reported `0xC000000D` (`STATUS_INVALID_PARAMETER`), with substatus
   zero. This is the first current-build end-to-end rejection; it is not a
   cache miss and does not prove a successful desktop logon.
@@ -91,24 +92,29 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
   serializations; the current provider's offset form still fails in the actual
   sign-in path. No ticket bytes were logged, and the one-shot SYSTEM task was
   removed after the probe.
-- The direct pointer comparison is complete. A separate ticket-provider build
-  now passes the native in-buffer pointer form. It is registered at
-  `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketTestCredentialProvider-73002320d8b9511d.dll`
-  with SHA-256
-  `73002320d8b9511de099cc19d575db2713c3f5477a08de96125bdafffb9c24bc`.
-  The prior offset-based DLL remains at
+- A later actual sign-in attempt used the native-pointer provider build and a
+  newly captured `startmenutest` ticket (session 4, LUID `00000000:0072FC16`).
+  The provider reported `CPUS_LOGON`, Kerberos package 2, a 1,467-byte buffer,
+  and `pointer_mode=native`; LogonUI then returned
+  `STATUS_LOGON_FAILURE` / `STATUS_INTERNAL_ERROR`
+  (`0xC000006D` / `0xC00000E5`). The offset-based provider had previously
+  returned `STATUS_INVALID_PARAMETER` (`0xC000000D`) through LogonUI. Neither
+  representation produced a desktop sign-in. The direct LSA probe and these
+  provider attempts used separate ticket instances of the same account/SPN;
+  only size and logon metadata were compared, not ticket bytes.
+- The native-pointer provider experiment has been rolled back. The currently
+  registered ticket-test DLL is the offset build at
   `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketTestCredentialProvider-ae1c970a52a898b4.dll`
   with SHA-256
   `ae1c970a52a898b4e76112eb8be7a439290571ae3f777dfc3b620a859096af73`.
-  SYSTEM rollback task `Thessley-Ticket-Native-Pointer-Rollback` was verified
-  and is due at 14:40 CEST on 2026-10-30. No sign-in attempt has been made with
-  the native-pointer provider yet. The existing TPM/VSC provider and Windows
-  password/PIN options remain registered. After a fresh password sign-in
-  captures a ticket, sign out and immediately test the experimental QR tile.
-  Success would prove this pointer representation works in the actual
-  Credential Provider handoff; failure would rule out this ticket
-  serialization route and return focus to the supported certificate/PKINIT
-  approach.
+  The failed native build remains at
+  `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketTestCredentialProvider-73002320d8b9511d.dll`
+  with SHA-256
+  `73002320d8b9511de099cc19d575db2713c3f5477a08de96125bdafffb9c24bc`.
+  The SYSTEM rollback task was manually triggered and verified, then removed.
+  The existing TPM/VSC provider and built-in password/PIN providers were not
+  changed. `query user` reports no active console user after the failed QR
+  attempt.
 - Tie future logs to the registered DLL's full SHA-256, not only the shortened
   filename suffix. The local source now logs the message type, flags, ticket
   lengths, and pointer-field values at serialization time, without logging
@@ -121,11 +127,11 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
   `C:\ProgramData\ThessleyPamWin\ad-ticket-logon-test\ThessleyADTicketBroker.before-20261030-141710.exe`.
   The probe SHA-256 is
   `93a751534b17deefdb69bcf68d22be16ec5dc00e1b1ece3c4dff47085dcfdfa8`.
-  The ordinary `startmenutest` session is currently active; its password sign-in
-  was only needed to seed this diagnostic ticket. This is not a product
-  sign-in requirement. Do not repeat the password-seeded test after a cache
-  miss unless the broker log first confirms a fresh `CaptureTicketStored`
-  event.
+  A password sign-in was needed to seed each diagnostic HOST ticket on this
+  computer. That is a harness limitation and would violate the product goal if
+  required on every PC. The failed provider handoff is documented above; do
+  not repeat this test unless a new, supported handoff representation is
+  identified.
 - The local `ticket_logon_probe.cpp` parser already accepts the Kerberos
   package and pointer mode independently, in either optional-argument order.
   For clarity, use the explicit form
@@ -133,10 +139,14 @@ or `KERB_TICKET_UNLOCK_LOGON` layout for the active scenario.
   to test raw offsets with Kerberos, and replace `raw-offsets` with
   `native-pointers` for the comparison. The earlier claim that this source
   required Negotiate for raw offsets does not match the checked-in parser.
-- The next test must use a disposable, low-privilege AD account with its own
-  phone approval. Do not use `Administrator` or the everyday `martin` account.
-- A successful sign-in would only prove the Clone 1 Winlogon handoff. It would
-  not validate Android PKINIT or the eventual physical-PC flow.
+- The ticket-provider experiment is paused. Do not ask for another password
+  sign-in or repeat the same QR attempt unless a new, supported serialization
+  or Windows handoff mechanism is identified. The experiment cannot meet the
+  product requirement because it needs a prior password sign-in on each PC to
+  seed its HOST-ticket cache.
+- Direct LSA acceptance is not proof of Credential Provider/Winlogon support.
+  Current evidence does not establish exactly how Winlogon copies or rebases
+  this package-specific buffer.
 
 ## Build
 
@@ -150,7 +160,7 @@ bash infra/windows-ad-lab/ad-prototype/windows-logon-provider/build.sh
 Outputs are written under `/tmp/thessley-ad-*.exe` and
 `/tmp/thessley-ad-provider-build/`. Builds do not install or register anything.
 
-## Before testing
+## Historical test procedure (already run on Clone 1)
 
 1. Create a disposable, non-admin domain user and enroll a phone for it through
    the existing AD enrollment flow.

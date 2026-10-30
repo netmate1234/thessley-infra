@@ -89,12 +89,14 @@ final LSA status/substatus. When changing the provider DLL, verify its SHA-256
 against the build output and reload LogonUI (a VM reboot was used for this
 test) before interpreting the trace.
 
-The direct phone-key target is PKINIT in Android followed by Kerberos ticket
-logon in Windows. The phone key performs the KDC authentication signature; the
-Windows machine receives only the short-lived KDC-issued ticket material. The
-ticket serializer is not yet connected to the Credential Provider, and this
-flow has not yet passed an interactive logon test. The existing TPM VSC path
-remains available as recovery.
+The proposed direct phone-key route was PKINIT in Android followed by
+`KERB_TICKET_LOGON` in Windows. Clone 1 tests have now rejected both the
+offset-based and native-pointer Credential Provider serializations; neither
+created a desktop session. The direct LSA probe's success with a native
+pointer does not establish that Winlogon supports this handoff. The route is
+paused unless a new supported handoff is demonstrated. The existing TPM VSC
+path remains a separate lab sign-in method and does not use the phone key for
+PKINIT.
 
 ## Build
 
