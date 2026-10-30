@@ -142,14 +142,25 @@ key while the private key remains in Android Keystore.
 
 The CSR exposed a service validation bug: the validator required at least 256
 DER bytes and a randomized Windows-pilot subject, while this valid P-256 phone
-CSR is 223 bytes and uses `CN=Thessley AD Logon Key`. The local source now
-accepts that exact EC profile and requires its SPKI digest to match an active
-AD key for the approved SID at upload, issuer claim, and certificate
-acceptance. Focused tests pass. This change has not yet been deployed to the
-DC. The live service config still has `certificate_template` unset, so it
-cannot issue a certificate, and the phone-key sign-in policy remains disabled.
-The CSR is public material; no certificate or Windows sign-in credential has
-been created.
+CSR is 223 bytes and uses `CN=Thessley AD Logon Key`. The fix accepts that exact
+EC profile and requires its SPKI digest to match an active AD key for the
+approved SID at upload, issuer claim, and certificate acceptance. On
+2026-10-30, the fix was deployed to `THESSLEY-DC1`; the installed Python
+validator accepted the Android CSR, verified its signature, and confirmed its
+SPKI hash matched an active key for the tested SID. This was a read-only
+validation; it did not claim an issuance job or contact AD CS.
+
+There is still **no certificate**. The live service configuration has
+`certificate_template` unset, the phone-key sign-in policy remains disabled,
+and no certificate was issued. The CSR and active key used for that check
+belong to `THESSLEYLAB\Administrator`; do not use that privileged account for
+a certificate-issuance experiment. `THESSLEYLAB\qrtestadmin` is enabled and
+belongs to the workstation-admin group, but has no active AD logon key yet.
+It is not a Domain Admin, but it still has elevated rights on enrolled
+workstations. Use a dedicated test identity with only the rights needed for
+the pilot and enroll its own TEE key before CA issuance. A certificate by
+itself would still not enable Windows sign-in because the phone-signing bridge
+is not implemented.
 
 The next proof must bind a fresh Windows sign-in challenge to the QR request,
 have the phone sign it after biometric approval, and demonstrate that the

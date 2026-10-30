@@ -122,7 +122,7 @@ client and KDC proof is complete.
    registering it on Clone 1. Do not change the existing local tile or the
    Martin VSC baseline.
 
-## Live certificate-issuance checkpoint (2026-10-29)
+## Live certificate-issuance checkpoint (2026-10-30)
 
 Read-only inspection of `THESSLEY-DC1` found the following state:
 
@@ -165,6 +165,17 @@ group. The agent key must be accessible only to the issuance broker identity;
 do not use a Domain Admin or the DC's general-purpose Administrator as the
 broker. Keep `Copy 2 of Smartcard Logon` untouched and unpublished until its
 ACL and RA-signature requirements are corrected or the object is retired.
+
+On 2026-10-30, read-only checks confirmed that the DC API and admin page were
+healthy after deploying the CSR-validator fix. The live `service.json` still
+has no `certificate_template`, and the CA's published templates remain
+unchanged. The deployed validator accepted the 223-byte phone-generated P-256
+CSR and matched its SPKI hash to the active AD key for
+`THESSLEYLAB\Administrator`; this did not create an issuance job or issue a
+certificate. The Administrator key is privileged, so do not use it to prove
+certificate issuance. The enabled `THESSLEYLAB\qrtestadmin` account is in the
+configured workstation-admin group and currently has no active AD logon key;
+enroll a dedicated test key before planning a narrowly scoped issuance test.
 
 ### Phone approval must bind the exact certificate request
 
