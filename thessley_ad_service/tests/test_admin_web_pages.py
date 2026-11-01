@@ -3,6 +3,7 @@ import re
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from infra.thessley_ad_service.admin_web import AdminWeb
 
@@ -439,6 +440,46 @@ class DirectoryPagingTest(unittest.TestCase):
             {"sid": "S-1-5-21-1-2-3-500", "user": "Administrator", "csrf": CSRF},
             single_sid="S-1-5-21-1-2-3-999999")
         self.assertEqual(status, 404)
+
+
+class PersistentSessionTest(unittest.TestCase):
+    def test_session_survives_a_new_store_instance(self):
+        from infra.thessley_ad_service.admin_web import AdminSessionStore
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(pathlib.Path(tmp) / "state.sqlite3")
+            first = AdminSessionStore(db)
+            first.create("token-1", {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+            # simulate a restart: brand new store over the same file
+            second = AdminSessionStore(db)
+            session = second.lookup("token-1")
+            self.assertIsNotNone(session)
+            self.assertEqual(session["sid"], "S-1")
+            self.assertEqual(session["csrf"], CSRF)
+
+    def test_idle_and_absolute_expiry(self):
+        from infra.thessley_ad_service import admin_web as aw
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(pathlib.Path(tmp) / "state.sqlite3")
+            store = aw.AdminSessionStore(db)
+            store.create("token-2", {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+            with patch.object(aw.time, "time", return_value=aw.time.time() + aw._SESSION_SECONDS + 5):
+                self.assertIsNone(store.lookup("token-2"))
+
+    def test_logout_removes_the_persisted_session(self):
+        from infra.thessley_ad_service.admin_web import AdminSessionStore
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(pathlib.Path(tmp) / "state.sqlite3")
+            store = AdminSessionStore(db)
+            store.create("token-3", {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+            store.delete("token-3")
+            self.assertIsNone(AdminSessionStore(db).lookup("token-3"))
+
+    def test_raw_token_is_not_stored(self):
+        from infra.thessley_ad_service.admin_web import AdminSessionStore
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(pathlib.Path(tmp) / "state.sqlite3")
+            AdminSessionStore(db).create("secret-token", {"sid": "S-1", "user": "A", "csrf": CSRF})
+            self.assertNotIn(b"secret-token", pathlib.Path(db).read_bytes())
 
 
 class QrLoginPageTest(unittest.TestCase):

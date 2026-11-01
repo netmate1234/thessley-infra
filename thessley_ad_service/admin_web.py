@@ -5,8 +5,10 @@ from __future__ import annotations
 import base64
 import ctypes
 import html
+import hashlib
 import io
 import json
+import sqlite3
 import logging
 import os
 import re
@@ -28,6 +30,85 @@ _ADMINISTRATORS_SID = "S-1-5-32-544"
 _SESSION_COOKIE = "thessley_ad_admin"
 _PREAUTH_COOKIE = "thessley_ad_preauth"
 _SESSION_SECONDS = 900
+_SESSION_ABSOLUTE_SECONDS = 7 * 24 * 3600
+
+
+class AdminSessionStore:
+    """Admin web sessions that survive a service restart or reboot.
+
+    Tokens are stored hashed; the cookie keeps its 15-minute idle timeout and
+    gains a hard 7-day lifetime so a stolen cookie does not last forever.
+    """
+
+    def __init__(self, path):
+        self.path = str(path)
+        self._initialize()
+
+    def _connect(self):
+        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
+        connection.execute("PRAGMA busy_timeout = 5000")
+        return connection
+
+    def _initialize(self):
+        connection = self._connect()
+        try:
+            connection.executescript(
+                "CREATE TABLE IF NOT EXISTS admin_sessions ("
+                " token_hash TEXT PRIMARY KEY, sid TEXT NOT NULL, username TEXT NOT NULL,"
+                " csrf TEXT NOT NULL, created_at REAL NOT NULL, last_seen REAL NOT NULL)"
+            )
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def create(self, token: str, session: dict) -> None:
+        now = time.time()
+        connection = self._connect()
+        try:
+            connection.execute(
+                "DELETE FROM admin_sessions WHERE last_seen < ? OR created_at < ?",
+                (now - _SESSION_SECONDS, now - _SESSION_ABSOLUTE_SECONDS),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO admin_sessions(token_hash, sid, username, csrf, created_at, last_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (self._hash(token), session["sid"], session["user"], session["csrf"], now, now),
+            )
+        finally:
+            connection.close()
+
+    def lookup(self, token: str) -> dict | None:
+        now = time.time()
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT sid, username, csrf, created_at, last_seen FROM admin_sessions WHERE token_hash = ?",
+                (self._hash(token),),
+            ).fetchone()
+            if row is None:
+                return None
+            sid, username, csrf, created_at, last_seen = row
+            if now - last_seen > _SESSION_SECONDS or now - created_at > _SESSION_ABSOLUTE_SECONDS:
+                connection.execute("DELETE FROM admin_sessions WHERE token_hash = ?", (self._hash(token),))
+                return None
+            if now - last_seen > 30:
+                connection.execute("UPDATE admin_sessions SET last_seen = ? WHERE token_hash = ?",
+                                   (now, self._hash(token)))
+            return {"sid": sid, "user": username, "csrf": csrf, "last": time.monotonic()}
+        except sqlite3.Error:
+            return None
+        finally:
+            connection.close()
+
+    def delete(self, token: str) -> None:
+        connection = self._connect()
+        try:
+            connection.execute("DELETE FROM admin_sessions WHERE token_hash = ?", (self._hash(token),))
+        finally:
+            connection.close()
 
 
 class WindowsAdminLogin:
@@ -97,12 +178,13 @@ class AdminWeb:
 
     def __init__(self, *, directory, phones, challenges, allowed_group_sids, authority: str,
                  public_host: str, certificate_fingerprint: str, login_policy=None, machines=None,
-                 ad_logon_keys=None, log_path=None):
+                 ad_logon_keys=None, log_path=None, session_store=None):
         self.directory = directory
         self.phones = phones
         self.challenges = challenges
         self.allowed_group_sids = frozenset(allowed_group_sids)
         self.log_path = log_path
+        self.session_store = session_store
         self.authority = authority
         self.public_host = public_host
         self.certificate_fingerprint = certificate_fingerprint
@@ -211,6 +293,11 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
 
     def _session(self, headers) -> tuple[str, dict] | tuple[None, None]:
         token = self._cookie(headers, _SESSION_COOKIE)
+        if self.session_store is not None:
+            if not token:
+                return None, None
+            session = self.session_store.lookup(token)
+            return (token, session) if session else (None, None)
         now = time.monotonic()
         with self._lock:
             session = self._sessions.get(token)
@@ -453,7 +540,10 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         token = secrets.token_urlsafe(32)
         csrf = secrets.token_urlsafe(32)
         with self._lock:
-            self._sessions[token] = {"sid": sid, "user": username, "csrf": csrf, "last": time.monotonic()}
+            session = {"sid": sid, "user": username, "csrf": csrf, "last": time.monotonic()}
+            self._sessions[token] = session
+            if self.session_store is not None:
+                self.session_store.create(token, session)
         _LOG.info("admin_login_ok method=%s sid=%s source=%s", method, sid, client_ip)
         return self._response(303, "", extra_headers=(
             ("Location", "/admin/"), self._cookie_header(_SESSION_COOKIE, token),
@@ -893,6 +983,8 @@ The account must change it at next sign-in.</p>
         if path == "/admin/logout":
             with self._lock:
                 self._sessions.pop(token, None)
+            if self.session_store is not None:
+                self.session_store.delete(token)
             return self._response(303, "", extra_headers=(("Location", "/admin/"),
                 ("Set-Cookie", f"{_SESSION_COOKIE}=; Path=/admin; Max-Age=0; Secure; HttpOnly; SameSite=Strict")))
         if path in ("/admin/policy/default", "/admin/policy/group", "/admin/policy/group/remove",

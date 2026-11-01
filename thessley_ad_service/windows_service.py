@@ -188,6 +188,8 @@ def main() -> int:
         )
         from .http_api import create_ad_enrollment_routes
         enrollment_routes = create_ad_enrollment_routes(phones, ad_logon_keys)
+        from .admin_web import AdminSessionStore
+        session_store = AdminSessionStore(STATE_PATH)
         admin_web = AdminWeb(
             directory=directory,
             phones=phones,
@@ -200,6 +202,7 @@ def main() -> int:
             machines=registry,
             ad_logon_keys=ad_logon_keys,
             log_path=LOG_PATH,
+            session_store=session_store,
         )
         api_server = make_server((config["bind_address"], API_PORT), str(CERT_PATH), str(KEY_PATH), routes)
         try:
