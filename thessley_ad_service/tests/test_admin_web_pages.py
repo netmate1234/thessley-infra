@@ -446,6 +446,18 @@ class DirectoryPagingTest(unittest.TestCase):
         self.assertEqual(status, 404)
 
 
+class AutoReloadTest(unittest.TestCase):
+    def test_reload_script_is_nonce_scoped(self):
+        tag, nonce = AdminWeb._auto_reload(2)
+        self.assertIn('nonce="' + nonce + '"', tag)
+        self.assertIn("setTimeout(function(){location.reload()},2000)", tag)
+
+    def test_url_reload_builds_a_javascript_string(self):
+        tag, _nonce = AdminWeb._auto_reload(3, "/admin/qr-login?id=abc")
+        self.assertIn('location.href="/admin/qr-login?id=abc"', tag)
+        self.assertIn("},3000)", tag)
+
+
 class LogPageTest(unittest.TestCase):
     def _web(self, path):
         web = object.__new__(AdminWeb)
