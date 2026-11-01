@@ -1233,6 +1233,9 @@ The account must change it at next sign-in.</p>
                 continue
             authorized = bool(user.get("authorized"))
             dc_administrator = bool(user.get("dc_administrator"))
+            # Only surface DC administrator status when it applies.
+            dc_badge = (f'<span class="badge yes">{self._icon("admin")} DC admin</span>'
+                        if dc_administrator else "")
             display_name = html.escape(user.get("name") or user.get("sam", ""))
             account_name = html.escape(self.authority + chr(92) + user.get("sam", ""))
             status_badge = '<span class="badge neutral">Disabled</span>' if not user.get("enabled") else ""
@@ -1252,7 +1255,7 @@ The account must change it at next sign-in.</p>
             content += f'''<section class="card account-card" id="account-{html.escape(sid)}"><div class="account-top"><div class="account-name">
 <span class="account-avatar">{self._icon("users")}</span><div class="account-heading"><h2>{display_name}</h2><div class="account-id">{account_name}</div>
 <div class="rights">{status_badge}<span class="badge {'yes' if authorized else 'no'}">{self._icon('monitor')} Workstation QR · {'Allowed' if authorized else 'Not allowed'}</span>
-<span class="badge {'yes' if dc_administrator else 'neutral'}">{self._icon('admin')} DC admin · {'Yes' if dc_administrator else 'No'}</span></div></div></div>
+{dc_badge}</div></div></div>
 <div class="trust-summary"><div><span class="trust-label">Phone</span><div class="trust-icons">{phone_markers}</div></div>
 <div><span class="trust-label">AD sign-in</span><div class="trust-icons">{logon_markers or '<span class="badge neutral">Not active</span>'}</div></div></div></div>'''
             phone_items = []
