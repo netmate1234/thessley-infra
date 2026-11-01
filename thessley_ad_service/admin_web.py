@@ -266,6 +266,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         "user-deleted": "AD user deleted and its Thessley keys revoked.",
         "phone-revoked": "Phone revoked. Linked AD sign-in keys were revoked with it.",
         "logon-key-revoked": "AD sign-in key revoked.",
+        "enrollment-confirmed": "Phone enrollment confirmed. The account is active on paired PCs.",
+        "ad-key-confirmed": "AD sign-in key confirmed and active.",
         "enrollment-cancelled": "Phone enrollment cancelled.",
         "ad-key-enrollment-cancelled": "AD sign-in key enrollment cancelled.",
         "workstation-qr-allowed": "Workstation QR allowed. The account can now use QR sign-in at paired workstations.",
@@ -1013,10 +1015,8 @@ The account must change it at next sign-in.</p>
             ):
                 return self._ad_logon_key_enrollment_page(request_id, session, message="The code did not match or the request expired.")
             _LOG.info("admin_ad_logon_key_enrollment_confirmed actor=%s request=%s", session["sid"], request_id)
-            sid = _query_sid({"sid": [form.get("sid", "")]})
-            sid_query = f"&sid={sid}" if sid else ""
-            return self._response(303, "", extra_headers=((
-                "Location", f"/admin/ad-logon-key-enrollment?id={request_id}{sid_query}"),))
+            return self._accounts_redirect(
+                "ad-key-confirmed", _query_sid({"sid": [form.get("sid", "")]}))
         if path == "/admin/cancel-ad-logon-key":
             request_id = form.get("id", "")
             if self.ad_logon_keys is not None and _REQUEST_ID.fullmatch(request_id):
@@ -1040,10 +1040,8 @@ The account must change it at next sign-in.</p>
                 _LOG.warning("admin_enrollment_confirmation_failed actor=%s request=%s", session["sid"], request_id)
                 return self._enrollment_page(request_id, session, message="The code did not match or expired.")
             _LOG.info("admin_enrollment_confirmed actor=%s request=%s", session["sid"], request_id)
-            sid = _query_sid({"sid": [form.get("sid", "")]})
-            sid_query = f"&sid={sid}" if sid else ""
-            return self._response(303, "", extra_headers=((
-                "Location", f"/admin/enrollment?id={request_id}{sid_query}"),))
+            return self._accounts_redirect(
+                "enrollment-confirmed", _query_sid({"sid": [form.get("sid", "")]}))
         if path == "/admin/cancel-enrollment":
             request_id = form.get("id", "")
             if not _REQUEST_ID.fullmatch(request_id):

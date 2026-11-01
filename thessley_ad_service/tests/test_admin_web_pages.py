@@ -567,6 +567,17 @@ class LogPageTest(unittest.TestCase):
         self.assertEqual(status, 503)
 
 
+class ConfirmationRedirectTest(unittest.TestCase):
+    def test_confirmation_notices_land_on_the_account(self):
+        sid = "S-1-5-21-1-2-3-1108"
+        for notice in ("ad-key-confirmed", "enrollment-confirmed"):
+            with self.subTest(notice=notice):
+                self.assertIn("confirmed", AdminWeb._notice_text(notice).lower())
+                _s, headers, _b = AdminWeb._accounts_redirect(notice, sid)
+                self.assertEqual(dict(headers)["Location"],
+                                 f"/admin/account?sid={sid}&notice={notice}")
+
+
 class EnrollmentStatusTest(unittest.TestCase):
     REQ = "C" * 32
 
