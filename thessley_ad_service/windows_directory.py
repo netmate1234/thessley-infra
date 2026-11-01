@@ -446,7 +446,7 @@ try {{
         The admin password is sent to a short-lived PowerShell child over stdin,
         never in its command line or logs, and is not retained by this service.
         """
-        if operation not in {"create", "update", "delete", "disable"}:
+        if operation not in {"create", "update", "delete", "disable", "password"}:
             raise ValueError("Unsupported AD user operation")
         if not isinstance(administrator, str) or not _USERNAME.fullmatch(administrator):
             raise ValueError("Invalid administrator account")
@@ -466,6 +466,10 @@ try {{
                 raise ValueError("The temporary password must be between 8 and 256 characters")
         if operation == "update" and not isinstance(enabled, bool):
             raise ValueError("Invalid account state")
+        if operation == "password":
+            if (not isinstance(initial_password, str) or len(initial_password) < 8
+                    or len(initial_password) > 256 or "\x00" in initial_password):
+                raise ValueError("The new password must be between 8 and 256 characters")
 
         script = r"""
 $ErrorActionPreference = 'Stop'
@@ -501,7 +505,7 @@ try {
         }
         $userDn = [string]$result.Properties['distinguishedname'][0]
         $found = [System.DirectoryServices.DirectoryEntry]::new("LDAP://$userDn", $authUser, [string]$data.password, $authType)
-        if ([string]$data.operation -in @('disable','delete')) {
+        if ([string]$data.operation -in @('disable','delete','password')) {
             $found.RefreshCache(@('tokenGroups'))
             $domainSid = $sid.Substring(0, $sid.LastIndexOf('-'))
             $protectedSids = @('S-1-5-32-544', "$domainSid-512", "$domainSid-518", "$domainSid-519")
@@ -568,6 +572,18 @@ try {
             $flags = [int]$found.Properties['userAccountControl'].Value
             $found.Properties['userAccountControl'].Value = $flags -bor 2
             $found.CommitChanges()
+            [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
+            $found.Dispose()
+        }
+        'password' {
+            # Reset through AD Web Services: LDAP/389 refuses password writes
+            # (0x80072035). The user must choose a new password at next sign-in.
+            Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
+            $adminCredential = [System.Management.Automation.PSCredential]::new(
+                $authUser, (ConvertTo-SecureString ([string]$data.password) -AsPlainText -Force))
+            Set-ADAccountPassword -Identity $sam -Reset -Credential $adminCredential `
+                -NewPassword (ConvertTo-SecureString ([string]$data.initial_password) -AsPlainText -Force) -ErrorAction Stop
+            Set-ADUser -Identity $sam -ChangePasswordAtLogon $true -Credential $adminCredential -ErrorAction Stop
             [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
             $found.Dispose()
         }
@@ -662,3 +678,9 @@ try {
     def delete_user(self, *, administrator: str, password: str, username: str) -> str:
         return self._manage_user("delete", administrator=administrator, password=password,
                                 username=username)
+
+    def set_user_password(self, *, administrator: str, password: str, username: str,
+                          new_password: str) -> str:
+        """Reset a non-privileged account's password; it must change at next sign-in."""
+        return self._manage_user("password", administrator=administrator, password=password,
+                                username=username, initial_password=new_password)

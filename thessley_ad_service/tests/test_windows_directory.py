@@ -113,6 +113,34 @@ class WindowsDirectoryTest(unittest.TestCase):
                     initial_password="Temp-Secret-1!",
                 )
 
+    def test_password_reset_uses_adws_and_guards_privileged_accounts(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "sid": USER_SID}), "")
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run", return_value=completed) as run:
+            sid = self.directory.set_user_password(
+                administrator="Administrator", password="Admin-Secret-1!",
+                username="martin", new_password="Fresh-Secret-2!",
+            )
+        self.assertEqual(sid, USER_SID)
+        script = base64.b64decode(run.call_args.args[0][-1]).decode("utf-16le")
+        self.assertIn("Set-ADAccountPassword", script)
+        self.assertIn("ChangePasswordAtLogon $true", script)
+        # Privileged accounts must be refused before any password write.
+        self.assertIn("-in @('disable','delete','password')", script)
+        self.assertNotIn("Invoke('SetPassword'", script)
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(payload["operation"], "password")
+        self.assertEqual(payload["initial_password"], "Fresh-Secret-2!")
+        self.assertNotIn("Fresh-Secret-2!", " ".join(run.call_args.args[0]))
+
+    def test_short_replacement_password_is_rejected_before_powershell(self):
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run") as run:
+            with self.assertRaisesRegex(ValueError, "8 and 256"):
+                self.directory.set_user_password(
+                    administrator="Administrator", password="Admin-Secret-1!",
+                    username="martin", new_password="short",
+                )
+            run.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

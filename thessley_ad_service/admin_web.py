@@ -258,6 +258,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             notice_text = {
                 "user-created": "AD user created. The account must change its temporary password at first sign-in.",
                 "user-updated": "AD user updated.",
+                "user-password": "AD password changed. The account must set a new one at next sign-in.",
                 "user-deleted": "AD user deleted and its Thessley keys revoked.",
             }.get(notice, "")
             return self._directory_page(session, notice=notice_text)
@@ -277,6 +278,19 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             return self._login_page(headers)
         if path == "/admin/users/new":
             return self._user_form(session)
+        if path == "/admin/user/password":
+            params = parse_qs(query, keep_blank_values=True)
+            sid_values = params.get("sid", [])
+            if len(sid_values) != 1 or not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid_values[0]):
+                return self._response(400, self._page("AD user", '<section class="card error">Invalid account reference.</section>'))
+            user = self._find_user(sid_values[0])
+            if not user:
+                return self._response(404, self._page("AD user", '<section class="card error">Account not found in Active Directory.</section>'))
+            if secrets.compare_digest(sid_values[0], session["sid"]):
+                return self._response(400, self._page("Change AD password", '<section class="card error">Use your own sign-in to change your password.</section>'))
+            if user.get("dc_administrator") or sid_values[0].endswith("-500"):
+                return self._response(403, self._page("Change AD password", '<section class="card error">Passwords for privileged and built-in administrator accounts cannot be changed here. Use a separate AD administration tool.</section>'))
+            return self._user_password_page(session, user)
         if path in ("/admin/user/edit", "/admin/user/delete"):
             params = parse_qs(query, keep_blank_values=True)
             sid_values = params.get("sid", [])
@@ -516,6 +530,25 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
 </form></section>'''
         return self._response(200, self._page("Edit AD user", body))
 
+    def _user_password_page(self, session: dict, user: dict, message: str = ""):
+        sid = html.escape(str(user["sid"]))
+        username = html.escape(str(user.get("sam", "")))
+        alert = f'<section class="card error">{html.escape(message)}</section>' if message else ""
+        body = f'''<h1>{self._icon("key")} Change AD password</h1>{alert}
+<section class="card"><p>Set a new temporary password for <strong>{html.escape(self.authority + chr(92) + str(user.get("sam", "")))}</strong>.
+The account must change it at next sign-in.</p>
+<form class="admin-user-form" method="post" action="/admin/users/password">
+<input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{sid}">
+<label for="new-account-password">New temporary password</label>
+<input id="new-account-password" name="new_password" type="password" required minlength="8" maxlength="256" autocomplete="new-password">
+<p class="muted small">The domain password policy still applies: minimum length, complexity, banned words and password history.</p>
+<label for="change-admin-password">Your administrator password</label>
+<input id="change-admin-password" name="admin_password" type="password" required autocomplete="current-password">
+<p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
+<div class="form-actions"><button>{self._icon("key")} Set password</button><a class="button secondary" href="/admin/">Cancel</a></div>
+</form></section>'''
+        return self._response(200, self._page("Change AD password", body))
+
     def _user_delete_page(self, session: dict, user: dict, message: str = ""):
         sid = html.escape(str(user["sid"]))
         username = html.escape(str(user.get("sam", "")))
@@ -566,6 +599,36 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
             _LOG.warning("admin_ad_user_created actor=%s target_sid=%s username=%s",
                          session["sid"], sid, username)
             return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-created"),))
+        if path == "/admin/users/password":
+            sid = form.get("sid", "")
+            user = self._find_user(sid)
+            if not user:
+                return self._response(404, self._page("AD user", '<section class="card error">Account not found. Refresh the account list.</section>'))
+            if secrets.compare_digest(sid, session["sid"]):
+                return self._response(400, self._page("Change AD password", '<section class="card error">Use your own sign-in to change your password.</section>'))
+            if user.get("dc_administrator") or sid.endswith("-500"):
+                return self._response(403, self._page("Change AD password", '<section class="card error">Passwords for privileged and built-in administrator accounts cannot be changed here. Use a separate AD administration tool.</section>'))
+            if not self._reauthenticate_admin(session, form):
+                return self._user_password_page(session, user, message="Enter your current administrator password to confirm this change.")
+            new_password = form.pop("new_password", "")
+            try:
+                if not callable(getattr(self.directory, "set_user_password", None)):
+                    raise ValueError("AD password changes are unavailable on this service.")
+                changed_sid = self.directory.set_user_password(
+                    administrator=session["user"], password=form.pop("_admin_password", ""),
+                    username=user["sam"], new_password=new_password,
+                )
+            except ValueError as exc:
+                return self._user_password_page(session, user, message=str(exc))
+            except Exception:
+                _LOG.exception("admin_ad_password_change_failed actor=%s target_sid=%s",
+                               session["sid"], sid)
+                return self._user_password_page(session, user, message="AD could not change the password. Check permissions and the password policy.")
+            finally:
+                new_password = ""
+            _LOG.warning("admin_ad_password_changed actor=%s target_sid=%s",
+                         session["sid"], changed_sid)
+            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-password"),))
         if path == "/admin/users/update":
             sid = form.get("sid", "")
             user = self._find_user(sid)
@@ -965,6 +1028,8 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
                 content += f'''<form method="post" action="/admin/enroll"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button>{self._icon('plus')} Enroll phone</button></form>'''
                 content += f'''<form method="post" action="/admin/enroll-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="secondary small">{self._icon('key')} Add AD sign-in key</button></form>'''
             content += f'''<a class="button secondary small" href="/admin/user/edit?sid={html.escape(sid)}">{self._icon('settings')} Edit</a>'''
+            if sid != session["sid"] and not dc_administrator and not sid.endswith("-500"):
+                content += f'''<a class="button secondary small" href="/admin/user/password?sid={html.escape(sid)}">{self._icon('key')} Change password…</a>'''
             if sid != session["sid"] and not dc_administrator and not sid.endswith("-500"):
                 content += f'''<a class="button danger small" href="/admin/user/delete?sid={html.escape(sid)}">{self._icon('warning')} Delete…</a>'''
             content += '</div></section>'
