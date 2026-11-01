@@ -191,7 +191,7 @@ h1{font-size:clamp(1.4rem,4vw,1.8rem);line-height:1.2;margin:0 0 1rem;letter-spa
 .account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}.qr-login{text-align:center}.qr-login .card{text-align:center}.qr-login .status-line{justify-content:center}.qr-login .button{margin-inline:auto}.log-tail{margin:0;max-height:70vh;overflow:auto;padding:1rem;border-radius:10px;background:#0d1720;color:#dbe7f2;font-size:.84rem;line-height:1.45}.log-tail code{white-space:pre-wrap;overflow-wrap:anywhere}
 .search-tools{margin:14px 0}.search-row{display:flex;align-items:center;gap:8px}.search-row input{flex:1;min-width:0}.search-row button{flex:none}.empty-results[hidden]{display:none}.empty-results{color:var(--muted)}
 .form-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}.form-actions form{margin:0}.form-actions button,.form-actions .button{margin:0}
-label{display:block;font-weight:650;margin:12px 0 5px}input,select{font:inherit;padding:10px 12px;border:1px solid #485d70;border-radius:9px;width:100%;max-width:100%;background:var(--field);color:var(--ink)}input:focus-visible,select:focus-visible,button:focus-visible,.button:focus-visible,summary:focus-visible{outline:3px solid #9acbff;outline-offset:2px}
+label{display:block;font-weight:650;margin:12px 0 5px}label.check-row{display:flex;align-items:center;gap:9px;font-weight:600}label.check-row input{width:auto;margin:0}input,select{font:inherit;padding:10px 12px;border:1px solid #485d70;border-radius:9px;width:100%;max-width:100%;background:var(--field);color:var(--ink)}input:focus-visible,select:focus-visible,button:focus-visible,.button:focus-visible,summary:focus-visible{outline:3px solid #9acbff;outline-offset:2px}
 button,.button{font:inherit;font-weight:700;background:var(--blue);color:#071522;border:0;border-radius:10px;min-height:46px;padding:11px 17px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;line-height:1.25}
 button:hover,.button:hover{filter:brightness(1.08)}button.danger,.button.danger{background:#71343b;color:#ffe7e9;border:1px solid #9e4d55}.button.secondary,button.secondary{background:#213545;border:1px solid #3b566c;color:#d9ebfa}.small{font-size:.9rem;min-height:42px;padding:9px 13px}form>.danger+.button{margin-left:8px}.qr-wrap{display:flex;justify-content:center;align-items:center;width:100%;max-width:100%;overflow:hidden;margin:14px 0}.qr{display:block;width:100%;max-width:min(320px,calc(100vw - 64px));height:auto;aspect-ratio:1;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;margin:0}.back-link{margin:0 0 12px}.back-link .icon{transform:rotate(180deg)}
 code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;border-color:#7b343e}.success{background:#183324;border-color:#35714b}.status-line{display:flex;align-items:center;gap:8px}.icon-good{color:var(--good)}.icon-warn{color:var(--warn)}.icon-bad{color:var(--bad)}
@@ -260,9 +260,9 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         return self._post(parsed.path, form, headers, client_ip)
 
     _NOTICES = {
-        "user-created": "AD user created. The account must change its temporary password at first sign-in.",
+        "user-created": "AD user created.",
         "user-updated": "AD user updated.",
-        "user-password": "AD password changed. The account must set a new one at next sign-in.",
+        "user-password": "AD password changed.",
         "user-deleted": "AD user deleted and its Thessley keys revoked.",
         "phone-revoked": "Phone revoked. Linked AD sign-in keys were revoked with it.",
         "logon-key-revoked": "AD sign-in key revoked.",
@@ -622,6 +622,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
 <label for="new-display-name">Display name</label><input id="new-display-name" name="display_name" required maxlength="256" autocomplete="name">
 <label for="new-password">Temporary password</label><input id="new-password" name="initial_password" type="password" required minlength="8" maxlength="256" autocomplete="new-password">
 <p class="muted small">The new user must change this password at first sign-in.</p>
+<label class="check-row"><input type="checkbox" name="must_change" value="yes" checked> Require a password change at first sign-in</label>
+<p class="muted small">Leave this on unless the account is a service or test account: the administrator otherwise keeps a working password.</p>
 <label for="admin-confirm-password">Your administrator password</label><input id="admin-confirm-password" name="admin_password" type="password" required autocomplete="current-password">
 <p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
 <div class="form-actions"><button>{self._icon("plus")} Create user</button><a class="button secondary" href="/admin/">Cancel</a></div>
@@ -681,6 +683,7 @@ The account must change it at next sign-in.</p>
 <label for="new-account-password">New temporary password</label>
 <input id="new-account-password" name="new_password" type="password" required minlength="8" maxlength="256" autocomplete="new-password">
 <p class="muted small">The domain password policy still applies: minimum length, complexity, banned words and password history.</p>
+<label class="check-row"><input type="checkbox" name="must_change" value="yes" checked> Require a password change at next sign-in</label>
 <label for="change-admin-password">Your administrator password</label>
 <input id="change-admin-password" name="admin_password" type="password" required autocomplete="current-password">
 <p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
@@ -726,6 +729,7 @@ The account must change it at next sign-in.</p>
                 sid = self.directory.create_user(
                     administrator=session["user"], password=form.pop("_admin_password", ""),
                     username=username, display_name=display_name, initial_password=initial_password,
+                    must_change=form.get("must_change") == "yes",
                 )
             except ValueError as exc:
                 return self._user_form(session, message=str(exc))
@@ -790,6 +794,7 @@ The account must change it at next sign-in.</p>
                 changed_sid = self.directory.set_user_password(
                     administrator=session["user"], password=form.pop("_admin_password", ""),
                     username=user["sam"], new_password=new_password,
+                    must_change=form.get("must_change") == "yes",
                 )
             except ValueError as exc:
                 return self._user_password_page(session, user, message=str(exc))

@@ -100,6 +100,26 @@ class WindowsDirectoryTest(unittest.TestCase):
         self.assertEqual(payload["password"], "Admin-Secret-1!")
         self.assertEqual(payload["initial_password"], "Temp-Secret-1!")
 
+    def test_must_change_defaults_to_true(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "sid": USER_SID}), "")
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run", return_value=completed) as run:
+            self.directory.create_user(administrator="Administrator", password="Admin-Secret-1!",
+                                       username="newuser", display_name="New User",
+                                       initial_password="Temp-Secret-1!")
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertTrue(payload["must_change"])
+        script = base64.b64decode(run.call_args.args[0][-1]).decode("utf-16le")
+        self.assertIn("ChangePasswordAtLogon ([bool]$data.must_change)", script)
+
+    def test_permanent_password_can_be_requested(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "sid": USER_SID}), "")
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run", return_value=completed) as run:
+            self.directory.create_user(administrator="Administrator", password="Admin-Secret-1!",
+                                       username="newuser", display_name="New User",
+                                       initial_password="Temp-Secret-1!", must_change=False)
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertFalse(payload["must_change"])
+
     def test_password_policy_rejection_is_explained(self):
         completed = subprocess.CompletedProcess([], 0, json.dumps({
             "ok": False, "error": "password_policy",
@@ -123,7 +143,7 @@ class WindowsDirectoryTest(unittest.TestCase):
         self.assertEqual(sid, USER_SID)
         script = base64.b64decode(run.call_args.args[0][-1]).decode("utf-16le")
         self.assertIn("Set-ADAccountPassword", script)
-        self.assertIn("ChangePasswordAtLogon $true", script)
+        self.assertIn("ChangePasswordAtLogon ([bool]$data.must_change)", script)
         # Privileged accounts must be refused before any password write.
         self.assertIn("-in @('disable','delete','password')", script)
         self.assertNotIn("Invoke('SetPassword'", script)

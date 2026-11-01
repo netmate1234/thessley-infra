@@ -462,7 +462,7 @@ try {{
 
     def _manage_user(self, operation: str, *, administrator: str, password: str,
                      username: str = "", display_name: str = "", initial_password: str = "",
-                     enabled: bool = True) -> str:
+                     enabled: bool = True, must_change: bool = True) -> str:
         """Perform one audited AD user change using freshly supplied admin credentials.
 
         The admin password is sent to a short-lived PowerShell child over stdin,
@@ -488,6 +488,8 @@ try {{
                 raise ValueError("The temporary password must be between 8 and 256 characters")
         if operation == "update" and not isinstance(enabled, bool):
             raise ValueError("Invalid account state")
+        if not isinstance(must_change, bool):
+            raise ValueError("Invalid password-change policy")
         if operation == "password":
             if (not isinstance(initial_password, str) or len(initial_password) < 8
                     or len(initial_password) > 256 or "\x00" in initial_password):
@@ -568,7 +570,7 @@ try {
                 Set-ADAccountPassword -Identity $sam -Reset -Credential $adminCredential `
                     -NewPassword (ConvertTo-SecureString ([string]$data.initial_password) -AsPlainText -Force) -ErrorAction Stop
                 Enable-ADAccount -Identity $sam -Credential $adminCredential -ErrorAction Stop
-                Set-ADUser -Identity $sam -ChangePasswordAtLogon $true -Credential $adminCredential -ErrorAction Stop
+                Set-ADUser -Identity $sam -ChangePasswordAtLogon ([bool]$data.must_change) -Credential $adminCredential -ErrorAction Stop
             } catch {
                 try { $container.Children.Remove($newUser); $container.CommitChanges() } catch {}
                 throw
@@ -605,7 +607,7 @@ try {
                 $authUser, (ConvertTo-SecureString ([string]$data.password) -AsPlainText -Force))
             Set-ADAccountPassword -Identity $sam -Reset -Credential $adminCredential `
                 -NewPassword (ConvertTo-SecureString ([string]$data.initial_password) -AsPlainText -Force) -ErrorAction Stop
-            Set-ADUser -Identity $sam -ChangePasswordAtLogon $true -Credential $adminCredential -ErrorAction Stop
+            Set-ADUser -Identity $sam -ChangePasswordAtLogon ([bool]$data.must_change) -Credential $adminCredential -ErrorAction Stop
             [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
             $found.Dispose()
         }
@@ -637,6 +639,7 @@ try {
             "operation": operation, "authority": self.config.authority, "administrator": administrator,
             "password": password, "username": username, "display_name": display_name,
             "initial_password": initial_password, "enabled": enabled,
+            "must_change": must_change,
         }
         encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
         try:
@@ -669,10 +672,10 @@ try {
         return sid
 
     def create_user(self, *, administrator: str, password: str, username: str,
-                    display_name: str, initial_password: str) -> str:
+                    display_name: str, initial_password: str, must_change: bool = True) -> str:
         return self._manage_user("create", administrator=administrator, password=password,
                                 username=username, display_name=display_name,
-                                initial_password=initial_password)
+                                initial_password=initial_password, must_change=must_change)
 
     def update_user(self, *, administrator: str, password: str, username: str,
                     display_name: str, enabled: bool) -> str:
@@ -688,10 +691,11 @@ try {
                                 username=username)
 
     def set_user_password(self, *, administrator: str, password: str, username: str,
-                          new_password: str) -> str:
-        """Reset a non-privileged account's password; it must change at next sign-in."""
+                          new_password: str, must_change: bool = True) -> str:
+        """Reset a non-privileged account's password; optionally force a change."""
         return self._manage_user("password", administrator=administrator, password=password,
-                                username=username, initial_password=new_password)
+                                username=username, initial_password=new_password,
+                                must_change=must_change)
 
     def set_workstation_access(self, *, administrator: str, password: str, username: str,
                                allowed_group_sids, allow: bool) -> str:

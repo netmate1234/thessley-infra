@@ -621,6 +621,18 @@ class EnrollmentStatusTest(unittest.TestCase):
         self.assertEqual(status, 400)
 
 
+class PasswordChangeOptionTest(unittest.TestCase):
+    def test_create_and_reset_forms_offer_the_option(self):
+        web = object.__new__(AdminWeb)
+        web.authority = "THESSLEYLAB"
+        user = {"sid": "S-1-5-21-1-2-3-1108", "sam": "target", "name": "Target",
+                "enabled": True, "authorized": True, "dc_administrator": False}
+        for html in (_html(web._user_form({"csrf": CSRF})),
+                     _html(web._user_password_page({"csrf": CSRF}, user))):
+            with self.subTest(page=html[:40]):
+                self.assertIn('name="must_change" value="yes" checked', html)
+
+
 class PhoneEnrollmentPageTest(unittest.TestCase):
     def render(self, status, pairing_code=""):
         return _html(_phone_web(status, pairing_code)._enrollment_page(
