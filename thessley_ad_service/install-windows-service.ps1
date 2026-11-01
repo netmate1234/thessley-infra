@@ -1,8 +1,10 @@
 param(
     [string] $InstallRoot = "$env:ProgramFiles\ThessleyAD",
     [string] $StateRoot = "$env:ProgramData\ThessleyAD",
-    [string] $BindAddress = '192.168.1.79',
-    [string] $AllowedGroupSid = 'S-1-5-21-1719900462-4250469598-2954734011-1105',
+    # Detected from the DC when left empty; pass a value only to override.
+    [string] $BindAddress = '',
+    [string] $AllowedGroupSid = '',
+    [string] $AllowedGroupName = 'ThessleyADSignInAdmins',
     [string[]] $AllowedRemoteAddresses = @(),
     [string[]] $AdminAllowedRemoteAddresses = @()
 )
@@ -15,6 +17,46 @@ if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
 if (-not (Get-Service -Name ADWS -ErrorAction SilentlyContinue)) {
     throw 'The Active Directory Web Services are missing; this host does not appear to be a domain controller.'
 }
+# Automatic defaults: the LAN address that carries the default route, the
+# sign-in group when it exists (otherwise Domain Admins), and a /24 firewall
+# scope derived from that address.
+if (-not $BindAddress) {
+    $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Sort-Object -Property RouteMetric | Select-Object -First 1
+    $candidates = @()
+    if ($route) {
+        $candidates = @(Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue)
+    }
+    if ($candidates.Count -eq 0) {
+        $candidates = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue)
+    }
+    $chosen = $candidates | Where-Object {
+        $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '0.0.0.0'
+    } | Select-Object -First 1
+    if (-not $chosen) { throw 'Could not detect a LAN IPv4 address for the service. Pass -BindAddress.' }
+    $BindAddress = $chosen.IPAddress
+    Write-Host "Bind address detected: $BindAddress"
+}
+$scopePrefix = (($BindAddress -split '\.')[0..2]) -join '.'
+$defaultScope = "$scopePrefix.0/24"
+
+if (-not $AllowedGroupSid) {
+    $domainName = [string]([ADSI]'LDAP://RootDSE').Properties['defaultNamingContext'][0]
+    $findGroup = [System.DirectoryServices.DirectorySearcher]::new([ADSI]"LDAP://$domainName")
+    $findGroup.Filter = "(&(objectCategory=group)(sAMAccountName=$AllowedGroupName))"
+    [void]$findGroup.PropertiesToLoad.Add('objectSid')
+    $foundGroup = $findGroup.FindOne()
+    if ($foundGroup) {
+        $AllowedGroupSid = [Security.Principal.SecurityIdentifier]::new([byte[]]$foundGroup.Properties['objectsid'][0], 0).Value
+        Write-Host "Sign-in group detected: $AllowedGroupName ($AllowedGroupSid)"
+    } else {
+        $domainSid = ([Security.Principal.NTAccount]::new($env:USERDOMAIN, 'Domain Admins')).Translate([Security.Principal.SecurityIdentifier]).Value
+        $AllowedGroupSid = $domainSid
+        Write-Host "Group $AllowedGroupName not found; using Domain Admins ($AllowedGroupSid)."
+    }
+    $findGroup.Dispose()
+}
+
 $address = [ipaddress]::Parse($BindAddress)
 if ($address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
     -not (Get-NetIPAddress -AddressFamily IPv4 -IPAddress $BindAddress -ErrorAction SilentlyContinue)) {
@@ -178,7 +220,7 @@ Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger
             $firewallRule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $AllowedRemoteAddresses | Out-Null
         }
     } else {
-        $newRemoteAddresses = if ($AllowedRemoteAddresses.Count -gt 0) { $AllowedRemoteAddresses } else { @('192.168.1.0/24') }
+        $newRemoteAddresses = if ($AllowedRemoteAddresses.Count -gt 0) { $AllowedRemoteAddresses } else { @($defaultScope) }
         New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47810 `
             -LocalAddress $BindAddress -RemoteAddress $newRemoteAddresses -Profile Any | Out-Null
         $createdFirewallRule = $true
@@ -205,7 +247,7 @@ Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger
         } elseif ($firewallRule) {
             $adminRemoteAddresses = @(($firewallRule | Get-NetFirewallAddressFilter).RemoteAddress)
         } else {
-            $adminRemoteAddresses = @('192.168.1.0/24')
+            $adminRemoteAddresses = @($defaultScope)
         }
         New-NetFirewallRule -DisplayName $adminRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47820 `
             -LocalAddress $BindAddress -RemoteAddress $adminRemoteAddresses -Profile Any | Out-Null
@@ -219,7 +261,7 @@ Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger
         } elseif ($firewallRule) {
             $enrollmentRemoteAddresses = @(($firewallRule | Get-NetFirewallAddressFilter).RemoteAddress)
         } else {
-            $enrollmentRemoteAddresses = @('192.168.1.0/24')
+            $enrollmentRemoteAddresses = @($defaultScope)
         }
         New-NetFirewallRule -DisplayName $enrollmentRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47811 `
             -LocalAddress $BindAddress -RemoteAddress $enrollmentRemoteAddresses -Profile Any | Out-Null
