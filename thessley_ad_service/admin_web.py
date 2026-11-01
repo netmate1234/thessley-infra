@@ -96,11 +96,12 @@ class AdminWeb:
 
     def __init__(self, *, directory, phones, challenges, allowed_group_sids, authority: str,
                  public_host: str, certificate_fingerprint: str, login_policy=None, machines=None,
-                 ad_logon_keys=None):
+                 ad_logon_keys=None, log_path=None):
         self.directory = directory
         self.phones = phones
         self.challenges = challenges
         self.allowed_group_sids = frozenset(allowed_group_sids)
+        self.log_path = log_path
         self.authority = authority
         self.public_host = public_host
         self.certificate_fingerprint = certificate_fingerprint
@@ -177,7 +178,7 @@ h1{font-size:clamp(1.4rem,4vw,1.8rem);line-height:1.2;margin:0 0 1rem;letter-spa
 .page-actions .button,.page-actions button{padding-inline:11px}
 .header-actions{display:flex;gap:9px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin-left:auto}.header-actions form{margin:0}
 .account-card{padding:0;overflow:hidden;scroll-margin-top:1.5rem}.account-card:target{outline:2px solid var(--blue);outline-offset:2px;border-color:var(--blue)}.account-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:18px 20px}.account-name{display:flex;align-items:flex-start;gap:12px;min-width:0}.account-avatar{width:42px;height:42px;display:grid;place-items:center;flex:none;border-radius:14px;background:#20384a;color:#acd5fa}.account-heading{min-width:0}.account-heading h2{overflow-wrap:anywhere}.account-id{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}.rights{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.trust-summary{display:grid;gap:7px;min-width:150px}.trust-label{display:block;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}.trust-icons{display:flex;gap:5px;flex-wrap:wrap}.trust-icons .badge{font-size:.75rem;padding:4px 7px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;background:#263744;color:#dce7f0;font-size:.8rem;line-height:1.25;font-weight:700}.badge .icon{width:15px;height:15px}.badge.yes{background:#153a2a;color:var(--good)}.badge.no{background:#3d2226;color:#ffadb2}.badge.medium{background:#44391f;color:var(--warn)}.badge.neutral{background:#293541;color:#c6d1db}
-.account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}
+.account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}.log-tail{margin:0;max-height:70vh;overflow:auto;padding:1rem;border-radius:10px;background:#0d1720;color:#dbe7f2;font-size:.84rem;line-height:1.45}.log-tail code{white-space:pre-wrap;overflow-wrap:anywhere}
 .search-tools{margin:14px 0}.search-row{display:flex;align-items:center;gap:8px}.search-row input{flex:1;min-width:0}.search-row button{flex:none}.empty-results[hidden]{display:none}.empty-results{color:var(--muted)}
 .form-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}.form-actions form{margin:0}.form-actions button,.form-actions .button{margin:0}
 label{display:block;font-weight:650;margin:12px 0 5px}input,select{font:inherit;padding:10px 12px;border:1px solid #485d70;border-radius:9px;width:100%;max-width:100%;background:var(--field);color:var(--ink)}input:focus-visible,select:focus-visible,button:focus-visible,.button:focus-visible,summary:focus-visible{outline:3px solid #9acbff;outline-offset:2px}
@@ -294,6 +295,11 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             if not session:
                 return self._login_page(headers)
             return self._policy_page(session)
+        if path == "/admin/log":
+            token, session = self._session(headers)
+            if not session:
+                return self._login_page(headers)
+            return self._log_page(session)
         if path == "/admin/qr-login":
             params = parse_qs(query, keep_blank_values=True)
             request_ids = params.get("id", [])
@@ -1122,6 +1128,7 @@ The account must change it at next sign-in.</p>
 <div class="header-actions"><nav class="page-actions" aria-label="Administration">
 <a class="button" href="/admin/users/new">{self._icon("plus")} Add user</a>
 <a class="button secondary" href="/admin/policy">{self._icon("settings")} Policy</a>
+<a class="button secondary" href="/admin/log">{self._icon("admin")} Log</a>
 </nav><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><button class="danger secondary small">{self._icon('logout')} Sign out</button></form></div></header>
 {notice_html}
 <p class="muted">Signed in as <strong>{signed_in}</strong> · <span id="account-count" aria-live="polite">{total} account{'s' if total != 1 else ''}</span>. Phone approvals are stored centrally and work on paired PCs.</p>
@@ -1269,6 +1276,38 @@ The account must change it at next sign-in.</p>
                 body += f'<p class="status">Pairing code: <strong>{html.escape(state["pairing_code"])}</strong></p><p class="muted">Protection reported by Android: {html.escape(state["attestation_status"])}. A code match verifies the request, not the phone manufacturer or hardware beyond the attestation result.</p><form method="post" action="/admin/confirm-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><input type="hidden" name="pairing_code" value="{html.escape(state["pairing_code"])}"><button>Codes match — activate key</button></form>'
             body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="sid" value="' + html.escape(sid) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form>' + reload_link + '<a class="button" href="/admin/' + (('account?sid=' + sid) if sid else '') + '">Return to accounts</a></div>'
         return self._response(200, self._page("AD logon-key enrollment", body))
+
+    LOG_TAIL_LINES = 300
+
+    def _log_page(self, session: dict):
+        if not self.log_path:
+            return self._response(503, self._page(
+                "Service log", '<section class="card error">No log file is configured for this service.</section>'))
+        try:
+            from pathlib import Path as _Path
+            path = _Path(self.log_path)
+            if not path.is_file():
+                raise OSError("missing")
+            size = path.stat().st_size
+            with path.open("rb") as handle:
+                # Read at most the last 256 KiB so a large log cannot exhaust memory.
+                handle.seek(max(0, size - 256 * 1024))
+                text = handle.read().decode("utf-8", "replace")
+            lines = text.splitlines()[-self.LOG_TAIL_LINES:]
+        except OSError:
+            _LOG.exception("admin_log_read_failed sid=%s", session.get("sid", "unknown"))
+            return self._response(503, self._page(
+                "Service log", '<section class="card error">The service log could not be read.</section>'))
+        body = (f'<header class="page-head"><div><h1>{self._icon("admin")} Service log</h1>'
+                f'<div class="muted">Last {len(lines)} lines of {html.escape(str(self.log_path))}</div></div>'
+                f'<div class="header-actions"><nav class="page-actions">'
+                f'<a class="button secondary small" href="/admin/log">Refresh</a>'
+                f'<a class="button secondary small" href="/admin/">{self._icon("chevron")} All accounts</a>'
+                f'</nav></div></header>'
+                '<section class="card"><pre class="log-tail"><code>'
+                + html.escape("\n".join(lines))
+                + '</code></pre></section>')
+        return self._response(200, self._page("Service log", body))
 
     def _policy_page(self, session: dict, message: str = ""):
         if self.login_policy is None:

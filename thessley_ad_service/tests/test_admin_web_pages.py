@@ -1,4 +1,6 @@
+import pathlib
 import re
+import tempfile
 import threading
 import unittest
 
@@ -438,6 +440,39 @@ class DirectoryPagingTest(unittest.TestCase):
             {"sid": "S-1-5-21-1-2-3-500", "user": "Administrator", "csrf": CSRF},
             single_sid="S-1-5-21-1-2-3-999999")
         self.assertEqual(status, 404)
+
+
+class LogPageTest(unittest.TestCase):
+    def _web(self, path):
+        web = object.__new__(AdminWeb)
+        web.log_path = path
+        web._lock = threading.Lock()
+        return web
+
+    def test_shows_only_the_tail_and_escapes_markup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp) / "service.log"
+            payload = "\n".join(f"line {i}" for i in range(400))
+            log.write_text(payload + "\n<script>alert(1)</script>\n")
+            status, _headers, body = self._web(str(log))._log_page(
+                {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+        html = body.decode()
+        self.assertEqual(status, 200)
+        self.assertIn("line 399", html)
+        self.assertNotIn("line 0\n", html)
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertIn("Last", html)
+
+    def test_missing_log_is_a_503(self):
+        status, _headers, _body = self._web("/nonexistent/service.log")._log_page(
+            {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+        self.assertEqual(status, 503)
+
+    def test_unconfigured_log_is_a_503(self):
+        status, _headers, _body = self._web(None)._log_page(
+            {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+        self.assertEqual(status, 503)
 
 
 class PhoneEnrollmentPageTest(unittest.TestCase):

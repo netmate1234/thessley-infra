@@ -199,6 +199,7 @@ def main() -> int:
             login_policy=login_policy,
             machines=registry,
             ad_logon_keys=ad_logon_keys,
+            log_path=LOG_PATH,
         )
         api_server = make_server((config["bind_address"], API_PORT), str(CERT_PATH), str(KEY_PATH), routes)
         try:
