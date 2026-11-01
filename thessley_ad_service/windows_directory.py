@@ -20,6 +20,28 @@ from .directory import (
 from .protocol import principal_id_from_sid
 
 _USERNAME = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$", re.IGNORECASE)
+_AD_ERROR_MESSAGES = {
+    "exists": "That username already exists.",
+    "not_found": "The AD account could not be found.",
+    "protected": "Built-in, protected, and privileged AD accounts cannot be changed or deleted here.",
+    "permission": "AD denied this change. The administrator account needs permission on the target object or group.",
+    "password_policy": "The temporary password does not meet the domain password policy: it is too short, lacks complexity, is a banned word, or repeats a recent password. Choose a different one.",
+    "group_missing": "The configured workstation sign-in group was not found in Active Directory.",
+    "failed": "AD rejected the change. Check the account settings and directory logs.",
+}
+
+
+def _reject_ad_change(operation: str, response: dict) -> None:
+    """Log the directory's short error detail and raise a user-facing message."""
+    detail = response.get("detail")
+    if isinstance(detail, str) and detail:
+        logging.getLogger("thessley.ad.directory").warning(
+            "ad_account_change_rejected operation=%s code=%s detail=%s",
+            operation, response.get("error"), detail[:300].replace("\n", " "),
+        )
+    raise ValueError(_AD_ERROR_MESSAGES.get(response.get("error"), "AD rejected the account change."))
+
+
 _SID = re.compile(r"^S-1-(?:[0-9]+-)+[0-9]+$")
 
 
@@ -636,21 +658,7 @@ try {
         if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
             raise DirectoryUnavailable("Windows returned an invalid AD account change response")
         if not response["ok"]:
-            messages = {
-                "exists": "That username already exists.",
-                "not_found": "The AD account could not be found.",
-                "protected": "Built-in, protected, and privileged AD accounts cannot be changed or deleted here.",
-                "permission": "AD denied this change. The administrator account needs permission in the Users container.",
-                "password_policy": "The temporary password does not meet the domain password policy: it is too short, lacks complexity, is a banned word, or repeats a recent password. Choose a different one.",
-                "failed": "AD rejected the change. Check the account settings and directory logs.",
-            }
-            detail = response.get("detail")
-            if isinstance(detail, str) and detail:
-                logging.getLogger("thessley.ad.directory").warning(
-                    "ad_account_change_rejected operation=%s code=%s detail=%s",
-                    operation, response.get("error"), detail[:300].replace("\n", " "),
-                )
-            raise ValueError(messages.get(response.get("error"), "AD rejected the account change."))
+            _reject_ad_change(operation, response)
         sid = response.get("sid")
         if not isinstance(sid, str) or not _SID.fullmatch(sid):
             raise DirectoryUnavailable("Windows returned an invalid AD account change response")
@@ -684,3 +692,107 @@ try {
         """Reset a non-privileged account's password; it must change at next sign-in."""
         return self._manage_user("password", administrator=administrator, password=password,
                                 username=username, initial_password=new_password)
+
+    def set_workstation_access(self, *, administrator: str, password: str, username: str,
+                               allowed_group_sids, allow: bool) -> str:
+        """Grant or revoke the workstation QR right by group membership.
+
+        Granting adds the account to the first configured sign-in group; revoking
+        removes it from every configured group so no stale membership survives a
+        configuration change. Membership changes go through ADWS with the
+        administrator credential, matching the password paths.
+        """
+        if not isinstance(administrator, str) or not _USERNAME.fullmatch(administrator):
+            raise ValueError("Invalid administrator account")
+        if not isinstance(password, str) or not password or len(password) > 1024 or "\x00" in password:
+            raise ValueError("Enter the administrator password to confirm this change")
+        if not isinstance(username, str) or not _USERNAME.fullmatch(username):
+            raise ValueError("Invalid AD username")
+        if not isinstance(allow, bool):
+            raise ValueError("Invalid access state")
+        groups = []
+        for sid in (allowed_group_sids or ()):
+            if not isinstance(sid, str) or not _SID.fullmatch(sid):
+                raise ValueError("Invalid workstation sign-in group")
+            groups.append(sid)
+        if not groups:
+            raise ValueError("No workstation sign-in group is configured")
+
+        script = r"""
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+try {
+    $data = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
+    $authUser = "$($data.authority)\$($data.administrator)"
+    Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
+    $adminCredential = [System.Management.Automation.PSCredential]::new(
+        $authUser, (ConvertTo-SecureString ([string]$data.password) -AsPlainText -Force))
+    $target = Get-ADUser -Identity ([string]$data.username) -Credential $adminCredential `
+        -Properties memberOf, objectSid -ErrorAction Stop
+    $resolved = @()
+    foreach ($sid in @($data.group_sids)) {
+        try { $resolved += Get-ADGroup -Identity ([string]$sid) -Credential $adminCredential -ErrorAction Stop } catch { }
+    }
+    if ($resolved.Count -eq 0) {
+        [Console]::Out.WriteLine('{"ok":false,"error":"group_missing"}')
+        exit 0
+    }
+    if ([bool]$data.allow) {
+        Add-ADGroupMember -Identity $resolved[0].DistinguishedName -Members $target.DistinguishedName `
+            -Credential $adminCredential -Confirm:$false -ErrorAction Stop
+    } else {
+        foreach ($group in $resolved) {
+            if (@($target.MemberOf) -contains $group.DistinguishedName) {
+                Remove-ADGroupMember -Identity $group.DistinguishedName -Members $target.DistinguishedName `
+                    -Credential $adminCredential -Confirm:$false -ErrorAction Stop
+            }
+        }
+    }
+    $sid = [Security.Principal.SecurityIdentifier]::new([byte[]]$target.SID, 0).Value
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
+} catch {
+    $errorText = [string]$_.Exception.Message
+    if ($_.Exception.InnerException) { $errorText = $errorText + ' ' + [string]$_.Exception.InnerException.Message }
+    $errorCode = if ($errorText -match '(?i)access is denied|insufficient access') { 'permission' }
+                 elseif ($errorText -match '(?i)cannot be found|not found|adidentitynotfoundexception') { 'not_found' }
+                 else { 'failed' }
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{
+        ok = $false; error = $errorCode; detail = $errorText.Substring(0, [Math]::Min(300, $errorText.Length))
+    }))
+    exit 0
+}
+"""
+        payload = {
+            "authority": self.config.authority, "administrator": administrator,
+            "password": password, "username": username,
+            "group_sids": groups, "allow": allow,
+        }
+        encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded_script],
+                input=json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=self.timeout_seconds + 8, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DirectoryUnavailable("Windows could not change the workstation sign-in group") from exc
+        if result.returncode:
+            raise DirectoryUnavailable("Windows could not change the workstation sign-in group")
+        try:
+            response = json.loads(result.stdout.strip())
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise DirectoryUnavailable("Windows returned an invalid group membership response") from exc
+        if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
+            raise DirectoryUnavailable("Windows returned an invalid group membership response")
+        if not response["ok"]:
+            _reject_ad_change("workstation", response)
+        sid = response.get("sid")
+        if not isinstance(sid, str) or not _SID.fullmatch(sid):
+            raise DirectoryUnavailable("Windows returned an invalid AD account SID")
+        try:
+            sid_to_bytes(sid)
+        except ValueError as exc:
+            raise DirectoryUnavailable("Windows returned an invalid AD account SID") from exc
+        return sid

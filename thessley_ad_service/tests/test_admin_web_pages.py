@@ -150,6 +150,63 @@ class AccountPasswordActionTest(unittest.TestCase):
         self.assertIn("must change it at next sign-in", html)
 
 
+class WorkstationQrActionTest(unittest.TestCase):
+    SESSION_SID = "S-1-5-21-1-2-3-500"
+
+    def _render_accounts(self, user):
+        web = object.__new__(AdminWeb)
+        web.authority = "THESSLEYLAB"
+        web._lock = threading.Lock()
+        web.allowed_group_sids = frozenset({"S-1-5-21-1-2-3-1105"})
+
+        class _Dir:
+            def list_users(self, groups, limit=1000):
+                return {"users": [user]}
+
+        class _NoKeys:
+            def list_for_principal(self, principal_id):
+                return []
+
+        web.directory = _Dir()
+        web.phones = _NoKeys()
+        web.ad_logon_keys = _NoKeys()
+        return _html(web._directory_page({"sid": self.SESSION_SID, "user": "Administrator",
+                                          "csrf": CSRF}))
+
+    @staticmethod
+    def _user(sid, *, authorized=False, dc_admin=False):
+        return {"sid": sid, "sam": "target", "name": "Target User", "enabled": True,
+                "authorized": authorized, "dc_administrator": dc_admin}
+
+    def test_allow_action_offered_when_not_authorized(self):
+        html = self._render_accounts(self._user("S-1-5-21-1-2-3-1108"))
+        self.assertIn("Allow workstation QR…", html)
+        self.assertIn("/admin/workstation-qr?sid=S-1-5-21-1-2-3-1108&action=allow", html)
+        self.assertNotIn("Disallow workstation QR…", html)
+
+    def test_disallow_action_offered_when_authorized(self):
+        html = self._render_accounts(self._user("S-1-5-21-1-2-3-1108", authorized=True))
+        self.assertIn("Disallow workstation QR…", html)
+        self.assertIn("action=revoke", html)
+
+    def test_actions_hidden_for_self_and_dc_administrators(self):
+        self.assertNotIn("workstation QR…", self._render_accounts(self._user(self.SESSION_SID)))
+        self.assertNotIn("workstation QR…",
+                         self._render_accounts(self._user("S-1-5-21-1-2-3-1108", dc_admin=True)))
+
+    def test_confirmation_page_requests_the_admin_password(self):
+        web = object.__new__(AdminWeb)
+        web.authority = "THESSLEYLAB"
+        user = self._user("S-1-5-21-1-2-3-1108")
+        for allow, verb in ((True, "Allow workstation QR"), (False, "Disallow workstation QR")):
+            with self.subTest(allow=allow):
+                html = _html(web._workstation_qr_page({"csrf": CSRF}, user, allow=allow))
+                self.assertIn('action="/admin/workstation-qr"', html)
+                self.assertIn('name="admin_password"', html)
+                self.assertIn(verb, html)
+                self.assertIn(f'value="{"allow" if allow else "revoke"}"', html)
+
+
 class PhoneEnrollmentPageTest(unittest.TestCase):
     def render(self, status, pairing_code=""):
         return _html(_phone_web(status, pairing_code)._enrollment_page(

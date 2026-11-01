@@ -141,6 +141,44 @@ class WindowsDirectoryTest(unittest.TestCase):
                 )
             run.assert_not_called()
 
+    def test_workstation_access_grant_adds_the_configured_group(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "sid": USER_SID}), "")
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run", return_value=completed) as run:
+            sid = self.directory.set_workstation_access(
+                administrator="Administrator", password="Admin-Secret-1!", username="martin",
+                allowed_group_sids={GROUP_SID}, allow=True,
+            )
+        self.assertEqual(sid, USER_SID)
+        script = base64.b64decode(run.call_args.args[0][-1]).decode("utf-16le")
+        self.assertIn("Add-ADGroupMember", script)
+        self.assertIn("Remove-ADGroupMember", script)
+        self.assertIn("-Confirm:$false", script)
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertTrue(payload["allow"])
+        self.assertEqual(payload["group_sids"], [GROUP_SID])
+        self.assertNotIn("Admin-Secret-1!", " ".join(run.call_args.args[0]))
+
+    def test_workstation_access_revoke_removes_every_configured_group(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "sid": USER_SID}), "")
+        second = "S-1-5-21-1719900462-4250469598-2954734011-1109"
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run", return_value=completed) as run:
+            self.directory.set_workstation_access(
+                administrator="Administrator", password="Admin-Secret-1!", username="martin",
+                allowed_group_sids=[GROUP_SID, second], allow=False,
+            )
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertFalse(payload["allow"])
+        self.assertEqual(payload["group_sids"], [GROUP_SID, second])
+
+    def test_workstation_access_requires_a_configured_group(self):
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run") as run:
+            with self.assertRaisesRegex(ValueError, "No workstation sign-in group"):
+                self.directory.set_workstation_access(
+                    administrator="Administrator", password="Admin-Secret-1!", username="martin",
+                    allowed_group_sids=[], allow=True,
+                )
+            run.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -259,6 +259,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 "user-created": "AD user created. The account must change its temporary password at first sign-in.",
                 "user-updated": "AD user updated.",
                 "user-password": "AD password changed. The account must set a new one at next sign-in.",
+                "workstation-qr-allowed": "Workstation QR allowed. The account can now use QR sign-in at paired workstations.",
+                "workstation-qr-revoked": "Workstation QR revoked. The account can no longer sign in at paired workstations.",
                 "user-deleted": "AD user deleted and its Thessley keys revoked.",
             }.get(notice, "")
             return self._directory_page(session, notice=notice_text)
@@ -291,6 +293,21 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             if user.get("dc_administrator") or sid_values[0].endswith("-500"):
                 return self._response(403, self._page("Change AD password", '<section class="card error">Passwords for privileged and built-in administrator accounts cannot be changed here. Use a separate AD administration tool.</section>'))
             return self._user_password_page(session, user)
+        if path == "/admin/workstation-qr":
+            params = parse_qs(query, keep_blank_values=True)
+            sid_values = params.get("sid", [])
+            allow_values = params.get("action", [])
+            if (len(sid_values) != 1 or not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid_values[0])
+                    or allow_values != ["allow"] and allow_values != ["revoke"]):
+                return self._response(400, self._page("Workstation QR", '<section class="card error">Invalid access change.</section>'))
+            user = self._find_user(sid_values[0])
+            if not user:
+                return self._response(404, self._page("Workstation QR", '<section class="card error">Account not found in Active Directory.</section>'))
+            if secrets.compare_digest(sid_values[0], session["sid"]):
+                return self._response(403, self._page("Workstation QR", '<section class="card error">You cannot change your own workstation sign-in right.</section>'))
+            if user.get("dc_administrator"):
+                return self._response(400, self._page("Workstation QR", '<section class="card error">This account already signs in as a DC administrator; its workstation right is controlled by group membership outside this page.</section>'))
+            return self._workstation_qr_page(session, user, allow=allow_values == ["allow"])
         if path in ("/admin/user/edit", "/admin/user/delete"):
             params = parse_qs(query, keep_blank_values=True)
             sid_values = params.get("sid", [])
@@ -530,6 +547,32 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
 </form></section>'''
         return self._response(200, self._page("Edit AD user", body))
 
+    def _workstation_qr_page(self, session: dict, user: dict, *, allow: bool, message: str = ""):
+        sid = html.escape(str(user["sid"]))
+        account = html.escape(self.authority + chr(92) + str(user.get("sam", "")))
+        alert = f'<section class="card error">{html.escape(message)}</section>' if message else ""
+        if allow:
+            title, verb, effect = "Allow workstation QR", "allow", (
+                "The account joins the Thessley sign-in group and can then approve a QR sign-in "
+                "at paired workstations with its enrolled phone.")
+        else:
+            title, verb, effect = "Disallow workstation QR", "disallow", (
+                "The account leaves the Thessley sign-in group. Phone enrolment and AD sign-in keys "
+                "are kept, but the account can no longer use QR sign-in at paired workstations.")
+        body = f'''<h1>{self._icon("monitor")} {title}</h1>{alert}
+<section class="card {'error' if not allow else ''}"><p><strong>{account}</strong></p>
+<p>{effect}</p>
+<p class="muted small">Effective immediately; no reboot or re-enrolment is needed.</p>
+<form class="admin-user-form" method="post" action="/admin/workstation-qr">
+<input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{sid}">
+<input type="hidden" name="action" value="{'allow' if allow else 'revoke'}">
+<label for="workstation-admin-password">Your administrator password</label>
+<input id="workstation-admin-password" name="admin_password" type="password" required autocomplete="current-password">
+<p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
+<div class="form-actions"><button{'' if allow else ' class="danger"'}>{self._icon("monitor")} {title}</button><a class="button secondary" href="/admin/">Cancel</a></div>
+</form></section>'''
+        return self._response(200, self._page(title, body))
+
     def _user_password_page(self, session: dict, user: dict, message: str = ""):
         sid = html.escape(str(user["sid"]))
         username = html.escape(str(user.get("sam", "")))
@@ -599,6 +642,40 @@ The account must change it at next sign-in.</p>
             _LOG.warning("admin_ad_user_created actor=%s target_sid=%s username=%s",
                          session["sid"], sid, username)
             return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-created"),))
+        if path == "/admin/workstation-qr":
+            sid = form.get("sid", "")
+            action = form.get("action", "")
+            if action not in ("allow", "revoke"):
+                return self._response(400, self._page("Workstation QR", '<section class="card error">Invalid access change.</section>'))
+            allow = action == "allow"
+            user = self._find_user(sid)
+            if not user:
+                return self._response(404, self._page("Workstation QR", '<section class="card error">Account not found. Refresh the account list.</section>'))
+            if secrets.compare_digest(sid, session["sid"]):
+                return self._response(403, self._page("Workstation QR", '<section class="card error">You cannot change your own workstation sign-in right.</section>'))
+            if user.get("dc_administrator"):
+                return self._response(400, self._page("Workstation QR", '<section class="card error">This account already signs in as a DC administrator.</section>'))
+            if not self._reauthenticate_admin(session, form):
+                return self._workstation_qr_page(session, user, allow=allow,
+                                                 message="Enter your current administrator password to confirm this change.")
+            try:
+                if not callable(getattr(self.directory, "set_workstation_access", None)):
+                    raise ValueError("Workstation sign-in changes are unavailable on this service.")
+                changed_sid = self.directory.set_workstation_access(
+                    administrator=session["user"], password=form.pop("_admin_password", ""),
+                    username=user["sam"], allowed_group_sids=self.allowed_group_sids, allow=allow,
+                )
+            except ValueError as exc:
+                return self._workstation_qr_page(session, user, allow=allow, message=str(exc))
+            except Exception:
+                _LOG.exception("admin_workstation_qr_change_failed actor=%s target_sid=%s",
+                               session["sid"], sid)
+                return self._workstation_qr_page(session, user, allow=allow,
+                                                 message="AD could not change the group membership. Check permissions and the group configuration.")
+            _LOG.warning("admin_workstation_qr_changed actor=%s target_sid=%s allowed=%s",
+                         session["sid"], changed_sid, allow)
+            notice = "workstation-qr-allowed" if allow else "workstation-qr-revoked"
+            return self._response(303, "", extra_headers=(("Location", f"/admin/?notice={notice}"),))
         if path == "/admin/users/password":
             sid = form.get("sid", "")
             user = self._find_user(sid)
@@ -965,7 +1042,7 @@ The account must change it at next sign-in.</p>
 <button id="clear-account-search" type="button" class="secondary small">Clear</button></div>
 <div id="empty-account-search" class="card empty-results" hidden>No accounts match <strong id="account-search-term"></strong>.</div></section>
 <section class="card help"><details><summary>{self._icon("admin")} About access rights</summary>
-<p><strong>Workstation QR</strong> means the account is in the configured Thessley sign-in group. <strong>DC admin</strong> means it belongs to this domain controller’s Administrators group. The two rights are separate and read-only here.</p></details></section>'''
+<p><strong>Workstation QR</strong> means the account is in the configured Thessley sign-in group and can approve QR sign-in at paired workstations. It can be allowed or revoked below. <strong>DC admin</strong> means the account belongs to this domain controller’s Administrators group; that right is read-only here.</p></details></section>'''
         for user in users:
             sid = str(user.get("sid", ""))
             principal_id = principal_id_from_sid_safe(sid)
@@ -1030,6 +1107,11 @@ The account must change it at next sign-in.</p>
             content += f'''<a class="button secondary small" href="/admin/user/edit?sid={html.escape(sid)}">{self._icon('settings')} Edit</a>'''
             if sid != session["sid"] and not dc_administrator and not sid.endswith("-500"):
                 content += f'''<a class="button secondary small" href="/admin/user/password?sid={html.escape(sid)}">{self._icon('key')} Change password…</a>'''
+            if sid != session["sid"] and not dc_administrator:
+                if authorized:
+                    content += f'''<a class="button danger small" href="/admin/workstation-qr?sid={html.escape(sid)}&action=revoke">{self._icon('monitor')} Disallow workstation QR…</a>'''
+                else:
+                    content += f'''<a class="button secondary small" href="/admin/workstation-qr?sid={html.escape(sid)}&action=allow">{self._icon('monitor')} Allow workstation QR…</a>'''
             if sid != session["sid"] and not dc_administrator and not sid.endswith("-500"):
                 content += f'''<a class="button danger small" href="/admin/user/delete?sid={html.escape(sid)}">{self._icon('warning')} Delete…</a>'''
             content += '</div></section>'
