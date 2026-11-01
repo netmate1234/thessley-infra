@@ -65,8 +65,12 @@ def _html(response) -> str:
 
 
 def _refresh_seconds(html: str):
-    match = re.search(r'<meta http-equiv="refresh" content="(\d+)"', html)
-    return int(match.group(1)) if match else None
+    """Milliseconds from the client-side reload script, in seconds."""
+    match = re.search(r'setTimeout\(function\(\)\{location\.(?:reload\(\)|href=[^}]*)\}', html)
+    if not match:
+        return None
+    delay = re.search(r'\},(\d+)\);', html)
+    return int(delay.group(1)) // 1000 if delay else None
 
 
 class AdLogonKeyEnrollmentPageTest(unittest.TestCase):

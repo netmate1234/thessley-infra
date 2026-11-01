@@ -503,7 +503,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         status = result.get("status") if result else "pending"
         if status == "pending":
             script_nonce = secrets.token_urlsafe(18)
-            refresh = f'<meta http-equiv="refresh" content="2;url=/admin/qr-login?id={html.escape(request_id)}">'
+            refresh, _nonce = self._auto_reload(2, f"/admin/qr-login?id={request_id}", nonce=script_nonce)
             link = html.escape(pending["link"], quote=True)
             qr = html.escape(pending["qr"], quote=True)
             account = html.escape(self.authority + chr(92) + pending["username"])
@@ -1065,6 +1065,15 @@ The account must change it at next sign-in.</p>
         return self._response(404, self._page("Not found", "<section class=card>Page not found.</section>"))
 
     @staticmethod
+    def _auto_reload(seconds: int, url: str = "", nonce: str = "") -> tuple[str, str]:
+        """Client-side reload; meta refresh is throttled in background tabs."""
+        nonce = nonce or secrets.token_urlsafe(18)
+        target = f"location.href={json.dumps(url)}" if url else "location.reload()"
+        tag = (f'<script nonce="{html.escape(nonce, quote=True)}">'
+               f'setTimeout(function(){{{target}}},{int(seconds) * 1000});</script>')
+        return tag, nonce
+
+    @staticmethod
     def _anchor_sid(sid, principal_id: str) -> str:
         """Return the SID only when it provably belongs to this principal."""
         if isinstance(sid, str) and principal_id_from_sid_safe(sid) == principal_id:
@@ -1263,8 +1272,8 @@ The account must change it at next sign-in.</p>
             # page sits while the administrator scans the QR, so a page left on
             # "waiting" must recover by itself once the phone submits its key.
             refresh_seconds = 2 if state["status"] == "pending" else 10
-            refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">'
             sid_query = f"&sid={html.escape(sid, quote=True)}" if sid else ""
+            refresh, refresh_nonce = self._auto_reload(refresh_seconds)
             reload_href = html.escape(f"/admin/ad-logon-key-enrollment?id={request_id}{sid_query}", quote=True)
             reload_link = f'<a class="button secondary small" href="{reload_href}">Reload status</a>'
             error = f'<section class="card error">{html.escape(message)}</section>' if message else ''
@@ -1277,7 +1286,8 @@ The account must change it at next sign-in.</p>
             elif state["status"] == "ready":
                 body += f'<p class="status">Pairing code: <strong>{html.escape(state["pairing_code"])}</strong></p><p class="muted">Protection reported by Android: {html.escape(state["attestation_status"])}. A code match verifies the request, not the phone manufacturer or hardware beyond the attestation result.</p><form method="post" action="/admin/confirm-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><input type="hidden" name="pairing_code" value="{html.escape(state["pairing_code"])}"><button>Codes match — activate key</button></form>'
             body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="sid" value="' + html.escape(sid) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form>' + reload_link + '<a class="button" href="/admin/' + (('account?sid=' + sid) if sid else '') + '">Return to accounts</a></div>'
-        return self._response(200, self._page("AD logon-key enrollment", body))
+        return self._response(200, self._page("AD logon-key enrollment", body),
+                              script_nonce=locals().get("refresh_nonce"))
 
     LOG_PAGE_SIZE = 500
     LOG_MAX_BYTES = 2 * 1024 * 1024
@@ -1412,8 +1422,8 @@ The account must change it at next sign-in.</p>
         else:
             # Same throttling hazard as the AD key page: reload until terminal.
             refresh_seconds = 2 if state["status"] == "pending" else 10
-            refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">'
             sid_query = f"&sid={html.escape(sid, quote=True)}" if sid else ""
+            refresh, refresh_nonce = self._auto_reload(refresh_seconds)
             reload_href = html.escape(f"/admin/enrollment?id={request_id}{sid_query}", quote=True)
             reload_link = f'<a class="button secondary small" href="{reload_href}">Reload status</a>'
             pairing = state.get("pairing_code")
@@ -1429,7 +1439,8 @@ The account must change it at next sign-in.</p>
                 content += '<p class="status">Pairing code: <strong>' + html.escape(pairing) + '</strong></p>'
                 content += f'''<form method="post" action="/admin/confirm-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button name="confirm" value="match">The codes match — confirm enrollment</button></form>'''
             content += f'''</section><div class="form-actions"><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button></form>''' + reload_link + '<a class="button" href="/admin/' + (('account?sid=' + sid) if sid else '') + '">Return to accounts</a></div>'
-        return self._response(status_code, self._page("Phone enrollment", content))
+        return self._response(status_code, self._page("Phone enrollment", content),
+                              script_nonce=locals().get("refresh_nonce"))
 
 
 def _query_sid(params) -> str:
