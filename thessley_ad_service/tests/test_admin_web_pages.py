@@ -128,16 +128,16 @@ class AccountPasswordActionTest(unittest.TestCase):
 
     def test_change_password_action_is_offered_for_a_normal_account(self):
         html = self._render_accounts(self._user("S-1-5-21-1-2-3-1108"))
-        self.assertIn("Change password…", html)
+        self.assertIn("Change password", html)
         self.assertIn("/admin/user/password?sid=S-1-5-21-1-2-3-1108", html)
 
     def test_change_password_action_is_hidden_for_a_dc_administrator(self):
         html = self._render_accounts(self._user("S-1-5-21-1-2-3-1108", dc_admin=True))
-        self.assertNotIn("Change password…", html)
+        self.assertNotIn("Change password", html)
 
     def test_change_password_action_is_hidden_for_the_signed_in_account(self):
         html = self._render_accounts(self._user(self.SESSION_SID))
-        self.assertNotIn("Change password…", html)
+        self.assertNotIn("Change password", html)
 
     def test_password_form_posts_to_the_reset_route(self):
         web = object.__new__(AdminWeb)
@@ -180,18 +180,18 @@ class WorkstationQrActionTest(unittest.TestCase):
 
     def test_allow_action_offered_when_not_authorized(self):
         html = self._render_accounts(self._user("S-1-5-21-1-2-3-1108"))
-        self.assertIn("Allow workstation QR…", html)
+        self.assertIn("Allow workstation QR", html)
         self.assertIn("/admin/workstation-qr?sid=S-1-5-21-1-2-3-1108&action=allow", html)
-        self.assertNotIn("Disallow workstation QR…", html)
+        self.assertNotIn("Disallow workstation QR", html)
 
     def test_disallow_action_offered_when_authorized(self):
         html = self._render_accounts(self._user("S-1-5-21-1-2-3-1108", authorized=True))
-        self.assertIn("Disallow workstation QR…", html)
+        self.assertIn("Disallow workstation QR", html)
         self.assertIn("action=revoke", html)
 
     def test_actions_hidden_for_self_and_dc_administrators(self):
-        self.assertNotIn("workstation QR…", self._render_accounts(self._user(self.SESSION_SID)))
-        self.assertNotIn("workstation QR…",
+        self.assertNotIn("workstation QR", self._render_accounts(self._user(self.SESSION_SID)))
+        self.assertNotIn("workstation QR",
                          self._render_accounts(self._user("S-1-5-21-1-2-3-1108", dc_admin=True)))
 
     def test_confirmation_page_requests_the_admin_password(self):

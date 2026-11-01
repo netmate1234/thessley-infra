@@ -1168,7 +1168,7 @@ The account must change it at next sign-in.</p>
                 phone_items.append(f'''<article class="key-item"><div class="key-main"><div class="key-title">{html.escape(key['label'])}</div>
 <div class="key-meta">{html.escape(key['machine_name'])} · Enrolled {html.escape(enrolled)}</div>
 {self._protection_badge(attestation)}{extra}
-<div class="key-actions"><form method="post" action="/admin/revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="danger small">Revoke phone…</button></form></div></div></article>''')
+<div class="key-actions"><form method="post" action="/admin/revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="danger small">Revoke phone</button></form></div></div></article>''')
             phone_summary = f'{len(keys)} enrolled' if keys else 'None enrolled'
             logon_items = []
             if active_logon_keys:
@@ -1177,7 +1177,7 @@ The account must change it at next sign-in.</p>
                     attestation = str(key.get("attestation_status", "unverified"))
                     logon_items.append(f'''<article class="key-item"><div class="key-main"><div class="key-title">{html.escape(key["label"])}</div>
 <div class="key-meta">SHA-256 · {fingerprint}</div>{self._protection_badge(attestation)}
-<div class="key-actions"><form method="post" action="/admin/revoke-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="key_id" value="{html.escape(key['key_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="danger small">Revoke key…</button></form></div></div></article>''')
+<div class="key-actions"><form method="post" action="/admin/revoke-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="key_id" value="{html.escape(key['key_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="danger small">Revoke key</button></form></div></div></article>''')
             else:
                 logon_items.append('<p class="empty">No AD sign-in key enrolled.</p>')
             logon_summary = f'{len(active_logon_keys)} active' if active_logon_keys else 'None enrolled'
@@ -1192,14 +1192,14 @@ The account must change it at next sign-in.</p>
                 content += f'''<form method="post" action="/admin/enroll-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="secondary small">{self._icon('key')} Add AD sign-in key</button></form>'''
             content += f'''<a class="button secondary small" href="/admin/user/edit?sid={html.escape(sid)}">{self._icon('settings')} Edit</a>'''
             if sid != session["sid"] and not dc_administrator and not sid.endswith("-500"):
-                content += f'''<a class="button secondary small" href="/admin/user/password?sid={html.escape(sid)}">{self._icon('key')} Change password…</a>'''
+                content += f'''<a class="button secondary small" href="/admin/user/password?sid={html.escape(sid)}">{self._icon('key')} Change password</a>'''
             if sid != session["sid"] and not dc_administrator:
                 if authorized:
-                    content += f'''<a class="button danger small" href="/admin/workstation-qr?sid={html.escape(sid)}&action=revoke">{self._icon('monitor')} Disallow workstation QR…</a>'''
+                    content += f'''<a class="button danger small" href="/admin/workstation-qr?sid={html.escape(sid)}&action=revoke">{self._icon('monitor')} Disallow workstation QR</a>'''
                 else:
-                    content += f'''<a class="button secondary small" href="/admin/workstation-qr?sid={html.escape(sid)}&action=allow">{self._icon('monitor')} Allow workstation QR…</a>'''
+                    content += f'''<a class="button secondary small" href="/admin/workstation-qr?sid={html.escape(sid)}&action=allow">{self._icon('monitor')} Allow workstation QR</a>'''
             if sid != session["sid"] and not dc_administrator and not sid.endswith("-500"):
-                content += f'''<a class="button danger small" href="/admin/user/delete?sid={html.escape(sid)}">{self._icon('warning')} Delete…</a>'''
+                content += f'''<a class="button danger small" href="/admin/user/delete?sid={html.escape(sid)}">{self._icon('warning')} Delete</a>'''
             content += '</div></section>'
         if not single_sid:
             if snapshot.get("truncated"):
