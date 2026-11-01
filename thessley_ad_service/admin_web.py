@@ -256,7 +256,6 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             params = parse_qs(query, keep_blank_values=True)
             notice = params.get("notice", [""])[0] if len(params.get("notice", [])) == 1 else ""
             notice_text = {
-                "user-created": "AD user created. The account must change its temporary password at first sign-in.",
                 "user-updated": "AD user updated.",
                 "user-deleted": "AD user deleted and its Thessley keys revoked.",
             }.get(notice, "")
@@ -275,8 +274,6 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         token, session = self._session(headers)
         if not session:
             return self._login_page(headers)
-        if path == "/admin/users/new":
-            return self._user_form(session)
         if path in ("/admin/user/edit", "/admin/user/delete"):
             params = parse_qs(query, keep_blank_values=True)
             sid_values = params.get("sid", [])
@@ -483,23 +480,9 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
             _LOG.exception("admin_ad_user_lookup_failed target_sid=%s", sid)
             return None
 
-    def _user_form(self, session: dict, *, user: dict | None = None, message: str = ""):
+    def _user_form(self, session: dict, *, user: dict, message: str = ""):
         csrf = html.escape(session["csrf"])
         alert = f'<section class="card error">{html.escape(message)}</section>' if message else ""
-        if user is None:
-            body = f'''<h1>{self._icon("plus")} Add AD user</h1>{alert}
-<section class="card"><form class="admin-user-form" method="post" action="/admin/users/create">
-<input type="hidden" name="csrf" value="{csrf}">
-<label for="new-username">Username</label><input id="new-username" name="username" required maxlength="20" pattern="[A-Za-z0-9_.-]+" autocomplete="off" autocapitalize="none">
-<p class="muted small">The sign-in name is permanent after creation.</p>
-<label for="new-display-name">Display name</label><input id="new-display-name" name="display_name" required maxlength="256" autocomplete="name">
-<label for="new-password">Temporary password</label><input id="new-password" name="initial_password" type="password" required minlength="8" maxlength="256" autocomplete="new-password">
-<p class="muted small">The new user must change this password at first sign-in.</p>
-<label for="admin-confirm-password">Your administrator password</label><input id="admin-confirm-password" name="admin_password" type="password" required autocomplete="current-password">
-<p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
-<div class="form-actions"><button>{self._icon("plus")} Create user</button><a class="button secondary" href="/admin/">Cancel</a></div>
-</form></section>'''
-            return self._response(200, self._page("Add AD user", body))
         sid = str(user["sid"])
         name = html.escape(str(user.get("name") or user.get("sam", "")), quote=True)
         username = html.escape(str(user.get("sam", "")), quote=True)
@@ -542,30 +525,6 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
         token, session = self._session(headers)
         if not session or not secrets.compare_digest(form.get("csrf", ""), session["csrf"]):
             return self._response(403, self._page("Session expired", '<section class="card error">Session expired. Sign in again.</section>'))
-        if path == "/admin/users/create":
-            if not self._reauthenticate_admin(session, form):
-                return self._user_form(session, message="Enter your current administrator password to confirm user creation.")
-            username = form.get("username", "").strip()
-            display_name = form.get("display_name", "").strip()
-            initial_password = form.pop("initial_password", "")
-            try:
-                if not callable(getattr(self.directory, "create_user", None)):
-                    raise ValueError("AD user creation is unavailable on this service.")
-                sid = self.directory.create_user(
-                    administrator=session["user"], password=form.pop("_admin_password", ""),
-                    username=username, display_name=display_name, initial_password=initial_password,
-                )
-            except ValueError as exc:
-                return self._user_form(session, message=str(exc))
-            except Exception:
-                _LOG.exception("admin_ad_user_create_failed actor=%s target=%s",
-                               session["sid"], username[:20])
-                return self._user_form(session, message="AD could not create the account. Check permissions and password policy.")
-            finally:
-                initial_password = ""
-            _LOG.warning("admin_ad_user_created actor=%s target_sid=%s username=%s",
-                         session["sid"], sid, username)
-            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-created"),))
         if path == "/admin/users/update":
             sid = form.get("sid", "")
             user = self._find_user(sid)
@@ -891,7 +850,6 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
         content = f'''<header class="page-head"><div><h1>{self._icon("users")} AD accounts</h1>
 <div class="muted">Manage phone approvals and AD sign-in keys.</div></div>
 <nav class="page-actions" aria-label="Administration">
-<a class="button" href="/admin/users/new">{self._icon("plus")} Add user</a>
 <a class="button secondary" href="/admin/policy">{self._icon("settings")} Policy</a>
 </nav></header>
 {notice_html}
