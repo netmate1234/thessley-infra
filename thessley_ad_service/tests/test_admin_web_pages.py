@@ -525,9 +525,30 @@ class LogPageTest(unittest.TestCase):
                 {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
         html = body.decode()
         self.assertEqual(status, 200)
-        self.assertIn("WARNING", html)
+        self.assertIn("warning", html.lower())
         self.assertNotIn("entry 1<", html)      # INFO rows are filtered out
-        self.assertIn("important of", html)
+        self.assertIn("events of", html)
+
+    def test_activity_feed_labels_logins_enrollments_and_revokes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp) / "service.log"
+            log.write_text("\n".join([
+                "2026-11-01 10:00:00,000 INFO admin_login_ok sid=S-1 source=10.0.0.5",
+                "2026-11-01 10:01:00,000 INFO admin_enrollment_confirmed actor=S-1 request=abc",
+                "2026-11-01 10:02:00,000 WARNING admin_phone_revoked actor=S-1 credential_id=x",
+                "2026-11-01 10:03:00,000 INFO ad_logon_key_staged principal_id=y key_id=z",
+                "2026-11-01 10:04:00,000 ERROR API route handler failed path=/x",
+                "2026-11-01 10:05:00,000 INFO some unrelated chatter",
+            ]) + "\n")
+            _s, _h, body = self._web(str(log))._log_page(
+                {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+        html = body.decode()
+        self.assertIn("Administrator signed in", html)
+        self.assertIn("Phone enrollment confirmed", html)
+        self.assertIn("Phone approval revoked", html)
+        self.assertIn("AD sign-in key submitted by phone", html)
+        self.assertIn("API route handler failed", html)
+        self.assertNotIn("unrelated chatter", html)
 
     def test_show_all_lists_everything_and_paginates(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1389,6 +1389,52 @@ The account must change it at next sign-in.</p>
                 entries.append(("", "INFO", line.strip()))
         return entries
 
+    _LOG_ACTIVITY = {
+        "admin_login_ok": ("login", "Administrator signed in"),
+        "admin_qr_login_ok": ("login", "Administrator approved phone sign-in"),
+        "admin_qr_login_started": ("login", "Administrator requested phone sign-in"),
+        "admin_enrollment_started": ("enroll", "Phone enrollment started"),
+        "admin_enrollment_confirmed": ("enroll", "Phone enrollment confirmed"),
+        "admin_enrollment_cancelled": ("revoke", "Phone enrollment cancelled"),
+        "ad_logon_key_staged": ("enroll", "AD sign-in key submitted by phone"),
+        "admin_ad_logon_key_enrollment_started": ("enroll", "AD sign-in key enrollment started"),
+        "admin_ad_logon_key_enrollment_confirmed": ("enroll", "AD sign-in key confirmed"),
+        "admin_ad_logon_key_enrollment_cancelled": ("revoke", "AD sign-in key enrollment cancelled"),
+        "admin_phone_revoked": ("revoke", "Phone approval revoked"),
+        "admin_ad_logon_key_revoked": ("revoke", "AD sign-in key revoked"),
+        "admin_ad_user_created": ("user", "AD user created"),
+        "admin_ad_user_updated": ("user", "AD user updated"),
+        "admin_ad_user_deleted": ("user", "AD user deleted"),
+        "admin_ad_password_changed": ("user", "AD password changed"),
+        "admin_workstation_qr_changed": ("access", "Workstation QR access changed"),
+        "admin_logon_key_revoked": ("revoke", "AD sign-in key revoked"),
+    }
+
+    @classmethod
+    def _log_activity(cls, timestamp: str, level: str, message: str):
+        """Map a raw log line to (category, label, detail) or None for noise."""
+        event = message.split(" ", 1)[0]
+        mapped = cls._LOG_ACTIVITY.get(event)
+        detail = message[len(event):].strip()
+        if mapped:
+            category, label = mapped
+            if level == "WARNING" and "failed" in message.lower():
+                label += " (failed)"
+            return category, label, detail
+        if level in ("ERROR", "WARNING"):
+            return ("error" if level == "ERROR" else "warn"), message[:200], ""
+        # Anything that is clearly a state change is worth showing even when it
+        # is not in the curated map above; plain chatter stays hidden.
+        import re as _re
+        if level == "INFO" and _re.search(
+                r"^(admin_|ad_|piv_|thessley_)|_(ok|started|confirmed|cancelled|staged|revoked|"
+                r"created|updated|deleted|changed|failed)$", event):
+            category = "piv" if event.startswith("piv_") else (
+                "keys" if event.startswith("ad_") else "access")
+            return category, event.replace("_", " "), detail[:200]
+        return None
+        return None
+
     def _log_page(self, session: dict, page: int = 1, show_all: bool = False):
         if not self.log_path:
             return self._response(503, self._page(
@@ -1410,8 +1456,16 @@ The account must change it at next sign-in.</p>
 
         entries = self._log_entries(text)
         total = len(entries)
-        important = [entry for entry in entries if entry[1] in ("ERROR", "WARNING")]
-        shown = entries if show_all else important
+        activities = []
+        for timestamp, level, message in entries:
+            mapped = self._log_activity(timestamp, level, message)
+            if mapped:
+                activities.append((timestamp, mapped[0], mapped[1], mapped[2]))
+        important = activities
+        if show_all:
+            shown = [(timestamp, "raw", level, message) for timestamp, level, message in entries]
+        else:
+            shown = activities
         shown = list(reversed(shown))          # newest first
         pages = max(1, -(-len(shown) // self.LOG_PAGE_SIZE))
         page = min(max(page, 1), pages)
@@ -1429,21 +1483,27 @@ The account must change it at next sign-in.</p>
                   else f'<a class="button secondary small" href="/admin/log?all=1&page=1">Show all {total}</a>')
         note = ('<p class="muted small">Only the most recent 2 MiB are read.</p>' if truncated else '')
 
+        badge_for = {"login": ("yes", "login"), "enroll": ("yes", "enroll"),
+                     "revoke": ("no", "revoke"), "user": ("neutral", "user"),
+                     "keys": ("neutral", "keys"), "piv": ("medium", "piv"),
+                     "access": ("medium", "access"), "warn": ("medium", "warning"),
+                     "error": ("no", "error"), "raw": ("neutral", "raw")}
         rows = []
-        for timestamp, level, message in chunk:
-            css = {"ERROR": "no", "WARNING": "medium"}.get(level, "neutral")
+        for timestamp, category, label, detail in chunk:
+            css, text = badge_for.get(category, ("neutral", category))
             when = html.escape(timestamp[11:19] if timestamp else "")
             day = html.escape(timestamp[:10] if timestamp else "")
+            extra = (f'<span class="log-detail">{html.escape(detail)}</span>' if detail else "")
             rows.append(
-                f'<li class="log-row"><span class="badge {css}">{level}</span>'
+                f'<li class="log-row"><span class="badge {css}">{text}</span>'
                 f'<span class="log-when" title="{day}">{when}</span>'
-                f'<span class="log-msg">{html.escape(message)}</span></li>')
+                f'<span class="log-msg">{html.escape(label)}{extra}</span></li>')
         if not rows:
             rows.append('<li class="log-row"><span class="badge yes">OK</span>'
                         '<span class="log-msg">No important events in the read window.</span></li>')
 
         body = (f'<header class="page-head"><div><h1>{self._icon("admin")} Service log</h1>'
-                f'<div class="muted">{len(important)} important of {total} entries · {html.escape(str(self.log_path))}</div></div>'
+                f'<div class="muted">{len(important)} events of {total} log lines · {html.escape(str(self.log_path))}</div></div>'
                 f'<div class="header-actions"><nav class="page-actions">'
                 f'<a class="button secondary small" href="/admin/log">Refresh</a>{toggle}'
                 f'<a class="button secondary small" href="/admin/">{self._icon("chevron")} All accounts</a>'
