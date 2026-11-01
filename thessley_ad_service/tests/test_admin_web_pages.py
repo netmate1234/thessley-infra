@@ -248,6 +248,113 @@ class AccountFocusTest(unittest.TestCase):
         self.assertIn(f'id="account-{self.SID}"', html)
 
 
+class RevokeReturnTest(unittest.TestCase):
+    SID = "S-1-5-21-1-2-3-1108"
+
+    def test_anchor_requires_a_sid_that_matches_the_principal(self):
+        from infra.thessley_ad_service.protocol import principal_id_from_sid
+        pid = principal_id_from_sid(self.SID)
+        self.assertEqual(AdminWeb._anchor_sid(self.SID, pid), self.SID)
+        self.assertEqual(AdminWeb._anchor_sid(self.SID, "f" * 64), "")
+        self.assertEqual(AdminWeb._anchor_sid("not-a-sid", pid), "")
+
+    def test_revoke_forms_on_the_card_carry_the_sid(self):
+        web = object.__new__(AdminWeb)
+        web.authority = "THESSLEYLAB"
+        web._lock = threading.Lock()
+        web.allowed_group_sids = frozenset({"S-1-5-21-1-2-3-1105"})
+
+        class _Dir:
+            def list_users(self, groups, limit=1000):
+                return {"users": [{"sid": "S-1-5-21-1-2-3-1108", "sam": "target", "name": "Target",
+                                   "enabled": True, "authorized": True, "dc_administrator": False}]}
+
+        class _Phones:
+            def list_for_principal(self, principal_id):
+                return [{"credential_id": "c" * 32, "label": "Phone", "machine_name": "PC",
+                         "enrolled_at": 1700000000, "attestation_status": "verified_tee",
+                         "attestation_reason": ""}]
+
+        class _Keys:
+            def list_for_principal(self, principal_id):
+                return [{"key_id": "k" * 32, "label": "AD key", "public_key_sha256": "a" * 64,
+                         "attestation_status": "verified_tee", "revoked_at": None}]
+
+        web.directory = _Dir()
+        web.phones = _Phones()
+        web.ad_logon_keys = _Keys()
+        html = _html(web._directory_page({"sid": "S-1-5-21-1-2-3-500", "user": "Administrator",
+                                          "csrf": CSRF}))
+        self.assertIn('action="/admin/revoke"', html)
+        self.assertIn('action="/admin/revoke-logon-key"', html)
+        for action in ("/admin/revoke", "/admin/revoke-logon-key"):
+            with self.subTest(action=action):
+                form = re.search(r'<form method="post" action="' + re.escape(action) + r'">.*?</form>',
+                                 html, re.S)
+                self.assertIsNotNone(form, f"no form for {action}")
+                self.assertIn('name="sid" value="S-1-5-21-1-2-3-1108"', form.group(0))
+
+    def test_revoke_redirects_return_to_the_account(self):
+        for notice in ("phone-revoked", "logon-key-revoked"):
+            with self.subTest(notice=notice):
+                _status, headers, _body = AdminWeb._accounts_redirect(notice, self.SID)
+                self.assertEqual(dict(headers)["Location"],
+                                 f"/admin/?notice={notice}#account-{self.SID}")
+
+    def _stub_web(self):
+        from infra.thessley_ad_service.protocol import principal_id_from_sid
+        pid = principal_id_from_sid(self.SID)
+        cred, key = "c" * 32, "k" * 32
+        web = object.__new__(AdminWeb)
+        web.authority = "THESSLEYLAB"
+        web._lock = threading.Lock()
+        web._session = lambda headers: ("token", {"sid": "S-1-5-21-1-2-3-500",
+                                                  "user": "Administrator", "csrf": CSRF})
+
+        class _Phones:
+            def list_for_principal(self, principal_id):
+                return [{"credential_id": cred, "label": "Phone", "machine_name": "PC",
+                         "enrolled_at": 1700000000, "attestation_status": "verified_tee",
+                         "attestation_reason": ""}]
+
+        class _Keys:
+            def list_for_principal(self, principal_id):
+                return [{"key_id": key, "label": "AD key", "public_key_sha256": "a" * 64,
+                         "attestation_status": "verified_tee", "revoked_at": None}]
+
+        web.phones = _Phones()
+        web.ad_logon_keys = _Keys()
+        return web, pid, cred, key
+
+    def test_phone_revocation_confirmation_links_back_to_the_account(self):
+        web, pid, cred, _key = self._stub_web()
+        form = {"csrf": CSRF, "credential_id": cred, "principal_id": pid, "sid": self.SID}
+        status, _headers, body = web._post("/admin/revoke", form, {}, "127.0.0.1")
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn(f'action="/admin/confirm-revoke"', html)
+        self.assertIn(f'href="/admin/#account-{self.SID}"', html)
+        self.assertIn(f'name="sid" value="{self.SID}"', html)
+
+    def test_logon_key_revocation_confirmation_links_back_to_the_account(self):
+        web, pid, _cred, key = self._stub_web()
+        form = {"csrf": CSRF, "key_id": key, "principal_id": pid, "sid": self.SID}
+        status, _headers, body = web._post("/admin/revoke-logon-key", form, {}, "127.0.0.1")
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn('action="/admin/confirm-revoke-logon-key"', html)
+        self.assertIn(f'href="/admin/#account-{self.SID}"', html)
+
+    def test_confirmation_ignores_a_sid_for_another_principal(self):
+        web, pid, cred, _key = self._stub_web()
+        other = "S-1-5-21-1-2-3-9999"
+        form = {"csrf": CSRF, "credential_id": cred, "principal_id": pid, "sid": other}
+        _status, _headers, body = web._post("/admin/revoke", form, {}, "127.0.0.1")
+        html = body.decode("utf-8")
+        self.assertNotIn(f"#account-{other}", html)
+        self.assertIn('name="sid" value=""', html)
+
+
 class PhoneEnrollmentPageTest(unittest.TestCase):
     def render(self, status, pairing_code=""):
         return _html(_phone_web(status, pairing_code)._enrollment_page(

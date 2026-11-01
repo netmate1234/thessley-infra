@@ -259,6 +259,10 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 "user-created": "AD user created. The account must change its temporary password at first sign-in.",
                 "user-updated": "AD user updated.",
                 "user-password": "AD password changed. The account must set a new one at next sign-in.",
+                "phone-revoked": "Phone revoked. Linked AD sign-in keys were revoked with it.",
+                "enrollment-cancelled": "Phone enrollment cancelled.",
+                "ad-key-enrollment-cancelled": "AD sign-in key enrollment cancelled.",
+                "logon-key-revoked": "AD sign-in key revoked.",
                 "workstation-qr-allowed": "Workstation QR allowed. The account can now use QR sign-in at paired workstations.",
                 "workstation-qr-revoked": "Workstation QR revoked. The account can no longer sign in at paired workstations.",
                 "user-deleted": "AD user deleted and its Thessley keys revoked.",
@@ -324,7 +328,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             if len(request_ids) != 1 or not _REQUEST_ID.fullmatch(request_ids[0]):
                 return self._response(400, self._page("Enrollment", "<section class=card>Invalid enrollment ID.</section>"))
             qr_data, app_link, _expires = self._enrollment_qrs.get(request_ids[0], ("", "", 0))
-            return self._enrollment_page(request_ids[0], session, qr_data=qr_data, app_link=app_link)
+            return self._enrollment_page(request_ids[0], session, qr_data=qr_data, app_link=app_link,
+                                         sid=_query_sid(params))
         if path == "/admin/ad-logon-key-enrollment":
             params = parse_qs(query, keep_blank_values=True)
             request_ids = params.get("id", [])
@@ -332,7 +337,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 return self._response(400, self._page("AD key enrollment", "<section class=card>Invalid enrollment ID.</section>"))
             qr_data, app_link, _expires = self._ad_logon_key_qrs.get(request_ids[0], ("", "", 0))
             return self._ad_logon_key_enrollment_page(
-                request_ids[0], session, qr_data=qr_data, app_link=app_link
+                request_ids[0], session, qr_data=qr_data, app_link=app_link,
+                sid=_query_sid(params),
             )
         if path == "/admin/logout":
             return self._response(405, self._page("Sign out", "<section class=card>Use the sign-out button.</section>"))
@@ -543,7 +549,7 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
 <label for="edit-state">Account status</label><select id="edit-state" name="enabled"><option value="yes"{' selected' if enabled else ''}>Enabled</option><option value="no"{' selected' if not enabled else ''}>Disabled</option></select>
 <label for="edit-admin-password">Your administrator password</label><input id="edit-admin-password" name="admin_password" type="password" required autocomplete="current-password">
 <p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
-<div class="form-actions"><button>{self._icon("check")} Save changes</button><a class="button secondary" href="/admin/">Cancel</a></div>
+<div class="form-actions"><button>{self._icon("check")} Save changes</button><a class="button secondary" href="/admin/#account-{sid}">Cancel</a></div>
 </form></section>'''
         return self._response(200, self._page("Edit AD user", body))
 
@@ -569,7 +575,7 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
 <label for="workstation-admin-password">Your administrator password</label>
 <input id="workstation-admin-password" name="admin_password" type="password" required autocomplete="current-password">
 <p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
-<div class="form-actions"><button{'' if allow else ' class="danger"'}>{self._icon("monitor")} {title}</button><a class="button secondary" href="/admin/">Cancel</a></div>
+<div class="form-actions"><button{'' if allow else ' class="danger"'}>{self._icon("monitor")} {title}</button><a class="button secondary" href="/admin/#account-{sid}">Cancel</a></div>
 </form></section>'''
         return self._response(200, self._page(title, body))
 
@@ -588,7 +594,7 @@ The account must change it at next sign-in.</p>
 <label for="change-admin-password">Your administrator password</label>
 <input id="change-admin-password" name="admin_password" type="password" required autocomplete="current-password">
 <p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
-<div class="form-actions"><button>{self._icon("key")} Set password</button><a class="button secondary" href="/admin/">Cancel</a></div>
+<div class="form-actions"><button>{self._icon("key")} Set password</button><a class="button secondary" href="/admin/#account-{sid}">Cancel</a></div>
 </form></section>'''
         return self._response(200, self._page("Change AD password", body))
 
@@ -603,7 +609,7 @@ The account must change it at next sign-in.</p>
 <input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{sid}">
 <label for="delete-confirm-name">Type <strong>{username}</strong> to confirm</label><input id="delete-confirm-name" name="confirm_username" required autocomplete="off" autocapitalize="none">
 <label for="delete-admin-password">Your administrator password</label><input id="delete-admin-password" name="admin_password" type="password" required autocomplete="current-password">
-<div class="form-actions"><button class="danger">{self._icon("warning")} Delete permanently</button><a class="button secondary" href="/admin/">Cancel</a></div>
+<div class="form-actions"><button class="danger">{self._icon("warning")} Delete permanently</button><a class="button secondary" href="/admin/#account-{sid}">Cancel</a></div>
 </form></section>'''
         return self._response(200, self._page("Delete AD user", body))
 
@@ -864,7 +870,7 @@ The account must change it at next sign-in.</p>
                 self._enrollment_qrs[enrollment["request_id"]] = (qr_data, link, enrollment["expires_at"])
             _LOG.info("admin_enrollment_started actor=%s target=%s", session["sid"], principal.sid)
             return self._response(303, "", extra_headers=((
-                "Location", f"/admin/enrollment?id={enrollment['request_id']}"),))
+                "Location", f"/admin/enrollment?id={enrollment['request_id']}&sid={principal.sid}"),))
         if path == "/admin/enroll-ad-logon-key":
             sid = form.get("sid", "")
             if self.ad_logon_keys is None:
@@ -908,7 +914,7 @@ The account must change it at next sign-in.</p>
             _LOG.info("admin_ad_logon_key_enrollment_started actor=%s target=%s request=%s",
                       session["sid"], principal.sid, request["request_id"])
             return self._response(303, "", extra_headers=((
-                "Location", f"/admin/ad-logon-key-enrollment?id={request['request_id']}"),))
+                "Location", f"/admin/ad-logon-key-enrollment?id={request['request_id']}&sid={principal.sid}"),))
         if path == "/admin/confirm-ad-logon-key":
             request_id = form.get("id", "")
             pairing = form.get("pairing_code", "")
@@ -919,15 +925,17 @@ The account must change it at next sign-in.</p>
             ):
                 return self._ad_logon_key_enrollment_page(request_id, session, message="The code did not match or the request expired.")
             _LOG.info("admin_ad_logon_key_enrollment_confirmed actor=%s request=%s", session["sid"], request_id)
+            sid = _query_sid({"sid": [form.get("sid", "")]})
+            sid_query = f"&sid={sid}" if sid else ""
             return self._response(303, "", extra_headers=((
-                "Location", f"/admin/ad-logon-key-enrollment?id={request_id}"),))
+                "Location", f"/admin/ad-logon-key-enrollment?id={request_id}{sid_query}"),))
         if path == "/admin/cancel-ad-logon-key":
             request_id = form.get("id", "")
             if self.ad_logon_keys is not None and _REQUEST_ID.fullmatch(request_id):
                 self.ad_logon_keys.cancel_enrollment(request_id)
                 with self._lock:
                     self._ad_logon_key_qrs.pop(request_id, None)
-            return self._response(303, "", extra_headers=(("Location", "/admin/"),))
+            return self._accounts_redirect("ad-key-enrollment-cancelled", _query_sid({"sid": [form.get("sid", "")]}))
         if path == "/admin/confirm-enrollment":
             request_id = form.get("id", "")
             if not _REQUEST_ID.fullmatch(request_id) or form.get("confirm") != "match":
@@ -944,7 +952,10 @@ The account must change it at next sign-in.</p>
                 _LOG.warning("admin_enrollment_confirmation_failed actor=%s request=%s", session["sid"], request_id)
                 return self._enrollment_page(request_id, session, message="The code did not match or expired.")
             _LOG.info("admin_enrollment_confirmed actor=%s request=%s", session["sid"], request_id)
-            return self._response(303, "", extra_headers=(("Location", f"/admin/enrollment?id={request_id}"),))
+            sid = _query_sid({"sid": [form.get("sid", "")]})
+            sid_query = f"&sid={sid}" if sid else ""
+            return self._response(303, "", extra_headers=((
+                "Location", f"/admin/enrollment?id={request_id}{sid_query}"),))
         if path == "/admin/cancel-enrollment":
             request_id = form.get("id", "")
             if not _REQUEST_ID.fullmatch(request_id):
@@ -953,7 +964,7 @@ The account must change it at next sign-in.</p>
             with self._lock:
                 self._enrollment_qrs.pop(request_id, None)
             _LOG.info("admin_enrollment_cancelled actor=%s request=%s", session["sid"], request_id)
-            return self._response(303, "", extra_headers=(("Location", "/admin/"),))
+            return self._accounts_redirect("enrollment-cancelled", _query_sid({"sid": [form.get("sid", "")]}))
         if path == "/admin/revoke":
             credential = form.get("credential_id", "")
             principal_id = form.get("principal_id", "")
@@ -963,14 +974,16 @@ The account must change it at next sign-in.</p>
                              if item["credential_id"] == credential), None)
             if not matching:
                 return self._response(404, self._page("Revoke key", '<section class="card error">No active matching phone key was found.</section>'))
+            anchor_sid = self._anchor_sid(form.get("sid", ""), principal_id)
+            cancel_href = f"/admin/#account-{anchor_sid}" if anchor_sid else "/admin/"
             label = html.escape(str(matching.get("label", "Phone")))
             machine_name = html.escape(str(matching.get("machine_name", "")))
             content = f'''<h1>Confirm phone revocation</h1>
 <section class="card error"><p>You are about to revoke <strong>{label}</strong> on <strong>{machine_name}</strong>.</p>
 <p>This phone will no longer approve sign-ins. AD logon keys enrolled through this phone will also be revoked. Revocation is permanent; audit records are retained.</p>
 <form method="post" action="/admin/confirm-revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
-<input type="hidden" name="credential_id" value="{html.escape(credential)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}">
-<div class="form-actions"><button class="danger">Yes, revoke this phone</button><a class="button" href="/admin/">Cancel</a></div></form></section>'''
+<input type="hidden" name="credential_id" value="{html.escape(credential)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}"><input type="hidden" name="sid" value="{html.escape(anchor_sid)}">
+<div class="form-actions"><button class="danger">Yes, revoke this phone</button><a class="button" href="{cancel_href}">Cancel</a></div></form></section>'''
             return self._response(200, self._page("Confirm phone revocation", content))
         if path == "/admin/confirm-revoke":
             credential = form.get("credential_id", "")
@@ -993,7 +1006,7 @@ The account must change it at next sign-in.</p>
                 return self._response(409, self._page("Revoke key", '<section class="card error">The phone key changed while revocation was in progress. Refresh before retrying.</section>'))
             _LOG.warning("admin_phone_revoked actor=%s principal_id=%s credential_id=%s linked_ad_keys_revoked=%d",
                          session["sid"], principal_id, credential, linked_ad_keys)
-            return self._response(303, "", extra_headers=(("Location", "/admin/"),))
+            return self._accounts_redirect("phone-revoked", self._anchor_sid(form.get("sid", ""), principal_id))
         if path in ("/admin/revoke-logon-key", "/admin/confirm-revoke-logon-key"):
             key_id = form.get("key_id", "")
             principal_id = form.get("principal_id", "")
@@ -1005,20 +1018,29 @@ The account must change it at next sign-in.</p>
             if key is None:
                 return self._response(404, self._page("AD logon key", '<section class="card error">No active matching key was found.</section>'))
             if path == "/admin/revoke-logon-key":
+                anchor_sid = self._anchor_sid(form.get("sid", ""), principal_id)
+                cancel_href = f"/admin/#account-{anchor_sid}" if anchor_sid else "/admin/"
                 content = f'''<h1>Confirm AD logon-key revocation</h1>
 <section class="card error"><p>Revoke <strong>{html.escape(key["label"])}</strong> for this AD account?</p>
 <p>Fingerprint: <code>{html.escape(key["public_key_sha256"])}</code></p>
 <p>This public key is not currently eligible for sign-in. Revocation is permanent.</p>
 <form method="post" action="/admin/confirm-revoke-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
-<input type="hidden" name="key_id" value="{html.escape(key_id)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}">
-<div class="form-actions"><button class="danger">Yes, revoke this key</button><a class="button" href="/admin/">Cancel</a></div></form></section>'''
+<input type="hidden" name="key_id" value="{html.escape(key_id)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}"><input type="hidden" name="sid" value="{html.escape(anchor_sid)}">
+<div class="form-actions"><button class="danger">Yes, revoke this key</button><a class="button" href="{cancel_href}">Cancel</a></div></form></section>'''
                 return self._response(200, self._page("Confirm AD logon-key revocation", content))
             if not self.ad_logon_keys.revoke(key_id=key_id, administrator=session["sid"]):
                 return self._response(409, self._page("AD logon key", '<section class="card error">The key was already revoked or could not be updated.</section>'))
             _LOG.warning("admin_ad_logon_key_revoked actor=%s principal_id=%s key_id=%s",
                          session["sid"], principal_id, key_id)
-            return self._response(303, "", extra_headers=(("Location", "/admin/"),))
+            return self._accounts_redirect("logon-key-revoked", self._anchor_sid(form.get("sid", ""), principal_id))
         return self._response(404, self._page("Not found", "<section class=card>Page not found.</section>"))
+
+    @staticmethod
+    def _anchor_sid(sid, principal_id: str) -> str:
+        """Return the SID only when it provably belongs to this principal."""
+        if isinstance(sid, str) and principal_id_from_sid_safe(sid) == principal_id:
+            return sid
+        return ""
 
     @staticmethod
     def _accounts_redirect(notice: str, sid: str = ""):
@@ -1090,7 +1112,7 @@ The account must change it at next sign-in.</p>
                 phone_items.append(f'''<article class="key-item"><div class="key-main"><div class="key-title">{html.escape(key['label'])}</div>
 <div class="key-meta">{html.escape(key['machine_name'])} · Enrolled {html.escape(enrolled)}</div>
 {self._protection_badge(attestation)}{extra}
-<div class="key-actions"><form method="post" action="/admin/revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone…</button></form></div></div></article>''')
+<div class="key-actions"><form method="post" action="/admin/revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="danger small">Revoke phone…</button></form></div></div></article>''')
             phone_summary = f'{len(keys)} enrolled' if keys else 'None enrolled'
             logon_items = []
             if active_logon_keys:
@@ -1099,7 +1121,7 @@ The account must change it at next sign-in.</p>
                     attestation = str(key.get("attestation_status", "unverified"))
                     logon_items.append(f'''<article class="key-item"><div class="key-main"><div class="key-title">{html.escape(key["label"])}</div>
 <div class="key-meta">SHA-256 · {fingerprint}</div>{self._protection_badge(attestation)}
-<div class="key-actions"><form method="post" action="/admin/revoke-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="key_id" value="{html.escape(key['key_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke key…</button></form></div></div></article>''')
+<div class="key-actions"><form method="post" action="/admin/revoke-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="key_id" value="{html.escape(key['key_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="danger small">Revoke key…</button></form></div></div></article>''')
             else:
                 logon_items.append('<p class="empty">No AD sign-in key enrolled.</p>')
             logon_summary = f'{len(active_logon_keys)} active' if active_logon_keys else 'None enrolled'
@@ -1168,7 +1190,7 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
         return f'<span class="badge {level}" title="{html.escape(label, quote=True)}">{cls._icon(icon)} {text}</span>'
 
     def _ad_logon_key_enrollment_page(self, request_id: str, session: dict, qr_data: str = "",
-                                      message: str = "", app_link: str = ""):
+                                      message: str = "", app_link: str = "", sid: str = ""):
         if not qr_data or not app_link:
             stored_qr, stored_link, _expires = self._ad_logon_key_qrs.get(request_id, ("", "", 0))
             if not qr_data:
@@ -1192,7 +1214,8 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
             # "waiting" must recover by itself once the phone submits its key.
             refresh_seconds = 2 if state["status"] == "pending" else 10
             refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">'
-            reload_href = html.escape(f"/admin/ad-logon-key-enrollment?id={request_id}", quote=True)
+            sid_query = f"&sid={html.escape(sid, quote=True)}" if sid else ""
+            reload_href = html.escape(f"/admin/ad-logon-key-enrollment?id={request_id}{sid_query}", quote=True)
             reload_link = f'<a class="button secondary small" href="{reload_href}">Reload status</a>'
             error = f'<section class="card error">{html.escape(message)}</section>' if message else ''
             qr = f'<div class="qr-wrap"><img class="qr" alt="AD logon key enrollment QR" src="{html.escape(qr_data, quote=True)}"></div>' if qr_data else ''
@@ -1202,8 +1225,8 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
             if state["status"] == "pending":
                 body += '<p class="status">Waiting for the phone to create and submit its key…</p>'
             elif state["status"] == "ready":
-                body += f'<p class="status">Pairing code: <strong>{html.escape(state["pairing_code"])}</strong></p><p class="muted">Protection reported by Android: {html.escape(state["attestation_status"])}. A code match verifies the request, not the phone manufacturer or hardware beyond the attestation result.</p><form method="post" action="/admin/confirm-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><input type="hidden" name="pairing_code" value="{html.escape(state["pairing_code"])}"><button>Codes match — activate key</button></form>'
-            body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form>' + reload_link + '<a class="button" href="/admin/">Return to accounts</a></div>'
+                body += f'<p class="status">Pairing code: <strong>{html.escape(state["pairing_code"])}</strong></p><p class="muted">Protection reported by Android: {html.escape(state["attestation_status"])}. A code match verifies the request, not the phone manufacturer or hardware beyond the attestation result.</p><form method="post" action="/admin/confirm-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><input type="hidden" name="pairing_code" value="{html.escape(state["pairing_code"])}"><button>Codes match — activate key</button></form>'
+            body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="sid" value="' + html.escape(sid) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form>' + reload_link + '<a class="button" href="/admin/' + (('#account-' + sid) if sid else '') + '">Return to accounts</a></div>'
         return self._response(200, self._page("AD logon-key enrollment", body))
 
     def _policy_page(self, session: dict, message: str = ""):
@@ -1266,7 +1289,7 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
         return METHOD_LABELS.get(method, "Unknown method")
 
     def _enrollment_page(self, request_id: str, session: dict, *, qr_data: str = "", app_link: str = "",
-                         message: str = "", status_code: int = 200):
+                         message: str = "", status_code: int = 200, sid: str = ""):
         if not qr_data:
             qr_data, stored_link, _expires = self._enrollment_qrs.get(request_id, ("", "", 0))
             if not app_link:
@@ -1277,16 +1300,21 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
         if state["status"] == "confirmed":
             with self._lock:
                 self._enrollment_qrs.pop(request_id, None)
-            content = '<h1>Phone enrolled</h1><section class="card success">The AD account phone is now active across paired PCs.</section><a class="button" href="/admin/">Back to accounts</a>'
+            back = (f'<a class="button" href="/admin/#account-{html.escape(sid, quote=True)}">Back to accounts</a>'
+                    if sid else '<a class="button" href="/admin/">Back to accounts</a>')
+            content = '<h1>Phone enrolled</h1><section class="card success">The AD account phone is now active across paired PCs.</section>' + back
         elif state["status"] in ("expired", "denied"):
             with self._lock:
                 self._enrollment_qrs.pop(request_id, None)
-            content = '<h1>Enrollment ended</h1><section class="card error">This request expired or was cancelled. Start a fresh enrollment from the account list.</section><a class="button" href="/admin/">Back to accounts</a>'
+            back = (f'<a class="button" href="/admin/#account-{html.escape(sid, quote=True)}">Back to accounts</a>'
+                    if sid else '<a class="button" href="/admin/">Back to accounts</a>')
+            content = '<h1>Enrollment ended</h1><section class="card error">This request expired or was cancelled. Start a fresh enrollment from the account list.</section>' + back
         else:
             # Same throttling hazard as the AD key page: reload until terminal.
             refresh_seconds = 2 if state["status"] == "pending" else 10
             refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">'
-            reload_href = html.escape(f"/admin/enrollment?id={request_id}", quote=True)
+            sid_query = f"&sid={html.escape(sid, quote=True)}" if sid else ""
+            reload_href = html.escape(f"/admin/enrollment?id={request_id}{sid_query}", quote=True)
             reload_link = f'<a class="button secondary small" href="{reload_href}">Reload status</a>'
             pairing = state.get("pairing_code")
             qr = f'<div class="qr-wrap"><img class="qr" alt="Thessley phone enrollment QR code" src="{qr_data}"></div>' if qr_data else ""
@@ -1299,9 +1327,17 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
                 content += '<p class="status">Waiting for phone approval…</p>'
             elif pairing:
                 content += '<p class="status">Pairing code: <strong>' + html.escape(pairing) + '</strong></p>'
-                content += f'''<form method="post" action="/admin/confirm-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button name="confirm" value="match">The codes match — confirm enrollment</button></form>'''
-            content += f'''</section><div class="form-actions"><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button></form>''' + reload_link + '<a class="button" href="/admin/">Return to accounts</a></div>'
+                content += f'''<form method="post" action="/admin/confirm-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button name="confirm" value="match">The codes match — confirm enrollment</button></form>'''
+            content += f'''</section><div class="form-actions"><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button></form>''' + reload_link + '<a class="button" href="/admin/' + (('#account-' + sid) if sid else '') + '">Return to accounts</a></div>'
         return self._response(status_code, self._page("Phone enrollment", content))
+
+
+def _query_sid(params) -> str:
+    """Read an optional SID used only to scroll back to the account on return."""
+    values = params.get("sid", [])
+    if len(values) == 1 and re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", values[0]):
+        return values[0]
+    return ""
 
 
 def principal_id_from_sid_safe(sid: str) -> str:
