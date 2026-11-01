@@ -37,6 +37,23 @@ if (-not $BindAddress) {
     $BindAddress = $chosen.IPAddress
     Write-Host "Bind address detected: $BindAddress"
 }
+# An existing service.json is authoritative: the service keeps binding that
+# address, so firewall rules and the listener check must use it too.
+$earlyConfig = Join-Path $StateRoot 'service.json'
+if (Test-Path -LiteralPath $earlyConfig) {
+    try {
+        $existing = Get-Content -LiteralPath $earlyConfig -Raw | ConvertFrom-Json
+        if ($existing.bind_address) {
+            if ([string]$existing.bind_address -ne $BindAddress) {
+                Write-Warning "service.json binds $($existing.bind_address); using that instead of the detected $BindAddress."
+            }
+            $BindAddress = [string]$existing.bind_address
+        }
+    } catch {
+        Write-Warning 'Could not read the existing service.json bind address; using the detected address.'
+    }
+}
+
 $scopePrefix = (($BindAddress -split '\.')[0..2]) -join '.'
 $defaultScope = "$scopePrefix.0/24"
 
@@ -141,12 +158,6 @@ if (-not (Test-Path $configPath)) {
     $json = $config | ConvertTo-Json -Depth 4
     [IO.File]::WriteAllText($configPath, $json + "`n", [Text.UTF8Encoding]::new($false))
 } else {
-    try {
-        $existing = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-        if ($existing.bind_address -and $existing.bind_address -ne $BindAddress) {
-            Write-Warning "Existing service.json binds $($existing.bind_address) but this host detected $BindAddress. The service keeps the configured address; delete C:\ProgramData\ThessleyAD\service.json and https-cert.pem/https-key.pem to re-detect."
-        }
-    } catch { }
     Write-Warning 'Existing service.json retained. Review its bind address and group SID before starting.'
 }
 & icacls.exe $StateRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
