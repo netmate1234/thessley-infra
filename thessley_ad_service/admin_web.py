@@ -174,7 +174,7 @@ h1{font-size:clamp(1.4rem,4vw,1.8rem);line-height:1.2;margin:0 0 1rem;letter-spa
 .page-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 14px}.page-head>div,.page-actions,.row{min-width:0}.page-head h1{margin:0}.page-actions,.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.page-actions form,.account-actions form,.inline-form{margin:0}
 .page-actions .button,.page-actions button{padding-inline:11px}
 .session-actions{display:flex;justify-content:flex-end;margin:-4px 0 14px}.session-actions form{margin:0}
-.account-card{padding:0;overflow:hidden}.account-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:18px 20px}.account-name{display:flex;align-items:flex-start;gap:12px;min-width:0}.account-avatar{width:42px;height:42px;display:grid;place-items:center;flex:none;border-radius:14px;background:#20384a;color:#acd5fa}.account-heading{min-width:0}.account-heading h2{overflow-wrap:anywhere}.account-id{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}.rights{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.trust-summary{display:grid;gap:7px;min-width:150px}.trust-label{display:block;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}.trust-icons{display:flex;gap:5px;flex-wrap:wrap}.trust-icons .badge{font-size:.75rem;padding:4px 7px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;background:#263744;color:#dce7f0;font-size:.8rem;line-height:1.25;font-weight:700}.badge .icon{width:15px;height:15px}.badge.yes{background:#153a2a;color:var(--good)}.badge.no{background:#3d2226;color:#ffadb2}.badge.medium{background:#44391f;color:var(--warn)}.badge.neutral{background:#293541;color:#c6d1db}
+.account-card{padding:0;overflow:hidden;scroll-margin-top:1.5rem}.account-card:target{outline:2px solid var(--blue);outline-offset:2px;border-color:var(--blue)}.account-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:18px 20px}.account-name{display:flex;align-items:flex-start;gap:12px;min-width:0}.account-avatar{width:42px;height:42px;display:grid;place-items:center;flex:none;border-radius:14px;background:#20384a;color:#acd5fa}.account-heading{min-width:0}.account-heading h2{overflow-wrap:anywhere}.account-id{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}.rights{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.trust-summary{display:grid;gap:7px;min-width:150px}.trust-label{display:block;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}.trust-icons{display:flex;gap:5px;flex-wrap:wrap}.trust-icons .badge{font-size:.75rem;padding:4px 7px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;background:#263744;color:#dce7f0;font-size:.8rem;line-height:1.25;font-weight:700}.badge .icon{width:15px;height:15px}.badge.yes{background:#153a2a;color:var(--good)}.badge.no{background:#3d2226;color:#ffadb2}.badge.medium{background:#44391f;color:var(--warn)}.badge.neutral{background:#293541;color:#c6d1db}
 .account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}
 .search-tools{margin:14px 0}.search-row{display:flex;align-items:center;gap:8px}.search-row input{flex:1;min-width:0}.search-row button{flex:none}.empty-results[hidden]{display:none}.empty-results{color:var(--muted)}
 .form-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}.form-actions form{margin:0}.form-actions button,.form-actions .button{margin:0}
@@ -641,7 +641,7 @@ The account must change it at next sign-in.</p>
                 initial_password = ""
             _LOG.warning("admin_ad_user_created actor=%s target_sid=%s username=%s",
                          session["sid"], sid, username)
-            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-created"),))
+            return self._accounts_redirect("user-created", sid)
         if path == "/admin/workstation-qr":
             sid = form.get("sid", "")
             action = form.get("action", "")
@@ -675,7 +675,7 @@ The account must change it at next sign-in.</p>
             _LOG.warning("admin_workstation_qr_changed actor=%s target_sid=%s allowed=%s",
                          session["sid"], changed_sid, allow)
             notice = "workstation-qr-allowed" if allow else "workstation-qr-revoked"
-            return self._response(303, "", extra_headers=(("Location", f"/admin/?notice={notice}"),))
+            return self._accounts_redirect(notice, changed_sid)
         if path == "/admin/users/password":
             sid = form.get("sid", "")
             user = self._find_user(sid)
@@ -705,7 +705,7 @@ The account must change it at next sign-in.</p>
                 new_password = ""
             _LOG.warning("admin_ad_password_changed actor=%s target_sid=%s",
                          session["sid"], changed_sid)
-            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-password"),))
+            return self._accounts_redirect("user-password", changed_sid)
         if path == "/admin/users/update":
             sid = form.get("sid", "")
             user = self._find_user(sid)
@@ -734,7 +734,7 @@ The account must change it at next sign-in.</p>
                 return self._user_form(session, user=user, message="AD could not update the account. Check permissions and the supplied values.")
             _LOG.warning("admin_ad_user_updated actor=%s target_sid=%s enabled=%s",
                          session["sid"], changed_sid, enabled)
-            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-updated"),))
+            return self._accounts_redirect("user-updated", changed_sid)
         if path == "/admin/users/delete":
             sid = form.get("sid", "")
             user = self._find_user(sid)
@@ -788,7 +788,7 @@ The account must change it at next sign-in.</p>
             finally:
                 admin_password = ""
             _LOG.warning("admin_ad_user_deleted actor=%s target_sid=%s", session["sid"], deleted_sid)
-            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-deleted"),))
+            return self._accounts_redirect("user-deleted")
         if path == "/admin/logout":
             with self._lock:
                 self._sessions.pop(token, None)
@@ -1020,6 +1020,14 @@ The account must change it at next sign-in.</p>
             return self._response(303, "", extra_headers=(("Location", "/admin/"),))
         return self._response(404, self._page("Not found", "<section class=card>Page not found.</section>"))
 
+    @staticmethod
+    def _accounts_redirect(notice: str, sid: str = ""):
+        """Send the operator back to the account they just changed."""
+        location = f"/admin/?notice={notice}"
+        if isinstance(sid, str) and re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid):
+            location += f"#account-{sid}"
+        return AdminWeb._response(303, "", extra_headers=(("Location", location),))
+
     def _directory_page(self, session: dict, *, notice: str = ""):
         try:
             snapshot = self.directory.list_users(self.allowed_group_sids, limit=1000)
@@ -1066,7 +1074,7 @@ The account must change it at next sign-in.</p>
                                      for key in active_logon_keys[:2])
             if len(active_logon_keys) > 2:
                 logon_markers += f'<span class="badge neutral">+{len(active_logon_keys) - 2}</span>'
-            content += f'''<section class="card account-card"><div class="account-top"><div class="account-name">
+            content += f'''<section class="card account-card" id="account-{html.escape(sid)}"><div class="account-top"><div class="account-name">
 <span class="account-avatar">{self._icon("users")}</span><div class="account-heading"><h2>{display_name}</h2><div class="account-id">{account_name}</div>
 <div class="rights">{status_badge}<span class="badge {'yes' if authorized else 'no'}">{self._icon('monitor')} Workstation QR · {'Allowed' if authorized else 'Not allowed'}</span>
 <span class="badge {'yes' if dc_administrator else 'neutral'}">{self._icon('admin')} DC admin · {'Yes' if dc_administrator else 'No'}</span></div></div></div>

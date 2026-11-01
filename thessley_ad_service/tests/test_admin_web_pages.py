@@ -207,6 +207,47 @@ class WorkstationQrActionTest(unittest.TestCase):
                 self.assertIn(f'value="{"allow" if allow else "revoke"}"', html)
 
 
+class AccountFocusTest(unittest.TestCase):
+    SID = "S-1-5-21-1-2-3-1108"
+
+    def test_redirect_returns_to_the_operated_account(self):
+        status, headers, _body = AdminWeb._accounts_redirect("user-updated", self.SID)
+        self.assertEqual(status, 303)
+        location = dict(headers)["Location"]
+        self.assertEqual(location, f"/admin/?notice=user-updated#account-{self.SID}")
+
+    def test_redirect_without_a_sid_has_no_fragment(self):
+        _status, headers, _body = AdminWeb._accounts_redirect("user-deleted")
+        self.assertEqual(dict(headers)["Location"], "/admin/?notice=user-deleted")
+
+    def test_redirect_ignores_a_malformed_sid(self):
+        _status, headers, _body = AdminWeb._accounts_redirect("user-updated", "not-a-sid")
+        self.assertNotIn("#", dict(headers)["Location"])
+
+    def test_account_cards_carry_a_scroll_target(self):
+        web = object.__new__(AdminWeb)
+        web.authority = "THESSLEYLAB"
+        web._lock = threading.Lock()
+        web.allowed_group_sids = frozenset({"S-1-5-21-1-2-3-1105"})
+
+        class _Dir:
+            def list_users(self, groups, limit=1000):
+                return {"users": [{"sid": self_sid, "sam": "target", "name": "Target",
+                                   "enabled": True, "authorized": True, "dc_administrator": False}]}
+
+        class _NoKeys:
+            def list_for_principal(self, principal_id):
+                return []
+
+        self_sid = self.SID
+        web.directory = _Dir()
+        web.phones = _NoKeys()
+        web.ad_logon_keys = _NoKeys()
+        html = _html(web._directory_page({"sid": "S-1-5-21-1-2-3-500", "user": "Administrator",
+                                          "csrf": CSRF}))
+        self.assertIn(f'id="account-{self.SID}"', html)
+
+
 class PhoneEnrollmentPageTest(unittest.TestCase):
     def render(self, status, pairing_code=""):
         return _html(_phone_web(status, pairing_code)._enrollment_page(
