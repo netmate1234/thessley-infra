@@ -130,7 +130,8 @@ class AdminWeb:
                   extra_headers: tuple[tuple[str, str], ...] = (),
                   script_nonce: str | None = None) -> tuple[int, list[tuple[str, str]], bytes]:
         data = body.encode("utf-8")
-        csp = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+        csp = ("default-src 'none'; img-src data:; style-src 'unsafe-inline'; "
+               "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
         if isinstance(script_nonce, str) and re.fullmatch(r"[A-Za-z0-9_-]{16,64}", script_nonce):
             csp += f"; script-src 'nonce-{script_nonce}'"
         headers = [
@@ -544,13 +545,19 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
 <p class="muted small">This request expires shortly. Password sign-in is disabled.</p></section></div>"""
             resume_script = f'''<script nonce="{script_nonce}">
 (()=>{{
+ let failures=0;
  const finish=()=>window.location.replace("/admin/qr-login?id={request_id}");
  const poll=async()=>{{
   try {{
    const response=await fetch("/admin/qr-status?id={request_id}",{{cache:"no-store"}});
    const data=await response.json();
    if (data.status!=="pending") {{ finish(); }}
-  }} catch (error) {{ /* keep waiting */ }}
+   failures=0;
+  }} catch (error) {{
+   // If the poll cannot run, fall back to a single reload rather than waiting forever.
+   failures+=1;
+   if (failures>=3) {{ finish(); }}
+  }}
  }};
  const timer=setInterval(poll,2000);
  document.addEventListener("visibilitychange",()=>{{ if(!document.hidden) poll(); }});

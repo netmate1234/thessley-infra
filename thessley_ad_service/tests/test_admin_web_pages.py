@@ -501,7 +501,10 @@ class QrLoginPageTest(unittest.TestCase):
         self.assertIn("setInterval(poll,2000)", html)
         self.assertNotIn("setTimeout", html)
         self.assertIn('class="qr-login"', html)
-        self.assertTrue(any(name == "Content-Security-Policy" for name, _ in headers))
+        csp = dict(headers)["Content-Security-Policy"]
+        self.assertIn("connect-src 'self'", csp)
+        self.assertIn("script-src 'nonce-", csp)
+        self.assertIn("failures+=1", html)
 
     def test_status_endpoint_reports_the_challenge_state(self):
         for state, expected in (("pending", "pending"), ("approved", "approved"), ("denied", "denied")):
