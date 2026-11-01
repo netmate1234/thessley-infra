@@ -69,6 +69,50 @@ class WindowsDirectoryTest(unittest.TestCase):
             with self.assertRaises(DirectoryUnavailable):
                 self.directory.resolve_user_sid(USER_SID)
 
+    def test_create_writes_the_password_over_adws_not_ldap(self):
+        # LDAP/389 refuses password writes (0x80072035), so creation must use
+        # AD Web Services, which is TLS-protected on every domain controller.
+        completed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "sid": USER_SID}), "")
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run", return_value=completed) as run:
+            sid = self.directory.create_user(
+                administrator="Administrator", password="Admin-Secret-1!",
+                username="newuser", display_name="New User",
+                initial_password="Temp-Secret-1!",
+            )
+        self.assertEqual(sid, USER_SID)
+        script = base64.b64decode(run.call_args.args[0][-1]).decode("utf-16le")
+        self.assertIn("Set-ADAccountPassword", script)
+        self.assertIn("Enable-ADAccount", script)
+        self.assertNotIn("Invoke('SetPassword'", script)
+
+    def test_credentials_are_sent_over_stdin_only(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({"ok": True, "sid": USER_SID}), "")
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run", return_value=completed) as run:
+            self.directory.create_user(
+                administrator="Administrator", password="Admin-Secret-1!",
+                username="newuser", display_name="New User",
+                initial_password="Temp-Secret-1!",
+            )
+        command_line = " ".join(run.call_args.args[0])
+        self.assertNotIn("Admin-Secret-1!", command_line)
+        self.assertNotIn("Temp-Secret-1!", command_line)
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(payload["password"], "Admin-Secret-1!")
+        self.assertEqual(payload["initial_password"], "Temp-Secret-1!")
+
+    def test_password_policy_rejection_is_explained(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({
+            "ok": False, "error": "password_policy",
+            "detail": "The password does not meet the length, complexity, or history requirement of the domain.",
+        }), "")
+        with patch("infra.thessley_ad_service.windows_directory.subprocess.run", return_value=completed):
+            with self.assertRaisesRegex(ValueError, "password policy"):
+                self.directory.create_user(
+                    administrator="Administrator", password="Admin-Secret-1!",
+                    username="newuser", display_name="New User",
+                    initial_password="Temp-Secret-1!",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

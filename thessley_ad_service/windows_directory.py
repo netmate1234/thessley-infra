@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import subprocess
@@ -468,6 +469,8 @@ try {{
 
         script = r"""
 $ErrorActionPreference = 'Stop'
+# The Active Directory module renders progress bars; keep stdout pure JSON.
+$ProgressPreference = 'SilentlyContinue'
 try {
     $data = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
     $authUser = "$($data.authority)\$($data.administrator)"
@@ -530,14 +533,23 @@ try {
             $newUser.Properties['userAccountControl'].Value = 514
             $newUser.CommitChanges()
             try {
-                $newUser.Invoke('SetPassword', [string]$data.initial_password)
-                $newUser.Properties['pwdLastSet'].Value = 0
-                $newUser.Properties['userAccountControl'].Value = 512
-                $newUser.CommitChanges()
+                # A password write is refused over an unencrypted LDAP connection
+                # (0x80072035), so reset the password through AD Web Services,
+                # which is TLS-protected and present on every domain controller.
+                Import-Module ActiveDirectory -ErrorAction Stop | Out-Null
+                $adminCredential = [System.Management.Automation.PSCredential]::new(
+                    $authUser, (ConvertTo-SecureString ([string]$data.password) -AsPlainText -Force))
+                Set-ADAccountPassword -Identity $sam -Reset -Credential $adminCredential `
+                    -NewPassword (ConvertTo-SecureString ([string]$data.initial_password) -AsPlainText -Force) -ErrorAction Stop
+                Enable-ADAccount -Identity $sam -Credential $adminCredential -ErrorAction Stop
+                Set-ADUser -Identity $sam -ChangePasswordAtLogon $true -Credential $adminCredential -ErrorAction Stop
             } catch {
                 try { $container.Children.Remove($newUser); $container.CommitChanges() } catch {}
                 throw
             }
+            # The SID is only guaranteed readable after the object is re-fetched:
+            # the creation commit and the ADWS password reset are separate calls.
+            $newUser.RefreshCache(@('objectSid'))
             $sid = [Security.Principal.SecurityIdentifier]::new([byte[]]$newUser.Properties['objectSid'].Value, 0).Value
             [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
             $newUser.Dispose()
@@ -572,10 +584,14 @@ try {
     $root.Dispose()
 } catch {
     $errorText = [string]$_.Exception.Message
+    if ($_.Exception.InnerException) { $errorText = $errorText + ' ' + [string]$_.Exception.InnerException.Message }
     $errorCode = if ($errorText -match '(?i)access is denied|insufficient access') { 'permission' }
                  elseif ($errorText -match '(?i)already exists|object exists') { 'exists' }
+                 elseif ($errorText -match '(?i)password does not meet|complexity|history requirement|password policy|0x8007202F') { 'password_policy' }
                  else { 'failed' }
-    [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $false; error = $errorCode }))
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{
+        ok = $false; error = $errorCode; detail = $errorText.Substring(0, [Math]::Min(300, $errorText.Length))
+    }))
     exit 0
 }
 """
@@ -609,8 +625,15 @@ try {
                 "not_found": "The AD account could not be found.",
                 "protected": "Built-in, protected, and privileged AD accounts cannot be changed or deleted here.",
                 "permission": "AD denied this change. The administrator account needs permission in the Users container.",
+                "password_policy": "The temporary password does not meet the domain password policy: it is too short, lacks complexity, is a banned word, or repeats a recent password. Choose a different one.",
                 "failed": "AD rejected the change. Check the account settings and directory logs.",
             }
+            detail = response.get("detail")
+            if isinstance(detail, str) and detail:
+                logging.getLogger("thessley.ad.directory").warning(
+                    "ad_account_change_rejected operation=%s code=%s detail=%s",
+                    operation, response.get("error"), detail[:300].replace("\n", " "),
+                )
             raise ValueError(messages.get(response.get("error"), "AD rejected the account change."))
         sid = response.get("sid")
         if not isinstance(sid, str) or not _SID.fullmatch(sid):
