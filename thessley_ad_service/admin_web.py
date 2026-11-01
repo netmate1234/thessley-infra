@@ -1031,7 +1031,14 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
         elif state["status"] in ("expired", "cancelled"):
             body = '<h1>Enrollment ended</h1><section class="card error">This request expired or was cancelled. Start a new request from AD accounts.</section><a class="button" href="/admin/">Back to accounts</a>'
         else:
-            refresh = '<meta http-equiv="refresh" content="2">' if state["status"] == "pending" else ''
+            # Keep reloading until the request reaches a terminal state. Browsers
+            # throttle meta refresh in background tabs, which is exactly where this
+            # page sits while the administrator scans the QR, so a page left on
+            # "waiting" must recover by itself once the phone submits its key.
+            refresh_seconds = 2 if state["status"] == "pending" else 10
+            refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">'
+            reload_href = html.escape(f"/admin/ad-logon-key-enrollment?id={request_id}", quote=True)
+            reload_link = f'<a class="button secondary small" href="{reload_href}">Reload status</a>'
             error = f'<section class="card error">{html.escape(message)}</section>' if message else ''
             qr = f'<div class="qr-wrap"><img class="qr" alt="AD logon key enrollment QR" src="{html.escape(qr_data, quote=True)}"></div>' if qr_data else ''
             open_app = (f'<p><a class="button" href="{html.escape(app_link, quote=True)}">'
@@ -1041,7 +1048,7 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
                 body += '<p class="status">Waiting for the phone to create and submit its key…</p>'
             elif state["status"] == "ready":
                 body += f'<p class="status">Pairing code: <strong>{html.escape(state["pairing_code"])}</strong></p><p class="muted">Protection reported by Android: {html.escape(state["attestation_status"])}. A code match verifies the request, not the phone manufacturer or hardware beyond the attestation result.</p><form method="post" action="/admin/confirm-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><input type="hidden" name="pairing_code" value="{html.escape(state["pairing_code"])}"><button>Codes match — activate key</button></form>'
-            body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form><a class="button" href="/admin/">Return to accounts</a></div>'
+            body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form>' + reload_link + '<a class="button" href="/admin/">Return to accounts</a></div>'
         return self._response(200, self._page("AD logon-key enrollment", body))
 
     def _policy_page(self, session: dict, message: str = ""):
@@ -1121,7 +1128,11 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
                 self._enrollment_qrs.pop(request_id, None)
             content = '<h1>Enrollment ended</h1><section class="card error">This request expired or was cancelled. Start a fresh enrollment from the account list.</section><a class="button" href="/admin/">Back to accounts</a>'
         else:
-            refresh = '<meta http-equiv="refresh" content="2">' if state["status"] == "pending" else ""
+            # Same throttling hazard as the AD key page: reload until terminal.
+            refresh_seconds = 2 if state["status"] == "pending" else 10
+            refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">'
+            reload_href = html.escape(f"/admin/enrollment?id={request_id}", quote=True)
+            reload_link = f'<a class="button secondary small" href="{reload_href}">Reload status</a>'
             pairing = state.get("pairing_code")
             qr = f'<div class="qr-wrap"><img class="qr" alt="Thessley phone enrollment QR code" src="{qr_data}"></div>' if qr_data else ""
             open_app = (f'<p><a class="button" href="{html.escape(app_link, quote=True)}">'
@@ -1134,7 +1145,7 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
             elif pairing:
                 content += '<p class="status">Pairing code: <strong>' + html.escape(pairing) + '</strong></p>'
                 content += f'''<form method="post" action="/admin/confirm-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button name="confirm" value="match">The codes match — confirm enrollment</button></form>'''
-            content += f'''</section><div class="form-actions"><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button></form><a class="button" href="/admin/">Return to accounts</a></div>'''
+            content += f'''</section><div class="form-actions"><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button></form>''' + reload_link + '<a class="button" href="/admin/">Return to accounts</a></div>'
         return self._response(status_code, self._page("Phone enrollment", content))
 
 
