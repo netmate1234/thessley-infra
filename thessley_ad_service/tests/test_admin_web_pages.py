@@ -449,20 +449,51 @@ class LogPageTest(unittest.TestCase):
         web._lock = threading.Lock()
         return web
 
-    def test_shows_only_the_tail_and_escapes_markup(self):
+    def test_first_page_shows_newest_lines_first(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = pathlib.Path(tmp) / "service.log"
-            payload = "\n".join(f"line {i}" for i in range(400))
-            log.write_text(payload + "\n<script>alert(1)</script>\n")
+            log.write_text("\n".join(f"line {i}" for i in range(1200)) + "\n")
             status, _headers, body = self._web(str(log))._log_page(
                 {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
         html = body.decode()
         self.assertEqual(status, 200)
-        self.assertIn("line 399", html)
-        self.assertNotIn("line 0\n", html)
+        self.assertIn("line 1199", html)
+        self.assertIn("line 700", html)          # 500 lines per page: 1199..700
+        self.assertNotIn("line 699", html)
+        self.assertIn("Page 1 of 3", html)
+        self.assertIn("/admin/log?page=2", html)
+        self.assertNotIn("?page=0", html)
+
+    def test_last_page_has_the_remainder_and_no_older_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp) / "service.log"
+            log.write_text("\n".join(f"line {i}" for i in range(1200)) + "\n")
+            status, _headers, body = self._web(str(log))._log_page(
+                {"sid": "S-1", "user": "Administrator", "csrf": CSRF}, page=3)
+        html = body.decode()
+        self.assertEqual(status, 200)
+        self.assertIn("Page 3 of 3", html)
+        self.assertIn("line 0", html)
+        self.assertNotIn("?page=4", html)
+
+    def test_page_beyond_the_end_is_clamped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp) / "service.log"
+            log.write_text("\n".join(f"line {i}" for i in range(40)) + "\n")
+            status, _headers, body = self._web(str(log))._log_page(
+                {"sid": "S-1", "user": "Administrator", "csrf": CSRF}, page=99)
+        self.assertEqual(status, 200)
+        self.assertIn("Page 1 of 1", body.decode())
+
+    def test_log_escapes_markup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp) / "service.log"
+            log.write_text("<script>alert(1)</script>\n")
+            _s, _h, body = self._web(str(log))._log_page(
+                {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+        html = body.decode()
         self.assertNotIn("<script>alert(1)</script>", html)
         self.assertIn("&lt;script&gt;", html)
-        self.assertIn("Last", html)
 
     def test_missing_log_is_a_503(self):
         status, _headers, _body = self._web("/nonexistent/service.log")._log_page(

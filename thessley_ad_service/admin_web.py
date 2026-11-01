@@ -299,7 +299,9 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             token, session = self._session(headers)
             if not session:
                 return self._login_page(headers)
-            return self._log_page(session)
+            params = parse_qs(query, keep_blank_values=True)
+            page_value = params.get("page", ["1"])[0] if len(params.get("page", [])) == 1 else "1"
+            return self._log_page(session, page=int(page_value) if page_value.isdigit() else 1)
         if path == "/admin/qr-login":
             params = parse_qs(query, keep_blank_values=True)
             request_ids = params.get("id", [])
@@ -1277,9 +1279,10 @@ The account must change it at next sign-in.</p>
             body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="sid" value="' + html.escape(sid) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form>' + reload_link + '<a class="button" href="/admin/' + (('account?sid=' + sid) if sid else '') + '">Return to accounts</a></div>'
         return self._response(200, self._page("AD logon-key enrollment", body))
 
-    LOG_TAIL_LINES = 300
+    LOG_PAGE_SIZE = 500
+    LOG_MAX_BYTES = 2 * 1024 * 1024
 
-    def _log_page(self, session: dict):
+    def _log_page(self, session: dict, page: int = 1):
         if not self.log_path:
             return self._response(503, self._page(
                 "Service log", '<section class="card error">No log file is configured for this service.</section>'))
@@ -1290,23 +1293,40 @@ The account must change it at next sign-in.</p>
                 raise OSError("missing")
             size = path.stat().st_size
             with path.open("rb") as handle:
-                # Read at most the last 256 KiB so a large log cannot exhaust memory.
-                handle.seek(max(0, size - 256 * 1024))
+                handle.seek(max(0, size - self.LOG_MAX_BYTES))
                 text = handle.read().decode("utf-8", "replace")
-            lines = text.splitlines()[-self.LOG_TAIL_LINES:]
+            all_lines = text.splitlines()
+            truncated = size > self.LOG_MAX_BYTES
         except OSError:
             _LOG.exception("admin_log_read_failed sid=%s", session.get("sid", "unknown"))
             return self._response(503, self._page(
                 "Service log", '<section class="card error">The service log could not be read.</section>'))
+
+        # Newest first: page 1 holds the most recent entries.
+        lines = list(reversed(all_lines))
+        pages = max(1, -(-len(lines) // self.LOG_PAGE_SIZE))
+        page = min(max(page, 1), pages)
+        start = (page - 1) * self.LOG_PAGE_SIZE
+        chunk = lines[start:start + self.LOG_PAGE_SIZE]
+
+        prev_link = (f'<a class="button secondary small" href="/admin/log?page={page - 1}">Newer</a>'
+                     if page > 1 else '<span class="badge neutral">Newer</span>')
+        next_link = (f'<a class="button secondary small" href="/admin/log?page={page + 1}">Older</a>'
+                     if page < pages else '<span class="badge neutral">Older</span>')
+        pager = (f'<nav class="pager" aria-label="Log pages">{prev_link}'
+                 f'<span class="muted small">Page {page} of {pages} · {len(lines)} lines</span>{next_link}</nav>')
+        note = ('<p class="muted small">Only the most recent 2 MiB are read; older entries are not shown.</p>'
+                if truncated else '')
         body = (f'<header class="page-head"><div><h1>{self._icon("admin")} Service log</h1>'
-                f'<div class="muted">Last {len(lines)} lines of {html.escape(str(self.log_path))}</div></div>'
+                f'<div class="muted">{html.escape(str(self.log_path))}</div></div>'
                 f'<div class="header-actions"><nav class="page-actions">'
-                f'<a class="button secondary small" href="/admin/log">Refresh</a>'
+                f'<a class="button secondary small" href="/admin/log">Latest</a>'
                 f'<a class="button secondary small" href="/admin/">{self._icon("chevron")} All accounts</a>'
                 f'</nav></div></header>'
+                + pager + note +
                 '<section class="card"><pre class="log-tail"><code>'
-                + html.escape("\n".join(lines))
-                + '</code></pre></section>')
+                + html.escape("\n".join(chunk))
+                + '</code></pre></section>' + pager)
         return self._response(200, self._page("Service log", body))
 
     def _policy_page(self, session: dict, message: str = ""):
