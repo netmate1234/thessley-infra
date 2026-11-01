@@ -458,6 +458,65 @@ class AutoReloadTest(unittest.TestCase):
         self.assertIn("},3000)", tag)
 
 
+class QrLoginPageTest(unittest.TestCase):
+    REQ = "B" * 32
+
+    def _web(self, status="pending", expires_in=60):
+        import time as _time
+        web = object.__new__(AdminWeb)
+        web.authority = "THESSLEYLAB"
+        web._lock = threading.Lock()
+
+        class _Challenges:
+            def peek_result(self, *, machine_id, request_id, now=None):
+                return status
+
+            def consume_result(self, *, machine_id, request_id, now=None):
+                return None
+
+        class _Phones:
+            def list_for_principal(self, principal_id):
+                return []
+
+        web.challenges = _Challenges()
+        web.phones = _Phones()
+        web._qr_logins = {self.REQ: {
+            "sid": "S-1-5-21-1-2-3-500", "principal_id": "a" * 64, "username": "Administrator",
+            "client_ip": "10.0.0.5", "preauth": "cookie-nonce",
+            "expires_at": _time.time() + expires_in, "qr": "data:image/svg+xml;base64,AA",
+            "link": "thessleypam://login?x=1",
+        }}
+        return web
+
+    @staticmethod
+    def _headers():
+        return {"Cookie": "thessley_ad_preauth=cookie-nonce"}
+
+    def test_page_polls_instead_of_reloading(self):
+        web = self._web()
+        status, headers, body = web._get(f"/admin/qr-login", f"id={self.REQ}", self._headers(), "10.0.0.5")
+        html = body.decode()
+        self.assertEqual(status, 200)
+        self.assertIn("fetch(\"/admin/qr-status?id=", html)
+        self.assertIn("setInterval(poll,2000)", html)
+        self.assertNotIn("setTimeout", html)
+        self.assertIn('class="qr-login"', html)
+        self.assertTrue(any(name == "Content-Security-Policy" for name, _ in headers))
+
+    def test_status_endpoint_reports_the_challenge_state(self):
+        for state, expected in (("pending", "pending"), ("approved", "approved"), ("denied", "denied")):
+            with self.subTest(state=state):
+                web = self._web(status=state)
+                status, _headers, body = web._get("/admin/qr-status", f"id={self.REQ}", self._headers(), "10.0.0.5")
+                self.assertEqual(status, 200)
+                self.assertEqual(body.decode(), '{"status":"%s"}' % expected)
+
+    def test_status_endpoint_rejects_another_client(self):
+        web = self._web()
+        _s, _h, body = web._get("/admin/qr-status", f"id={self.REQ}", self._headers(), "10.9.9.9")
+        self.assertIn("expired", body.decode())
+
+
 class LogPageTest(unittest.TestCase):
     def _web(self, path):
         web = object.__new__(AdminWeb)

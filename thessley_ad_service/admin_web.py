@@ -118,6 +118,14 @@ class AdminWeb:
         self._lock = threading.RLock()
 
     @staticmethod
+    def _json(status: int, payload: dict):
+        raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        return status, [("Content-Type", "application/json; charset=utf-8"),
+                        ("Cache-Control", "no-store"),
+                        ("X-Content-Type-Options", "nosniff"),
+                        ("Content-Length", str(len(raw)))], raw
+
+    @staticmethod
     def _response(status: int, body: str, content_type: str = "text/html; charset=utf-8",
                   extra_headers: tuple[tuple[str, str], ...] = (),
                   script_nonce: str | None = None) -> tuple[int, list[tuple[str, str]], bytes]:
@@ -179,7 +187,7 @@ h1{font-size:clamp(1.4rem,4vw,1.8rem);line-height:1.2;margin:0 0 1rem;letter-spa
 .page-actions .button,.page-actions button{padding-inline:11px}
 .header-actions{display:flex;gap:9px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin-left:auto}.header-actions form{margin:0}
 .account-card{padding:0;overflow:hidden;scroll-margin-top:1.5rem}.account-card:target{outline:2px solid var(--blue);outline-offset:2px;border-color:var(--blue)}.account-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:18px 20px}.account-name{display:flex;align-items:flex-start;gap:12px;min-width:0}.account-avatar{width:42px;height:42px;display:grid;place-items:center;flex:none;border-radius:14px;background:#20384a;color:#acd5fa}.account-heading{min-width:0}.account-heading h2{overflow-wrap:anywhere}.account-id{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}.rights{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.trust-summary{display:grid;gap:7px;min-width:150px}.trust-label{display:block;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}.trust-icons{display:flex;gap:5px;flex-wrap:wrap}.trust-icons .badge{font-size:.75rem;padding:4px 7px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;background:#263744;color:#dce7f0;font-size:.8rem;line-height:1.25;font-weight:700}.badge .icon{width:15px;height:15px}.badge.yes{background:#153a2a;color:var(--good)}.badge.no{background:#3d2226;color:#ffadb2}.badge.medium{background:#44391f;color:var(--warn)}.badge.neutral{background:#293541;color:#c6d1db}
-.account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}.log-tail{margin:0;max-height:70vh;overflow:auto;padding:1rem;border-radius:10px;background:#0d1720;color:#dbe7f2;font-size:.84rem;line-height:1.45}.log-tail code{white-space:pre-wrap;overflow-wrap:anywhere}
+.account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}.qr-login{text-align:center}.qr-login .card{text-align:center}.log-tail{margin:0;max-height:70vh;overflow:auto;padding:1rem;border-radius:10px;background:#0d1720;color:#dbe7f2;font-size:.84rem;line-height:1.45}.log-tail code{white-space:pre-wrap;overflow-wrap:anywhere}
 .search-tools{margin:14px 0}.search-row{display:flex;align-items:center;gap:8px}.search-row input{flex:1;min-width:0}.search-row button{flex:none}.empty-results[hidden]{display:none}.empty-results{color:var(--muted)}
 .form-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}.form-actions form{margin:0}.form-actions button,.form-actions .button{margin:0}
 label{display:block;font-weight:650;margin:12px 0 5px}input,select{font:inherit;padding:10px 12px;border:1px solid #485d70;border-radius:9px;width:100%;max-width:100%;background:var(--field);color:var(--ink)}input:focus-visible,select:focus-visible,button:focus-visible,.button:focus-visible,summary:focus-visible{outline:3px solid #9acbff;outline-offset:2px}
@@ -303,6 +311,24 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             params = parse_qs(query, keep_blank_values=True)
             page_value = params.get("page", ["1"])[0] if len(params.get("page", [])) == 1 else "1"
             return self._log_page(session, page=int(page_value) if page_value.isdigit() else 1)
+        if path == "/admin/qr-status":
+            params = parse_qs(query, keep_blank_values=True)
+            request_ids = params.get("id", [])
+            if len(request_ids) != 1 or not _REQUEST_ID.fullmatch(request_ids[0]):
+                return self._json(400, {"status": "invalid"})
+            request_id = request_ids[0]
+            cookie_nonce = self._cookie(headers, _PREAUTH_COOKIE)
+            with self._lock:
+                pending = self._qr_logins.get(request_id)
+            if (not pending or not secrets.compare_digest(cookie_nonce, pending["preauth"])
+                    or not secrets.compare_digest(client_ip, pending["client_ip"])
+                    or pending["expires_at"] <= time.time()):
+                with self._lock:
+                    self._qr_logins.pop(request_id, None)
+                return self._json(200, {"status": "expired"})
+            status = self.challenges.peek_result(
+                machine_id=CENTRAL_AD_MACHINE_ID, request_id=request_id) or "pending"
+            return self._json(200, {"status": status})
         if path == "/admin/qr-login":
             params = parse_qs(query, keep_blank_values=True)
             request_ids = params.get("id", [])
@@ -504,22 +530,32 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         status = result.get("status") if result else "pending"
         if status == "pending":
             script_nonce = secrets.token_urlsafe(18)
-            refresh, _nonce = self._auto_reload(2, f"/admin/qr-login?id={request_id}", nonce=script_nonce)
+            refresh = ""
             link = html.escape(pending["link"], quote=True)
             qr = html.escape(pending["qr"], quote=True)
             account = html.escape(self.authority + chr(92) + pending["username"])
-            content = f"""{refresh}<h1>Approve admin sign-in</h1><section class="card">
+            content = f"""{refresh}<div class="qr-login"><h1>Approve admin sign-in</h1><section class="card">
 <p>Scan with Thessley Passkey for <strong>{account}</strong>. The phone must already be enrolled centrally for this account.</p>
 <div class="qr-wrap"><img class="qr" alt="Thessley AD administrator sign-in QR code" src="{qr}"></div>
 <p><a class="button" href="{link}">{self._icon('phone')} Open Thessley Passkey</a></p>
 <p class="status status-line">{self._icon('lock')} Waiting for approval</p>
 <p class="muted small">After approving, return to this tab. It checks automatically.</p>
 <p><a class="button secondary small" href="/admin/qr-login?id={html.escape(request_id)}">Refresh status</a></p>
-<p class="muted small">This request expires shortly. Password sign-in is disabled.</p></section>"""
+<p class="muted small">This request expires shortly. Password sign-in is disabled.</p></section></div>"""
             resume_script = f'''<script nonce="{script_nonce}">
-(()=>{{let resumed=false;const refresh=()=>{{if(!resumed){{resumed=true;window.location.replace(window.location.href)}}}};
-document.addEventListener("visibilitychange",()=>{{if(!document.hidden)refresh()}});
-window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})();
+(()=>{{
+ const finish=()=>window.location.replace("/admin/qr-login?id={request_id}");
+ const poll=async()=>{{
+  try {{
+   const response=await fetch("/admin/qr-status?id={request_id}",{{cache:"no-store"}});
+   const data=await response.json();
+   if (data.status!=="pending") {{ finish(); }}
+  }} catch (error) {{ /* keep waiting */ }}
+ }};
+ const timer=setInterval(poll,2000);
+ document.addEventListener("visibilitychange",()=>{{ if(!document.hidden) poll(); }});
+ poll();
+}})();
 </script>'''
             return self._response(200, self._page("Approve admin sign-in", content + resume_script),
                                   script_nonce=script_nonce)

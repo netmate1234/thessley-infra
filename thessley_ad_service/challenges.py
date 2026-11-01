@@ -545,6 +545,34 @@ class ChallengeStore:
         finally:
             connection.close()
 
+    def peek_result(self, *, machine_id: str, request_id: str, now: float | None = None) -> str | None:
+        """Report the current state without consuming the approval.
+
+        The admin sign-in page polls this so it can wait without reloading;
+        consume_result() still performs the one-shot handover afterwards.
+        """
+        if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
+            return None
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
+            return None
+        current = time.time() if now is None else now
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT status, expires_at FROM login_challenges WHERE request_id = ? AND machine_id = ?",
+                (request_id, machine_id),
+            ).fetchone()
+            if row is None:
+                return None
+            status, expires_at = row
+            if status == "pending" and expires_at <= current:
+                return "expired"
+            return {"approve": "approved", "deny": "denied"}.get(status, status)
+        except sqlite3.Error:
+            return None
+        finally:
+            connection.close()
+
     def consume_result(self, *, machine_id: str, request_id: str, now: float | None = None) -> dict | None:
         if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
             return None
