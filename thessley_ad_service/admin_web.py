@@ -305,6 +305,21 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             if not session:
                 return self._login_page(headers)
             return self._policy_page(session)
+        if path in ("/admin/enrollment-status", "/admin/ad-logon-key-status"):
+            token, session = self._session(headers)
+            if not session:
+                return self._json(401, {"status": "unauthenticated"})
+            params = parse_qs(query, keep_blank_values=True)
+            request_ids = params.get("id", [])
+            if len(request_ids) != 1 or not _REQUEST_ID.fullmatch(request_ids[0]):
+                return self._json(400, {"status": "invalid"})
+            if path == "/admin/enrollment-status":
+                state = self.phones.enrollment_status(
+                    machine_id=CENTRAL_AD_MACHINE_ID, request_id=request_ids[0])
+            else:
+                state = (self.ad_logon_keys.enrollment_status(request_ids[0])
+                         if self.ad_logon_keys is not None else None)
+            return self._json(200, {"status": state["status"] if state else "gone"})
         if path == "/admin/log":
             token, session = self._session(headers)
             if not session:
@@ -1109,12 +1124,29 @@ The account must change it at next sign-in.</p>
         return self._response(404, self._page("Not found", "<section class=card>Page not found.</section>"))
 
     @staticmethod
-    def _auto_reload(seconds: int, url: str = "", nonce: str = "") -> tuple[str, str]:
-        """Client-side reload; meta refresh is throttled in background tabs."""
+    def _status_poll(current: str, url: str, nonce: str = "", interval: int = 2) -> tuple[str, str]:
+        """Watch a status endpoint and reload once, only when it changes."""
         nonce = nonce or secrets.token_urlsafe(18)
-        target = f"location.href={json.dumps(url)}" if url else "location.reload()"
-        tag = (f'<script nonce="{html.escape(nonce, quote=True)}">'
-               f'setTimeout(function(){{{target}}},{int(seconds) * 1000});</script>')
+        tag = f'''<script nonce="{html.escape(nonce, quote=True)}">
+(()=>{{
+ const initial={json.dumps(current)};
+ let failures=0;
+ const poll=async()=>{{
+  try {{
+   const response=await fetch({json.dumps(url)},{{cache:"no-store"}});
+   if (!response.ok) {{ throw new Error("status"); }}
+   const data=await response.json();
+   failures=0;
+   if (data.status!==initial) {{ location.reload(); }}
+  }} catch (error) {{
+   failures+=1;
+   if (failures>=3) {{ location.reload(); }}
+  }}
+ }};
+ setInterval(poll,{int(interval) * 1000});
+ document.addEventListener("visibilitychange",()=>{{ if(!document.hidden) poll(); }});
+}})();
+</script>'''
         return tag, nonce
 
     @staticmethod
@@ -1315,9 +1347,9 @@ The account must change it at next sign-in.</p>
             # throttle meta refresh in background tabs, which is exactly where this
             # page sits while the administrator scans the QR, so a page left on
             # "waiting" must recover by itself once the phone submits its key.
-            refresh_seconds = 2 if state["status"] == "pending" else 10
             sid_query = f"&sid={html.escape(sid, quote=True)}" if sid else ""
-            refresh, refresh_nonce = self._auto_reload(refresh_seconds)
+            refresh, refresh_nonce = self._status_poll(
+                state["status"], f"/admin/ad-logon-key-status?id={request_id}")
             reload_href = html.escape(f"/admin/ad-logon-key-enrollment?id={request_id}{sid_query}", quote=True)
             reload_link = f'<a class="button secondary small" href="{reload_href}">Reload status</a>'
             error = f'<section class="card error">{html.escape(message)}</section>' if message else ''
@@ -1465,9 +1497,9 @@ The account must change it at next sign-in.</p>
             content = '<h1>Enrollment ended</h1><section class="card error">This request expired or was cancelled. Start a fresh enrollment from the account list.</section>' + back
         else:
             # Same throttling hazard as the AD key page: reload until terminal.
-            refresh_seconds = 2 if state["status"] == "pending" else 10
             sid_query = f"&sid={html.escape(sid, quote=True)}" if sid else ""
-            refresh, refresh_nonce = self._auto_reload(refresh_seconds)
+            refresh, refresh_nonce = self._status_poll(
+                state["status"], f"/admin/enrollment-status?id={request_id}")
             reload_href = html.escape(f"/admin/enrollment?id={request_id}{sid_query}", quote=True)
             reload_link = f'<a class="button secondary small" href="{reload_href}">Reload status</a>'
             pairing = state.get("pairing_code")

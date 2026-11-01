@@ -64,13 +64,8 @@ def _html(response) -> str:
     return body.decode("utf-8")
 
 
-def _refresh_seconds(html: str):
-    """Milliseconds from the client-side reload script, in seconds."""
-    match = re.search(r'setTimeout\(function\(\)\{location\.(?:reload\(\)|href=[^}]*)\}', html)
-    if not match:
-        return None
-    delay = re.search(r'\},(\d+)\);', html)
-    return int(delay.group(1)) // 1000 if delay else None
+def _has_poll(html: str) -> bool:
+    return "setInterval(poll," in html
 
 
 class AdLogonKeyEnrollmentPageTest(unittest.TestCase):
@@ -80,7 +75,7 @@ class AdLogonKeyEnrollmentPageTest(unittest.TestCase):
 
     def test_pending_page_reloads_every_two_seconds(self):
         html = self.render("pending")
-        self.assertEqual(_refresh_seconds(html), 2)
+        self.assertTrue(_has_poll(html))
         self.assertIn("Reload status", html)
         self.assertNotIn("Pairing code", html)
 
@@ -88,7 +83,7 @@ class AdLogonKeyEnrollmentPageTest(unittest.TestCase):
         # A browser tab left open while the QR is scanned is throttled; it must
         # still pick up the pairing code instead of waiting forever.
         html = self.render("ready", "123 456")
-        self.assertEqual(_refresh_seconds(html), 10)
+        self.assertTrue(_has_poll(html))
         self.assertIn("Pairing code: <strong>123 456</strong>", html)
         self.assertIn('action="/admin/confirm-ad-logon-key"', html)
         self.assertIn("Reload status", html)
@@ -97,7 +92,7 @@ class AdLogonKeyEnrollmentPageTest(unittest.TestCase):
         for status in ("confirmed", "expired", "cancelled"):
             with self.subTest(status=status):
                 html = self.render(status)
-                self.assertIsNone(_refresh_seconds(html))
+                self.assertFalse(_has_poll(html))
                 self.assertNotIn("Reload status", html)
 
     def test_reload_link_keeps_the_request_id(self):
@@ -446,18 +441,6 @@ class DirectoryPagingTest(unittest.TestCase):
         self.assertEqual(status, 404)
 
 
-class AutoReloadTest(unittest.TestCase):
-    def test_reload_script_is_nonce_scoped(self):
-        tag, nonce = AdminWeb._auto_reload(2)
-        self.assertIn('nonce="' + nonce + '"', tag)
-        self.assertIn("setTimeout(function(){location.reload()},2000)", tag)
-
-    def test_url_reload_builds_a_javascript_string(self):
-        tag, _nonce = AdminWeb._auto_reload(3, "/admin/qr-login?id=abc")
-        self.assertIn('location.href="/admin/qr-login?id=abc"', tag)
-        self.assertIn("},3000)", tag)
-
-
 class QrLoginPageTest(unittest.TestCase):
     REQ = "B" * 32
 
@@ -584,21 +567,64 @@ class LogPageTest(unittest.TestCase):
         self.assertEqual(status, 503)
 
 
+class EnrollmentStatusTest(unittest.TestCase):
+    REQ = "C" * 32
+
+    def _web(self, state):
+        web = object.__new__(AdminWeb)
+        web._lock = threading.Lock()
+        web._session = lambda headers: ("token", {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
+
+        class _Phones:
+            def enrollment_status(self, *, machine_id, request_id, now=None):
+                return state
+
+        class _Keys:
+            def enrollment_status(self, request_id, now=None):
+                return state
+
+        web.phones = _Phones()
+        web.ad_logon_keys = _Keys()
+        return web
+
+    def test_phone_enrollment_status_is_json(self):
+        status, headers, body = self._web({"status": "ready"})._get(
+            "/admin/enrollment-status", f"id={self.REQ}", {}, "127.0.0.1")
+        self.assertEqual(status, 200)
+        self.assertEqual(dict(headers)["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(body.decode(), '{"status":"ready"}')
+
+    def test_ad_key_status_is_json(self):
+        _s, _h, body = self._web({"status": "confirmed"})._get(
+            "/admin/ad-logon-key-status", f"id={self.REQ}", {}, "127.0.0.1")
+        self.assertEqual(body.decode(), '{"status":"confirmed"}')
+
+    def test_unknown_request_reports_gone(self):
+        _s, _h, body = self._web(None)._get(
+            "/admin/enrollment-status", f"id={self.REQ}", {}, "127.0.0.1")
+        self.assertEqual(body.decode(), '{"status":"gone"}')
+
+    def test_invalid_id_is_rejected(self):
+        status, _h, _b = self._web({"status": "ready"})._get(
+            "/admin/enrollment-status", "id=short", {}, "127.0.0.1")
+        self.assertEqual(status, 400)
+
+
 class PhoneEnrollmentPageTest(unittest.TestCase):
     def render(self, status, pairing_code=""):
         return _html(_phone_web(status, pairing_code)._enrollment_page(
             REQUEST_ID, {"csrf": CSRF}))
 
     def test_pending_page_reloads_every_two_seconds(self):
-        self.assertEqual(_refresh_seconds(self.render("pending")), 2)
+        self.assertTrue(_has_poll(self.render("pending")))
 
     def test_ready_page_still_reloads(self):
         html = self.render("ready", "123 456")
-        self.assertEqual(_refresh_seconds(html), 10)
+        self.assertTrue(_has_poll(html))
         self.assertIn("Pairing code: <strong>123 456</strong>", html)
 
     def test_confirmed_page_does_not_reload(self):
-        self.assertIsNone(_refresh_seconds(self.render("confirmed")))
+        self.assertFalse(_has_poll(self.render("confirmed")))
 
 
 if __name__ == "__main__":
