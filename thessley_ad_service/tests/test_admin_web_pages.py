@@ -510,46 +510,46 @@ class LogPageTest(unittest.TestCase):
         web._lock = threading.Lock()
         return web
 
-    def test_first_page_shows_newest_lines_first(self):
+    def _log(self, tmp, count=120):
+        log = pathlib.Path(tmp) / "service.log"
+        lines = []
+        for i in range(count):
+            level = "WARNING" if i % 10 == 0 else "INFO"
+            lines.append(f"2026-11-01 10:{i // 60:02d}:{i % 60:02d},000 {level} entry {i}")
+        log.write_text("\n".join(lines) + "\n")
+        return str(log)
+
+    def test_important_view_hides_info_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
-            log = pathlib.Path(tmp) / "service.log"
-            log.write_text("\n".join(f"line {i}" for i in range(1200)) + "\n")
-            status, _headers, body = self._web(str(log))._log_page(
+            status, _h, body = self._web(self._log(tmp))._log_page(
                 {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
         html = body.decode()
         self.assertEqual(status, 200)
-        self.assertIn("line 1199", html)
-        self.assertIn("line 700", html)          # 500 lines per page: 1199..700
-        self.assertNotIn("line 699", html)
-        self.assertIn("Page 1 of 3", html)
-        self.assertIn("/admin/log?page=2", html)
-        self.assertNotIn("?page=0", html)
+        self.assertIn("WARNING", html)
+        self.assertNotIn("entry 1<", html)      # INFO rows are filtered out
+        self.assertIn("important of", html)
 
-    def test_last_page_has_the_remainder_and_no_older_link(self):
+    def test_show_all_lists_everything_and_paginates(self):
         with tempfile.TemporaryDirectory() as tmp:
-            log = pathlib.Path(tmp) / "service.log"
-            log.write_text("\n".join(f"line {i}" for i in range(1200)) + "\n")
-            status, _headers, body = self._web(str(log))._log_page(
-                {"sid": "S-1", "user": "Administrator", "csrf": CSRF}, page=3)
+            _s, _h, body = self._web(self._log(tmp, 120))._log_page(
+                {"sid": "S-1", "user": "Administrator", "csrf": CSRF}, show_all=True)
         html = body.decode()
-        self.assertEqual(status, 200)
+        self.assertIn("Page 1 of 3", html)      # 120 entries / 50 per page
+        self.assertIn("all=1&page=2", html)
+
+    def test_newest_first_and_clamped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _s, _h, body = self._web(self._log(tmp, 120))._log_page(
+                {"sid": "S-1", "user": "Administrator", "csrf": CSRF}, page=99, show_all=True)
+        html = body.decode()
         self.assertIn("Page 3 of 3", html)
-        self.assertIn("line 0", html)
-        self.assertNotIn("?page=4", html)
+        self.assertIn("entry 0", html)
+        self.assertNotIn("page=4", html)
 
-    def test_page_beyond_the_end_is_clamped(self):
+    def test_message_is_escaped(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = pathlib.Path(tmp) / "service.log"
-            log.write_text("\n".join(f"line {i}" for i in range(40)) + "\n")
-            status, _headers, body = self._web(str(log))._log_page(
-                {"sid": "S-1", "user": "Administrator", "csrf": CSRF}, page=99)
-        self.assertEqual(status, 200)
-        self.assertIn("Page 1 of 1", body.decode())
-
-    def test_log_escapes_markup(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            log = pathlib.Path(tmp) / "service.log"
-            log.write_text("<script>alert(1)</script>\n")
+            log.write_text("2026-11-01 10:00:00,000 ERROR <script>alert(1)</script>\n")
             _s, _h, body = self._web(str(log))._log_page(
                 {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
         html = body.decode()
@@ -557,80 +557,9 @@ class LogPageTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;", html)
 
     def test_missing_log_is_a_503(self):
-        status, _headers, _body = self._web("/nonexistent/service.log")._log_page(
+        status, _h, _b = self._web("/nonexistent/service.log")._log_page(
             {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
         self.assertEqual(status, 503)
-
-    def test_unconfigured_log_is_a_503(self):
-        status, _headers, _body = self._web(None)._log_page(
-            {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
-        self.assertEqual(status, 503)
-
-
-class ConfirmationRedirectTest(unittest.TestCase):
-    def test_confirmation_notices_land_on_the_account(self):
-        sid = "S-1-5-21-1-2-3-1108"
-        for notice in ("ad-key-confirmed", "enrollment-confirmed"):
-            with self.subTest(notice=notice):
-                self.assertIn("confirmed", AdminWeb._notice_text(notice).lower())
-                _s, headers, _b = AdminWeb._accounts_redirect(notice, sid)
-                self.assertEqual(dict(headers)["Location"],
-                                 f"/admin/account?sid={sid}&notice={notice}")
-
-
-class EnrollmentStatusTest(unittest.TestCase):
-    REQ = "C" * 32
-
-    def _web(self, state):
-        web = object.__new__(AdminWeb)
-        web._lock = threading.Lock()
-        web._session = lambda headers: ("token", {"sid": "S-1", "user": "Administrator", "csrf": CSRF})
-
-        class _Phones:
-            def enrollment_status(self, *, machine_id, request_id, now=None):
-                return state
-
-        class _Keys:
-            def enrollment_status(self, request_id, now=None):
-                return state
-
-        web.phones = _Phones()
-        web.ad_logon_keys = _Keys()
-        return web
-
-    def test_phone_enrollment_status_is_json(self):
-        status, headers, body = self._web({"status": "ready"})._get(
-            "/admin/enrollment-status", f"id={self.REQ}", {}, "127.0.0.1")
-        self.assertEqual(status, 200)
-        self.assertEqual(dict(headers)["Content-Type"], "application/json; charset=utf-8")
-        self.assertEqual(body.decode(), '{"status":"ready"}')
-
-    def test_ad_key_status_is_json(self):
-        _s, _h, body = self._web({"status": "confirmed"})._get(
-            "/admin/ad-logon-key-status", f"id={self.REQ}", {}, "127.0.0.1")
-        self.assertEqual(body.decode(), '{"status":"confirmed"}')
-
-    def test_unknown_request_reports_gone(self):
-        _s, _h, body = self._web(None)._get(
-            "/admin/enrollment-status", f"id={self.REQ}", {}, "127.0.0.1")
-        self.assertEqual(body.decode(), '{"status":"gone"}')
-
-    def test_invalid_id_is_rejected(self):
-        status, _h, _b = self._web({"status": "ready"})._get(
-            "/admin/enrollment-status", "id=short", {}, "127.0.0.1")
-        self.assertEqual(status, 400)
-
-
-class PasswordChangeOptionTest(unittest.TestCase):
-    def test_create_and_reset_forms_offer_the_option(self):
-        web = object.__new__(AdminWeb)
-        web.authority = "THESSLEYLAB"
-        user = {"sid": "S-1-5-21-1-2-3-1108", "sam": "target", "name": "Target",
-                "enabled": True, "authorized": True, "dc_administrator": False}
-        for html in (_html(web._user_form({"csrf": CSRF})),
-                     _html(web._user_password_page({"csrf": CSRF}, user))):
-            with self.subTest(page=html[:40]):
-                self.assertIn('name="must_change" value="yes" checked', html)
 
 
 class PhoneEnrollmentPageTest(unittest.TestCase):

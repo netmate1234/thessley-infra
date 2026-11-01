@@ -188,7 +188,7 @@ h1{font-size:clamp(1.4rem,4vw,1.8rem);line-height:1.2;margin:0 0 1rem;letter-spa
 .page-actions .button,.page-actions button{padding-inline:11px}
 .header-actions{display:flex;gap:9px;align-items:center;justify-content:flex-end;flex-wrap:wrap;margin-left:auto}.header-actions form{margin:0}
 .account-card{padding:0;overflow:hidden;scroll-margin-top:1.5rem}.account-card:target{outline:2px solid var(--blue);outline-offset:2px;border-color:var(--blue)}.account-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:18px 20px}.account-name{display:flex;align-items:flex-start;gap:12px;min-width:0}.account-avatar{width:42px;height:42px;display:grid;place-items:center;flex:none;border-radius:14px;background:#20384a;color:#acd5fa}.account-heading{min-width:0}.account-heading h2{overflow-wrap:anywhere}.account-id{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}.rights{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.trust-summary{display:grid;gap:7px;min-width:150px}.trust-label{display:block;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}.trust-icons{display:flex;gap:5px;flex-wrap:wrap}.trust-icons .badge{font-size:.75rem;padding:4px 7px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;background:#263744;color:#dce7f0;font-size:.8rem;line-height:1.25;font-weight:700}.badge .icon{width:15px;height:15px}.badge.yes{background:#153a2a;color:var(--good)}.badge.no{background:#3d2226;color:#ffadb2}.badge.medium{background:#44391f;color:var(--warn)}.badge.neutral{background:#293541;color:#c6d1db}
-.account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}.qr-login{text-align:center}.qr-login .card{text-align:center}.qr-login .status-line{justify-content:center}.qr-login .button{margin-inline:auto}.log-tail{margin:0;max-height:70vh;overflow:auto;padding:1rem;border-radius:10px;background:#0d1720;color:#dbe7f2;font-size:.84rem;line-height:1.45}.log-tail code{white-space:pre-wrap;overflow-wrap:anywhere}
+.account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}.qr-login{text-align:center}.qr-login .card{text-align:center}.qr-login .status-line{justify-content:center}.qr-login .button{margin-inline:auto}.log-card{padding:0}.log-list{list-style:none;margin:0;padding:0}.log-row{display:grid;grid-template-columns:auto 76px minmax(0,1fr);gap:10px;align-items:baseline;padding:10px 16px;border-bottom:1px solid #223141;font-size:.9rem}.log-row:last-child{border-bottom:0}.log-when{color:var(--muted);font-variant-numeric:tabular-nums;font-size:.82rem}.log-msg{overflow-wrap:anywhere}.log-tail{margin:0;max-height:70vh;overflow:auto;padding:1rem;border-radius:10px;background:#0d1720;color:#dbe7f2;font-size:.84rem;line-height:1.45}.log-tail code{white-space:pre-wrap;overflow-wrap:anywhere}
 .search-tools{margin:14px 0}.search-row{display:flex;align-items:center;gap:8px}.search-row input{flex:1;min-width:0}.search-row button{flex:none}.empty-results[hidden]{display:none}.empty-results{color:var(--muted)}
 .form-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}.form-actions form{margin:0}.form-actions button,.form-actions .button{margin:0}
 label{display:block;font-weight:650;margin:12px 0 5px}label.check-row{display:flex;align-items:center;gap:9px;font-weight:600}label.check-row input{width:auto;margin:0}input,select{font:inherit;padding:10px 12px;border:1px solid #485d70;border-radius:9px;width:100%;max-width:100%;background:var(--field);color:var(--ink)}input:focus-visible,select:focus-visible,button:focus-visible,.button:focus-visible,summary:focus-visible{outline:3px solid #9acbff;outline-offset:2px}
@@ -1368,10 +1368,25 @@ The account must change it at next sign-in.</p>
         return self._response(200, self._page("AD logon-key enrollment", body),
                               script_nonce=locals().get("refresh_nonce"))
 
-    LOG_PAGE_SIZE = 500
+    LOG_PAGE_SIZE = 50
     LOG_MAX_BYTES = 2 * 1024 * 1024
+    _LOG_LEVELS = ("ERROR", "WARNING", "INFO")
 
-    def _log_page(self, session: dict, page: int = 1):
+    @staticmethod
+    def _log_entries(text: str) -> list[tuple[str, str, str]]:
+        """Split log lines into (timestamp, level, message), newest last."""
+        import re as _re
+        pattern = _re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) (ERROR|WARNING|INFO) (.*)$")
+        entries = []
+        for line in text.splitlines():
+            match = pattern.match(line)
+            if match:
+                entries.append((match.group(1), match.group(2), match.group(3)))
+            elif line.strip():
+                entries.append(("", "INFO", line.strip()))
+        return entries
+
+    def _log_page(self, session: dict, page: int = 1, show_all: bool = False):
         if not self.log_path:
             return self._response(503, self._page(
                 "Service log", '<section class="card error">No log file is configured for this service.</section>'))
@@ -1384,38 +1399,54 @@ The account must change it at next sign-in.</p>
             with path.open("rb") as handle:
                 handle.seek(max(0, size - self.LOG_MAX_BYTES))
                 text = handle.read().decode("utf-8", "replace")
-            all_lines = text.splitlines()
             truncated = size > self.LOG_MAX_BYTES
         except OSError:
             _LOG.exception("admin_log_read_failed sid=%s", session.get("sid", "unknown"))
             return self._response(503, self._page(
                 "Service log", '<section class="card error">The service log could not be read.</section>'))
 
-        # Newest first: page 1 holds the most recent entries.
-        lines = list(reversed(all_lines))
-        pages = max(1, -(-len(lines) // self.LOG_PAGE_SIZE))
+        entries = self._log_entries(text)
+        total = len(entries)
+        important = [entry for entry in entries if entry[1] in ("ERROR", "WARNING")]
+        shown = entries if show_all else important
+        shown = list(reversed(shown))          # newest first
+        pages = max(1, -(-len(shown) // self.LOG_PAGE_SIZE))
         page = min(max(page, 1), pages)
         start = (page - 1) * self.LOG_PAGE_SIZE
-        chunk = lines[start:start + self.LOG_PAGE_SIZE]
+        chunk = shown[start:start + self.LOG_PAGE_SIZE]
 
-        prev_link = (f'<a class="button secondary small" href="/admin/log?page={page - 1}">Newer</a>'
+        query = "all=1&" if show_all else ""
+        prev_link = (f'<a class="button secondary small" href="/admin/log?{query}page={page - 1}">Newer</a>'
                      if page > 1 else '<span class="badge neutral">Newer</span>')
-        next_link = (f'<a class="button secondary small" href="/admin/log?page={page + 1}">Older</a>'
+        next_link = (f'<a class="button secondary small" href="/admin/log?{query}page={page + 1}">Older</a>'
                      if page < pages else '<span class="badge neutral">Older</span>')
         pager = (f'<nav class="pager" aria-label="Log pages">{prev_link}'
-                 f'<span class="muted small">Page {page} of {pages} · {len(lines)} lines</span>{next_link}</nav>')
-        note = ('<p class="muted small">Only the most recent 2 MiB are read; older entries are not shown.</p>'
-                if truncated else '')
+                 f'<span class="muted small">Page {page} of {pages} · {len(shown)} shown</span>{next_link}</nav>')
+        toggle = ('<a class="button secondary small" href="/admin/log">Important only</a>' if show_all
+                  else f'<a class="button secondary small" href="/admin/log?all=1&page=1">Show all {total}</a>')
+        note = ('<p class="muted small">Only the most recent 2 MiB are read.</p>' if truncated else '')
+
+        rows = []
+        for timestamp, level, message in chunk:
+            css = {"ERROR": "no", "WARNING": "medium"}.get(level, "neutral")
+            when = html.escape(timestamp[11:19] if timestamp else "")
+            day = html.escape(timestamp[:10] if timestamp else "")
+            rows.append(
+                f'<li class="log-row"><span class="badge {css}">{level}</span>'
+                f'<span class="log-when" title="{day}">{when}</span>'
+                f'<span class="log-msg">{html.escape(message)}</span></li>')
+        if not rows:
+            rows.append('<li class="log-row"><span class="badge yes">OK</span>'
+                        '<span class="log-msg">No important events in the read window.</span></li>')
+
         body = (f'<header class="page-head"><div><h1>{self._icon("admin")} Service log</h1>'
-                f'<div class="muted">{html.escape(str(self.log_path))}</div></div>'
+                f'<div class="muted">{len(important)} important of {total} entries · {html.escape(str(self.log_path))}</div></div>'
                 f'<div class="header-actions"><nav class="page-actions">'
-                f'<a class="button secondary small" href="/admin/log">Latest</a>'
+                f'<a class="button secondary small" href="/admin/log">Refresh</a>{toggle}'
                 f'<a class="button secondary small" href="/admin/">{self._icon("chevron")} All accounts</a>'
                 f'</nav></div></header>'
                 + pager + note +
-                '<section class="card"><pre class="log-tail"><code>'
-                + html.escape("\n".join(chunk))
-                + '</code></pre></section>' + pager)
+                '<section class="card log-card"><ul class="log-list">' + "".join(rows) + '</ul></section>' + pager)
         return self._response(200, self._page("Service log", body))
 
     def _policy_page(self, session: dict, message: str = ""):
