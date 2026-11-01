@@ -748,7 +748,7 @@ try {
             }
         }
     }
-    $sid = [Security.Principal.SecurityIdentifier]::new([byte[]]$target.SID, 0).Value
+    $sid = [string]$target.SID.Value
     [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
 } catch {
     $errorText = [string]$_.Exception.Message
