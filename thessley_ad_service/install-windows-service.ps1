@@ -141,6 +141,12 @@ if (-not (Test-Path $configPath)) {
     $json = $config | ConvertTo-Json -Depth 4
     [IO.File]::WriteAllText($configPath, $json + "`n", [Text.UTF8Encoding]::new($false))
 } else {
+    try {
+        $existing = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        if ($existing.bind_address -and $existing.bind_address -ne $BindAddress) {
+            Write-Warning "Existing service.json binds $($existing.bind_address) but this host detected $BindAddress. The service keeps the configured address; delete C:\ProgramData\ThessleyAD\service.json and https-cert.pem/https-key.pem to re-detect."
+        }
+    } catch { }
     Write-Warning 'Existing service.json retained. Review its bind address and group SID before starting.'
 }
 & icacls.exe $StateRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
@@ -349,7 +355,7 @@ Write-Host "AD allow group: $groupName ($AllowedGroupSid)"
 if ($AllowedRemoteAddresses.Count -gt 0) {
     Write-Host "AD API TCP 47810 source filter set to: $($AllowedRemoteAddresses -join ', ')"
 } else {
-    Write-Host 'AD API firewall source scope preserved (or defaults to 192.168.1.0/24 on first install).'
+    Write-Host "AD API firewall source scope preserved, or $defaultScope on first install."
 }
 if ($AdminAllowedRemoteAddresses.Count -gt 0) {
     Write-Host "Admin TCP 47820 source filter set to: $($AdminAllowedRemoteAddresses -join ', ')"
