@@ -67,6 +67,7 @@ def main() -> int:
     from .login_policy import LoginPolicyStore
     from .phone_registry import PhoneRegistry
     from .ad_logon_keys import AdLogonKeyRegistry
+    from .piv_signatures import PivSignatureStore
     from .replay_store import SQLiteReplayStore
 
     _ensure_state_dir()
@@ -74,6 +75,7 @@ def main() -> int:
     login_policy = LoginPolicyStore(STATE_DB)
     phones = PhoneRegistry(STATE_DB)
     ad_logon_keys = AdLogonKeyRegistry(STATE_DB)
+    piv_signatures = PivSignatureStore(STATE_DB, ad_logon_keys)
     challenges = ChallengeStore(
         STATE_DB, phones.public_key_for, ad_logon_keys.active_key_matches_public_key,
     )
@@ -98,6 +100,7 @@ def main() -> int:
         login_policy,
         certificate_template,
         ad_logon_keys,
+        piv_signatures,
     )
     listener_routes = {
         path: ListenerRawBodyRoute(route.handler, response_wait=route.response_wait)
@@ -113,6 +116,7 @@ def main() -> int:
             while not stop.wait(60):
                 try:
                     challenges.purge_expired()
+                    piv_signatures.purge_expired()
                 except Exception as exc:
                     print(f"Could not purge expired AD challenge state: {exc}", flush=True)
 

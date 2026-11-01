@@ -15,7 +15,7 @@ import time
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 
 PHONE_SIGNATURE_DOMAIN = "thessley_win_pam_v2"
 PHONE_CERTIFICATE_SIGNATURE_DOMAIN = "thessley_win_cert_request_v1"
@@ -192,14 +192,17 @@ def timestamp_is_fresh(timestamp: int, now: float | None = None) -> bool:
 
 
 def verify_phone_signature(public_key_spki_b64: str, signature_b64: str, message: bytes) -> bool:
-    """Verify a DER ECDSA/SHA-256 signature from a P-256 Android Keystore key."""
+    """Verify an approved Android P-256 or RSA-2048 Android Keystore signature."""
     try:
         public_der = base64.b64decode(public_key_spki_b64, validate=True)
         signature_der = base64.b64decode(signature_b64, validate=True)
         key = serialization.load_der_public_key(public_der)
-        if not isinstance(key, ec.EllipticCurvePublicKey) or key.curve.name != "secp256r1":
+        if isinstance(key, ec.EllipticCurvePublicKey) and key.curve.name == "secp256r1":
+            key.verify(signature_der, message, ec.ECDSA(hashes.SHA256()))
+        elif isinstance(key, rsa.RSAPublicKey) and key.key_size == 2048:
+            key.verify(signature_der, message, padding.PKCS1v15(), hashes.SHA256())
+        else:
             return False
-        key.verify(signature_der, message, ec.ECDSA(hashes.SHA256()))
         return True
     except (binascii.Error, InvalidSignature, ValueError, TypeError):
         return False

@@ -30,8 +30,9 @@ def validate_approved_csr(der: bytes, expected_sha256: str) -> dict[str, str | i
     This function does not authorize the principal, consume phone approval,
     contact a CA, or issue a certificate. Its constraints match the isolated
     Windows machine-key generator (random CN) and the Android phone-key CSR
-    (fixed CN): no requested extensions, and either RSA-3072/SHA-256 or
-    ECDSA P-256/SHA-256. Callers handling an EC request must separately bind
+    (fixed CN): no requested extensions, and either RSA-3072/SHA-256 for the
+    temporary PC-key pilot, RSA-2048/SHA-256 for phone PIV keys, or ECDSA
+    P-256/SHA-256 for phone keys. Callers handling a phone request must bind
     its SPKI digest to an active AD logon key for the challenge SID.
     """
     if not isinstance(der, bytes) or not _MIN_CSR_DER_SIZE <= len(der) <= 64 * 1024:
@@ -49,12 +50,16 @@ def validate_approved_csr(der: bytes, expected_sha256: str) -> dict[str, str | i
         rsa_profile = (isinstance(public_key, rsa.RSAPublicKey)
                        and public_key.key_size == 3072
                        and request.signature_algorithm_oid.dotted_string == _RSA_SHA256_SIGNATURE_OID)
+        rsa_phone_profile = (isinstance(public_key, rsa.RSAPublicKey)
+                             and public_key.key_size == 2048
+                             and request.signature_algorithm_oid.dotted_string == _RSA_SHA256_SIGNATURE_OID)
         ec_profile = (isinstance(public_key, ec.EllipticCurvePublicKey)
                       and isinstance(public_key.curve, ec.SECP256R1)
                       and request.signature_algorithm_oid.dotted_string == _ECDSA_SHA256_SIGNATURE_OID)
         subject_valid = (
             len(subject_attributes) == 1 and len(common_names) == 1 and (
                 (rsa_profile and _PILOT_SUBJECT.fullmatch(common_names[0].value) is not None)
+                or (rsa_phone_profile and common_names[0].value == _PHONE_KEY_SUBJECT)
                 or (ec_profile and common_names[0].value == _PHONE_KEY_SUBJECT)
             )
         )
@@ -71,9 +76,9 @@ def validate_approved_csr(der: bytes, expected_sha256: str) -> dict[str, str | i
                 and extension.value.digest
                 == x509.SubjectKeyIdentifier.from_public_key(public_key).digest
             )
-        if (not request.is_signature_valid or not (rsa_profile or ec_profile)
+        if (not request.is_signature_valid or not (rsa_profile or rsa_phone_profile or ec_profile)
                 or not subject_valid or not extensions_valid):
-            raise CertificateRequestError("The CSR does not match the approved RSA-3072 or EC P-256 profile.")
+            raise CertificateRequestError("The CSR does not match an approved RSA-3072, RSA-2048 phone, or EC P-256 profile.")
     except CertificateRequestError:
         raise
     except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
@@ -87,5 +92,7 @@ def validate_approved_csr(der: bytes, expected_sha256: str) -> dict[str, str | i
         "subject": request.subject.rfc4514_string(),
         "public_key_spki_sha256": hashlib.sha256(spki).hexdigest(),
         "public_key_bits": public_key.key_size,
-        "public_key_algorithm": "rsa" if isinstance(public_key, rsa.RSAPublicKey) else "ec-p256",
+        "public_key_algorithm": (
+            f"rsa-{public_key.key_size}" if isinstance(public_key, rsa.RSAPublicKey) else "ec-p256"
+        ),
     }

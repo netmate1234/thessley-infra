@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .challenges import ChallengeStore
     from .phone_registry import PhoneRegistry
     from .ad_logon_keys import AdLogonKeyRegistry
+    from .piv_signatures import PivSignatureStore
 
 
 MACHINE_ENROLL_PATH = "/thessley-ad/v1/machines/enroll"
@@ -39,6 +40,12 @@ PHONE_ENROLL_CONFIRM_PATH = "/thessley-ad/v1/enrollments/confirm"
 PHONE_ENROLL_CANCEL_PATH = "/thessley-ad/v1/enrollments/cancel"
 AD_LOGON_KEY_ENROLL_PATH = "/thessley-ad/v1/logon-keys/enroll"
 AD_LOGON_KEY_STATUS_PATH = "/thessley-ad/v1/logon-keys/status"
+PIV_SIGN_START_PATH = "/thessley-ad/v1/piv-sign/start"
+PIV_SIGN_RESULT_PATH = "/thessley-ad/v1/piv-sign/result"
+PIV_SIGN_PHONE_PENDING_PATH = "/thessley-ad/v1/piv-sign/phone-pending"
+PIV_SIGN_PHONE_RESPONSE_PATH = "/thessley-ad/v1/piv-sign/phone-response"
+_HEX_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_B64_PIV_INPUT = re.compile(r"^[A-Za-z0-9+/]{40,120}={0,2}$")
 
 
 @dataclass(frozen=True)
@@ -170,10 +177,14 @@ def directory_users_route(registry: "MachineRegistry", replay_guard: "ReplayGuar
 
 def phone_keys_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                      phones: "PhoneRegistry"):
-    """List active phone-key metadata for the authenticated machine only."""
+    """List machine keys, or active keys for one principal usable on the authenticated machine."""
     def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
         expected = {"x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"}
-        if set(auth_headers) != expected or body != {}:
+        principal_id = body.get("principal_id")
+        if (set(auth_headers) != expected
+                or (body != {} and (set(body) != {"principal_id"}
+                                    or not isinstance(principal_id, str)
+                                    or not _HEX_SHA256.fullmatch(principal_id)))):
             return 400, {"result": "error", "message": "Invalid phone-key listing request."}
         machine_id = auth_headers["x-thessley-machine-id"]
         if not _authenticated_machine(machine_id, auth_headers["x-thessley-timestamp"],
@@ -182,7 +193,8 @@ def phone_keys_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
             return 401, {"result": "error", "message": "Machine authentication failed."}
         if not registry.machine_name(machine_id):
             return 401, {"result": "error", "message": "Machine authentication failed."}
-        keys = phones.list_for_machine(machine_id)
+        keys = (phones.list_for_machine(machine_id) if principal_id is None
+                else phones.list_for_principal_on_machine(principal_id, machine_id))
         if len(keys) > 5000:
             return 503, {"result": "error", "message": "The phone-key listing is too large."}
         return 200, {"result": "listed", "keys": keys}
@@ -329,7 +341,8 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                       directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                       challenges: "ChallengeStore", server_host: str,
                       server_fingerprint: str | Callable[[], str], login_policy=None,
-                      certificate_template: str | None = None):
+                      certificate_template: str | None = None,
+                      ad_logon_keys: "AdLogonKeyRegistry | None" = None):
     """Create a QR link only after the machine, SID, and AD group are verified."""
     from .directory import DirectoryUnavailable, PrincipalNotFound
     from .directory import validate_group_sid_allowlist
@@ -351,10 +364,14 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         }
         body_fields = set(body)
         if (set(auth_headers) != expected or body_fields not in (
-                {"sid", "context"}, {"sid", "context", "certificate_request_sha256"})):
+                {"sid", "context"}, {"sid", "context", "certificate_request_sha256"},
+                {"sid", "context", "piv_signing"})):
             return 400, {"result": "error", "message": "Invalid sign-in request."}
         if not isinstance(body.get("sid"), str) or body.get("context") not in ("interactive", "unlock", "ssh"):
             return 400, {"result": "error", "message": "Invalid sign-in request."}
+        piv_signing = body_fields == {"sid", "context", "piv_signing"} and body.get("piv_signing") is True
+        if body_fields == {"sid", "context", "piv_signing"} and not piv_signing:
+            return 400, {"result": "error", "message": "Invalid PIV sign-in request."}
         machine_id = auth_headers["x-thessley-machine-id"]
         if not _authenticated_machine(
             machine_id, auth_headers["x-thessley-timestamp"], auth_headers["x-thessley-nonce"],
@@ -383,7 +400,12 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
             return 503, {"result": "error", "message": "The workstation sign-in policy is unavailable."}
         if policy["method"] == METHOD_WINDOWS:
             return 403, {"result": "disabled", "message": "Thessley phone sign-in is disabled for this account on this workstation."}
-        certificate_pilot = policy["method"] == METHOD_EPHEMERAL_CERT
+        if piv_signing and (body["context"] != "interactive" or ad_logon_keys is None
+                            or policy["method"] != METHOD_TPM):
+            return 503, {"result": "unsupported", "message": "The phone-key signing service is unavailable."}
+        if piv_signing and not ad_logon_keys.has_active_key(principal.principal_id):
+            return 403, {"result": "unavailable", "message": "This AD account has no active phone logon key for PIV sign-in."}
+        certificate_pilot = policy["method"] == METHOD_EPHEMERAL_CERT and not piv_signing
         if certificate_pilot:
             if certificate_template is None:
                 return 503, {"result": "unsupported", "message": "The certificate sign-in template is not configured."}
@@ -411,6 +433,8 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                     "certificate_request_sha256": body["certificate_request_sha256"],
                     "certificate_template": certificate_template,
                 })
+            if piv_signing:
+                challenge_args["piv_signing"] = True
             challenge = challenges.create(**challenge_args)
         except (RuntimeError, TypeError, ValueError):
             return 503, {"result": "error", "message": "Could not create a sign-in request."}
@@ -436,6 +460,8 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                 "tmpl": challenge["certificate_template"],
                 "exp": str(int(challenge["expires_at"])),
             })
+        if piv_signing:
+            link_values["piv"] = "1"
         link = "thessleypam://login?" + urlencode(link_values)
         return 201, {"result": "created", "credential_method": policy["method"],
                      "policy_source": policy["source"], "request": challenge, "app_link": link}
@@ -807,12 +833,103 @@ def ad_logon_key_status_route(logon_keys: "AdLogonKeyRegistry"):
     return RawBodyRoute(handle)
 
 
+def piv_sign_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                         signatures: "PivSignatureStore"):
+    """Queue a digest only for the requesting machine's approved PIV login."""
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {"x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"}
+        if (set(auth_headers) != expected or set(body) != {"request_id", "ad_logon_key_sha256", "digest_b64"}
+                or not isinstance(body.get("request_id"), str)
+                or not isinstance(body.get("ad_logon_key_sha256"), str)
+                or not _HEX_SHA256.fullmatch(body["ad_logon_key_sha256"])
+                or not isinstance(body.get("digest_b64"), str)
+                or not _B64_PIV_INPUT.fullmatch(body["digest_b64"])):
+            return 400, {"result": "error", "message": "Invalid PIV sign request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(machine_id, auth_headers["x-thessley-timestamp"],
+                                      auth_headers["x-thessley-nonce"], auth_headers["x-thessley-signature"],
+                                      PIV_SIGN_START_PATH, raw_body, registry, replay_guard):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        try:
+            encoded = body["digest_b64"].encode("ascii")
+            digest = base64.b64decode(encoded, validate=True)
+            if (len(digest) not in (32, 35, 51, 67, 83)
+                    or base64.b64encode(digest) != encoded):
+                raise ValueError("invalid digest")
+        except (UnicodeEncodeError, ValueError, binascii.Error):
+            return 400, {"result": "error", "message": "Invalid PIV digest."}
+        created = signatures.create_for_machine(
+            machine_id=machine_id, request_id=body["request_id"],
+            ad_logon_key_sha256=body["ad_logon_key_sha256"], digest=digest,
+        )
+        if created is None:
+            return 409, {"result": "error", "message": "No matching active AD PIV sign-in is available."}
+        return 201, {"result": "queued", **created}
+    return RawBodyRoute(handle)
+
+
+def piv_sign_result_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
+                          signatures: "PivSignatureStore"):
+    """Return a signature only to the originating, machine-authenticated caller."""
+    def handle(_client_ip: str, body: dict, raw_body: bytes, auth_headers: dict[str, str]):
+        expected = {"x-thessley-machine-id", "x-thessley-timestamp", "x-thessley-nonce", "x-thessley-signature"}
+        if (set(auth_headers) != expected or set(body) != {"request_id", "sign_request_id"}
+                or not all(isinstance(body.get(name), str) for name in ("request_id", "sign_request_id"))):
+            return 400, {"result": "error", "message": "Invalid PIV result request."}
+        machine_id = auth_headers["x-thessley-machine-id"]
+        if not _authenticated_machine(machine_id, auth_headers["x-thessley-timestamp"],
+                                      auth_headers["x-thessley-nonce"], auth_headers["x-thessley-signature"],
+                                      PIV_SIGN_RESULT_PATH, raw_body, registry, replay_guard):
+            return 401, {"result": "error", "message": "Machine authentication failed."}
+        result = signatures.result_for_machine(
+            machine_id=machine_id, request_id=body["request_id"], sign_request_id=body["sign_request_id"],
+        )
+        if result is None:
+            return 404, {"result": "error", "message": "PIV sign request was not found."}
+        return 200, result
+    return RawBodyRoute(handle)
+
+
+def piv_sign_phone_pending_route(signatures: "PivSignatureStore"):
+    def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
+        fields = {"request_id", "credential_id", "ad_logon_key_sha256"}
+        if (auth_headers or set(body) != fields
+                or not all(isinstance(body.get(name), str) for name in fields)):
+            return 400, {"result": "error", "message": "Invalid phone PIV request."}
+        result = signatures.for_phone(
+            request_id=body["request_id"], credential_id=body["credential_id"],
+            ad_logon_key_sha256=body["ad_logon_key_sha256"],
+        )
+        if result is None:
+            return 403, {"result": "error", "message": "No matching active phone key is enrolled for this sign-in."}
+        return 200, result
+    return RawBodyRoute(handle)
+
+
+def piv_sign_phone_response_route(signatures: "PivSignatureStore"):
+    def handle(_client_ip: str, body: dict, _raw_body: bytes, auth_headers: dict[str, str]):
+        fields = {"request_id", "sign_request_id", "credential_id", "ad_logon_key_sha256", "signature_b64"}
+        if (auth_headers or set(body) != fields
+                or not all(isinstance(body.get(name), str) for name in fields)):
+            return 400, {"result": "error", "message": "Invalid phone PIV response."}
+        accepted = signatures.complete_from_phone(
+            request_id=body["request_id"], sign_request_id=body["sign_request_id"],
+            credential_id=body["credential_id"], ad_logon_key_sha256=body["ad_logon_key_sha256"],
+            signature_b64=body["signature_b64"],
+        )
+        if not accepted:
+            return 409, {"result": "error", "message": "The PIV request expired or the phone signature did not match."}
+        return 200, {"result": "signed"}
+    return RawBodyRoute(handle)
+
+
 def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
                   directory: "ActiveDirectory", allowed_group_sids: frozenset[str],
                   challenges: "ChallengeStore", server_host: str,
                   server_fingerprint: str | Callable[[], str], phones: "PhoneRegistry",
                   login_policy=None, certificate_template: str | None = None,
-                  ad_logon_keys: "AdLogonKeyRegistry | None" = None) -> dict:
+                  ad_logon_keys: "AdLogonKeyRegistry | None" = None,
+                  piv_signatures: "PivSignatureStore | None" = None) -> dict:
     """Build routes without binding them to a particular HTTPS listener."""
     return {
         MACHINE_ENROLL_PATH: machine_enrollment_route(registry),
@@ -828,7 +945,7 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         ),
         LOGIN_START_PATH: login_start_route(
             registry, replay_guard, directory, allowed_group_sids, challenges, server_host, server_fingerprint,
-            login_policy, certificate_template,
+            login_policy, certificate_template, ad_logon_keys,
         ),
         PHONE_RESPONSE_PATH: phone_response_route(challenges),
         LOGIN_RESULT_PATH: login_result_route(registry, replay_guard, challenges),
@@ -844,4 +961,17 @@ def create_routes(registry: "MachineRegistry", replay_guard: "ReplayGuard",
         **({AD_LOGON_KEY_ENROLL_PATH: ad_logon_key_enroll_route(phones, ad_logon_keys),
             AD_LOGON_KEY_STATUS_PATH: ad_logon_key_status_route(ad_logon_keys)}
            if ad_logon_keys is not None else {}),
+        **({PIV_SIGN_START_PATH: piv_sign_start_route(registry, replay_guard, piv_signatures),
+            PIV_SIGN_RESULT_PATH: piv_sign_result_route(registry, replay_guard, piv_signatures),
+            PIV_SIGN_PHONE_PENDING_PATH: piv_sign_phone_pending_route(piv_signatures),
+            PIV_SIGN_PHONE_RESPONSE_PATH: piv_sign_phone_response_route(piv_signatures)}
+           if piv_signatures is not None else {}),
+    }
+
+
+def create_ad_enrollment_routes(phones: "PhoneRegistry", logon_keys: "AdLogonKeyRegistry") -> dict[str, RawBodyRoute]:
+    """Only Android AD-key registration and status routes on the isolated TLS listener."""
+    return {
+        AD_LOGON_KEY_ENROLL_PATH: ad_logon_key_enroll_route(phones, logon_keys),
+        AD_LOGON_KEY_STATUS_PATH: ad_logon_key_status_route(logon_keys),
     }

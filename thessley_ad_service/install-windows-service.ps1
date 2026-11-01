@@ -114,6 +114,7 @@ $movedPreviousApp = $false
 $createdFirewallRule = $false
 $modifiedFirewallRule = $false
 $createdAdminFirewallRule = $false
+$createdEnrollmentFirewallRule = $false
 $modifiedAdminFirewallRule = $false
 $oldFirewallRemoteAddresses = $null
 $oldFirewallProfiles = $null
@@ -121,6 +122,7 @@ $oldAdminFirewallRemoteAddresses = $null
 $oldAdminFirewallProfiles = $null
 $ruleName = 'Thessley AD API TCP 47810 (LAN)'
 $adminRuleName = 'Thessley AD Admin TCP 47820 (LAN)'
+$enrollmentRuleName = 'Thessley AD Phone Enrollment TCP 47811 (LAN)'
 
 try {
     if ($previousTaskWasRunning) {
@@ -210,21 +212,37 @@ Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger
         $createdAdminFirewallRule = $true
     }
 
+    $enrollmentFirewallRule = Get-NetFirewallRule -DisplayName $enrollmentRuleName -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $enrollmentFirewallRule) {
+        if ($AllowedRemoteAddresses.Count -gt 0) {
+            $enrollmentRemoteAddresses = $AllowedRemoteAddresses
+        } elseif ($firewallRule) {
+            $enrollmentRemoteAddresses = @(($firewallRule | Get-NetFirewallAddressFilter).RemoteAddress)
+        } else {
+            $enrollmentRemoteAddresses = @('192.168.1.0/24')
+        }
+        New-NetFirewallRule -DisplayName $enrollmentRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47811 `
+            -LocalAddress $BindAddress -RemoteAddress $enrollmentRemoteAddresses -Profile Any | Out-Null
+        $createdEnrollmentFirewallRule = $true
+    }
+
 Start-ScheduledTask -TaskName $taskName
     $listener = $null
     $adminListener = $null
+    $enrollmentListener = $null
     $startDeadline = (Get-Date).AddSeconds(60)
     do {
         Start-Sleep -Milliseconds 500
         $listener = Get-NetTCPConnection -State Listen -LocalAddress $BindAddress -LocalPort 47810 -ErrorAction SilentlyContinue
         $adminListener = Get-NetTCPConnection -State Listen -LocalAddress $BindAddress -LocalPort 47820 -ErrorAction SilentlyContinue
-    } while ((-not $listener -or -not $adminListener) -and (Get-Date) -lt $startDeadline)
-if (-not $listener -or -not $adminListener) {
+        $enrollmentListener = Get-NetTCPConnection -State Listen -LocalAddress $BindAddress -LocalPort 47811 -ErrorAction SilentlyContinue
+    } while ((-not $listener -or -not $adminListener -or -not $enrollmentListener) -and (Get-Date) -lt $startDeadline)
+if (-not $listener -or -not $adminListener -or -not $enrollmentListener) {
     $task = Get-ScheduledTask -TaskName $taskName
     $info = Get-ScheduledTaskInfo -TaskName $taskName
     $log = Join-Path $StateRoot 'service.log'
     $detail = if (Test-Path $log) { (Get-Content $log -Tail 20 -ErrorAction SilentlyContinue) -join "`n" } else { 'No service log was created.' }
-    throw "AD service listeners did not start on $BindAddress`:47810 and :47820 (task $($task.State), result $($info.LastTaskResult)). $detail"
+    throw "AD service listeners did not start on $BindAddress`:47810, :47811, and :47820 (task $($task.State), result $($info.LastTaskResult)). $detail"
 }
 if (-not (Test-Path (Join-Path $StateRoot 'https-cert.pem'))) { throw 'The service listener started without creating its TLS identity.' }
 $certificatePin = & $python -I -c "import hashlib; from cryptography import x509; from cryptography.hazmat.primitives import serialization; print(hashlib.sha256(x509.load_pem_x509_certificate(open(r'$StateRoot\https-cert.pem','rb').read()).public_bytes(serialization.Encoding.DER)).hexdigest())"
@@ -274,9 +292,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the local admin command fil
             $adminFirewallRule | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $oldAdminFirewallRemoteAddresses -ErrorAction SilentlyContinue | Out-Null
         }
     }
+    if ($createdEnrollmentFirewallRule) {
+        Get-NetFirewallRule -DisplayName $enrollmentRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    }
     throw $failure
 }
 Write-Host "Installed the Thessley AD API and management site. Test https://$BindAddress`:47810 from the phone and client."
+Write-Host "Phone AD-key enrollment listener: https://$BindAddress`:47811/ (launched from the AD admin page)."
 Write-Host "Administrator site: https://$BindAddress`:47820/admin/ (sign in as a domain controller administrator)."
 if ($stateBackup) { Write-Host "Pre-update service state backup: $stateBackup" }
 Write-Host "TLS certificate SHA-256: $($certificatePin.Trim())"

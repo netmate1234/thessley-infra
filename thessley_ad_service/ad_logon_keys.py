@@ -20,7 +20,7 @@ from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from .android_attestation import verify_android_key_attestation
 from .phone_registry import CENTRAL_AD_MACHINE_ID
@@ -110,7 +110,7 @@ class AdLogonKeyRegistry:
         finish_private_sqlite(self.path)
 
     @staticmethod
-    def _key_der(encoded: str) -> tuple[bytes, str] | None:
+    def _key_der(encoded: str, *, allow_rsa: bool = False) -> tuple[bytes, str] | None:
         if not isinstance(encoded, str) or len(encoded) > 4096:
             return None
         try:
@@ -118,7 +118,9 @@ class AdLogonKeyRegistry:
             if base64.b64encode(der).decode("ascii") != encoded:
                 return None
             key = serialization.load_der_public_key(der)
-            if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
+            valid_ec = isinstance(key, ec.EllipticCurvePublicKey) and isinstance(key.curve, ec.SECP256R1)
+            valid_rsa = allow_rsa and isinstance(key, rsa.RSAPublicKey) and key.key_size == 2048
+            if not (valid_ec or valid_rsa):
                 return None
             canonical = key.public_bytes(
                 serialization.Encoding.DER,
@@ -184,7 +186,7 @@ class AdLogonKeyRegistry:
         ``credential_id`` for ``CENTRAL_AD_MACHINE_ID`` and this exact
         ``principal_id``. Callers must never accept that key from the request.
         """
-        new_key = self._key_der(public_key_spki_b64)
+        new_key = self._key_der(public_key_spki_b64, allow_rsa=True)
         approval_key = self._key_der(approval_public_key_spki_b64)
         chain_json = self._attestation_chain(attestation_chain)
         current = time.time() if now is None else now
@@ -525,6 +527,22 @@ class AdLogonKeyRegistry:
             return row[0] if row else None
         except sqlite3.Error:
             return None
+        finally:
+            connection.close()
+
+    def has_active_key(self, principal_id: str) -> bool:
+        """Return whether the AD account has at least one non-revoked logon key."""
+        if not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id):
+            return False
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT 1 FROM ad_logon_keys WHERE principal_id = ? AND revoked_at IS NULL LIMIT 1",
+                (principal_id,),
+            ).fetchone()
+            return row is not None
+        except sqlite3.Error:
+            return False
         finally:
             connection.close()
 

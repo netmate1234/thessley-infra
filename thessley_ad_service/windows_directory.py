@@ -379,7 +379,7 @@ try {{
                 upn = $upn
                 enabled = $enabled
                 authorized = ($enabled -and $authorizedSams.Contains($sam))
-                dc_administrator = ($enabled -and $dcAdministratorSams.Contains($sam))
+                dc_administrator = $dcAdministratorSams.Contains($sam)
             }}
         }}
     ) | Sort-Object sam
@@ -436,3 +436,206 @@ try {{
             return {"domain": domain[:256], "users": clean, "truncated": truncated}
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise DirectoryUnavailable("Windows returned an invalid AD user directory response") from exc
+
+    def _manage_user(self, operation: str, *, administrator: str, password: str,
+                     username: str = "", display_name: str = "", initial_password: str = "",
+                     enabled: bool = True) -> str:
+        """Perform one audited AD user change using freshly supplied admin credentials.
+
+        The admin password is sent to a short-lived PowerShell child over stdin,
+        never in its command line or logs, and is not retained by this service.
+        """
+        if operation not in {"create", "update", "delete", "disable"}:
+            raise ValueError("Unsupported AD user operation")
+        if not isinstance(administrator, str) or not _USERNAME.fullmatch(administrator):
+            raise ValueError("Invalid administrator account")
+        if not isinstance(password, str) or not password or len(password) > 1024 or "\x00" in password:
+            raise ValueError("Enter the administrator password to confirm this change")
+        if operation != "create" and (not isinstance(username, str) or not _USERNAME.fullmatch(username)):
+            raise ValueError("Invalid AD username")
+        if operation in {"create", "update"}:
+            if (not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 256
+                    or any(ord(char) < 32 for char in display_name)):
+                raise ValueError("Enter a display name of at most 256 characters")
+        if operation == "create":
+            if not isinstance(username, str) or not _USERNAME.fullmatch(username):
+                raise ValueError("Enter a username using letters, numbers, dot, dash, or underscore")
+            if (not isinstance(initial_password, str) or len(initial_password) < 8
+                    or len(initial_password) > 256 or "\x00" in initial_password):
+                raise ValueError("The temporary password must be between 8 and 256 characters")
+        if operation == "update" and not isinstance(enabled, bool):
+            raise ValueError("Invalid account state")
+
+        script = r"""
+$ErrorActionPreference = 'Stop'
+try {
+    $data = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
+    $authUser = "$($data.authority)\$($data.administrator)"
+    $authType = [System.DirectoryServices.AuthenticationTypes]::Secure
+    Add-Type -AssemblyName System.DirectoryServices -ErrorAction Stop
+    $root = [System.DirectoryServices.DirectoryEntry]::new('LDAP://RootDSE', $authUser, [string]$data.password, $authType)
+    $baseDn = [string]$root.Properties['defaultNamingContext'][0]
+    $dnsDomain = (($baseDn -split ',') | Where-Object { $_ -like 'DC=*' } | ForEach-Object { $_.Substring(3) }) -join '.'
+    if ([string]::IsNullOrWhiteSpace($baseDn) -or [string]::IsNullOrWhiteSpace($dnsDomain)) { throw 'domain_lookup_failed' }
+    $base = [System.DirectoryServices.DirectoryEntry]::new("LDAP://$baseDn", $authUser, [string]$data.password, $authType)
+    $sam = [string]$data.username
+    $found = $null
+    if ($data.operation -ne 'create') {
+        $search = [System.DirectoryServices.DirectorySearcher]::new($base)
+        $search.Filter = "(&(objectCategory=person)(objectClass=user)(sAMAccountName=$sam))"
+        $search.SizeLimit = 2
+        $search.ServerTimeLimit = [TimeSpan]::FromSeconds(10)
+        foreach ($property in @('distinguishedName','objectSid','userAccountControl','isCriticalSystemObject')) {
+            [void]$search.PropertiesToLoad.Add($property)
+        }
+        $result = $search.FindOne()
+        $search.Dispose()
+        if (-not $result) { [Console]::Out.WriteLine('{"ok":false,"error":"not_found"}'); exit 0 }
+        $sid = [Security.Principal.SecurityIdentifier]::new([byte[]]$result.Properties['objectsid'][0], 0).Value
+        if ($sid.EndsWith('-500') -or ($result.Properties['iscriticalsystemobject'].Count -gt 0 -and [bool]$result.Properties['iscriticalsystemobject'][0])) {
+            [Console]::Out.WriteLine('{"ok":false,"error":"protected"}')
+            exit 0
+        }
+        $userDn = [string]$result.Properties['distinguishedname'][0]
+        $found = [System.DirectoryServices.DirectoryEntry]::new("LDAP://$userDn", $authUser, [string]$data.password, $authType)
+        if ([string]$data.operation -in @('disable','delete')) {
+            $found.RefreshCache(@('tokenGroups'))
+            $domainSid = $sid.Substring(0, $sid.LastIndexOf('-'))
+            $protectedSids = @('S-1-5-32-544', "$domainSid-512", "$domainSid-518", "$domainSid-519")
+            foreach ($groupSidBytes in $found.Properties['tokenGroups']) {
+                $groupSid = [Security.Principal.SecurityIdentifier]::new([byte[]]$groupSidBytes, 0).Value
+                if ($protectedSids -contains $groupSid) {
+                    [Console]::Out.WriteLine('{"ok":false,"error":"protected"}')
+                    exit 0
+                }
+            }
+        }
+    }
+    switch ([string]$data.operation) {
+        'create' {
+            $container = [System.DirectoryServices.DirectoryEntry]::new("LDAP://CN=Users,$baseDn", $authUser, [string]$data.password, $authType)
+            $exists = [System.DirectoryServices.DirectorySearcher]::new($base)
+            $exists.Filter = "(&(objectCategory=person)(objectClass=user)(sAMAccountName=$sam))"
+            $exists.SizeLimit = 1
+            if ($exists.FindOne()) {
+                [Console]::Out.WriteLine('{"ok":false,"error":"exists"}')
+                $exists.Dispose()
+                exit 0
+            }
+            $exists.Dispose()
+            $newUser = $container.Children.Add("CN=$sam", 'user')
+            $newUser.Properties['sAMAccountName'].Value = $sam
+            $newUser.Properties['displayName'].Value = [string]$data.display_name
+            $newUser.Properties['userPrincipalName'].Value = "$sam@$dnsDomain"
+            $newUser.Properties['userAccountControl'].Value = 514
+            $newUser.CommitChanges()
+            try {
+                $newUser.Invoke('SetPassword', [string]$data.initial_password)
+                $newUser.Properties['pwdLastSet'].Value = 0
+                $newUser.Properties['userAccountControl'].Value = 512
+                $newUser.CommitChanges()
+            } catch {
+                try { $container.Children.Remove($newUser); $container.CommitChanges() } catch {}
+                throw
+            }
+            $sid = [Security.Principal.SecurityIdentifier]::new([byte[]]$newUser.Properties['objectSid'].Value, 0).Value
+            [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
+            $newUser.Dispose()
+            $container.Dispose()
+        }
+        'update' {
+            $found.Properties['displayName'].Value = [string]$data.display_name
+            $flags = [int]$found.Properties['userAccountControl'].Value
+            if ([bool]$data.enabled) { $flags = $flags -band (-bnot 2) } else { $flags = $flags -bor 2 }
+            $found.Properties['userAccountControl'].Value = $flags
+            $found.CommitChanges()
+            [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
+            $found.Dispose()
+        }
+        'disable' {
+            $flags = [int]$found.Properties['userAccountControl'].Value
+            $found.Properties['userAccountControl'].Value = $flags -bor 2
+            $found.CommitChanges()
+            [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
+            $found.Dispose()
+        }
+        'delete' {
+            $parent = $found.Parent
+            $parent.Children.Remove($found)
+            $parent.CommitChanges()
+            [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $true; sid = $sid }))
+            $parent.Dispose()
+            $found.Dispose()
+        }
+    }
+    $base.Dispose()
+    $root.Dispose()
+} catch {
+    $errorText = [string]$_.Exception.Message
+    $errorCode = if ($errorText -match '(?i)access is denied|insufficient access') { 'permission' }
+                 elseif ($errorText -match '(?i)already exists|object exists') { 'exists' }
+                 else { 'failed' }
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress -InputObject @{ ok = $false; error = $errorCode }))
+    exit 0
+}
+"""
+        payload = {
+            "operation": operation, "authority": self.config.authority, "administrator": administrator,
+            "password": password, "username": username, "display_name": display_name,
+            "initial_password": initial_password, "enabled": enabled,
+        }
+        encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded_script],
+                input=json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=self.timeout_seconds + 8, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DirectoryUnavailable("Windows could not perform the AD account change") from exc
+        if result.returncode:
+            raise DirectoryUnavailable("Windows could not perform the AD account change")
+        try:
+            response = json.loads(result.stdout.strip())
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise DirectoryUnavailable("Windows returned an invalid AD account change response") from exc
+        if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
+            raise DirectoryUnavailable("Windows returned an invalid AD account change response")
+        if not response["ok"]:
+            messages = {
+                "exists": "That username already exists.",
+                "not_found": "The AD account could not be found.",
+                "protected": "Built-in, protected, and privileged AD accounts cannot be changed or deleted here.",
+                "permission": "AD denied this change. The administrator account needs permission in the Users container.",
+                "failed": "AD rejected the change. Check the account settings and directory logs.",
+            }
+            raise ValueError(messages.get(response.get("error"), "AD rejected the account change."))
+        sid = response.get("sid")
+        if not isinstance(sid, str) or not _SID.fullmatch(sid):
+            raise DirectoryUnavailable("Windows returned an invalid AD account change response")
+        try:
+            sid_to_bytes(sid)
+        except ValueError as exc:
+            raise DirectoryUnavailable("Windows returned an invalid AD account SID") from exc
+        return sid
+
+    def create_user(self, *, administrator: str, password: str, username: str,
+                    display_name: str, initial_password: str) -> str:
+        return self._manage_user("create", administrator=administrator, password=password,
+                                username=username, display_name=display_name,
+                                initial_password=initial_password)
+
+    def update_user(self, *, administrator: str, password: str, username: str,
+                    display_name: str, enabled: bool) -> str:
+        return self._manage_user("update", administrator=administrator, password=password,
+                                username=username, display_name=display_name, enabled=enabled)
+
+    def disable_user(self, *, administrator: str, password: str, username: str) -> str:
+        return self._manage_user("disable", administrator=administrator, password=password,
+                                username=username)
+
+    def delete_user(self, *, administrator: str, password: str, username: str) -> str:
+        return self._manage_user("delete", administrator=administrator, password=password,
+                                username=username)

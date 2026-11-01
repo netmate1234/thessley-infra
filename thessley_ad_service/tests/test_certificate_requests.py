@@ -6,7 +6,7 @@ import time
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 
 from infra.thessley_ad_service.certificate_requests import (
@@ -31,6 +31,17 @@ def _phone_csr() -> tuple[bytes, str]:
     return der, hashlib.sha256(der).hexdigest()
 
 
+def _phone_rsa_csr() -> tuple[bytes, str]:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    request = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Thessley AD Logon Key")]))
+        .sign(key, hashes.SHA256())
+    )
+    der = request.public_bytes(serialization.Encoding.DER)
+    return der, hashlib.sha256(der).hexdigest()
+
+
 def test_phone_tee_csr_accepts_small_p256_der_and_reports_spki_digest():
     der, digest = _phone_csr()
 
@@ -38,6 +49,16 @@ def test_phone_tee_csr_accepts_small_p256_der_and_reports_spki_digest():
 
     assert len(der) < 256
     assert metadata["public_key_algorithm"] == "ec-p256"
+    assert len(metadata["public_key_spki_sha256"]) == 64
+
+
+def test_phone_tee_rsa_2048_csr_is_accepted():
+    der, digest = _phone_rsa_csr()
+
+    metadata = validate_approved_csr(der, digest)
+
+    assert metadata["public_key_algorithm"] == "rsa-2048"
+    assert metadata["public_key_bits"] == 2048
     assert len(metadata["public_key_spki_sha256"]) == 64
 
 

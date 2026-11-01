@@ -509,6 +509,29 @@ class PhoneRegistry:
         finally:
             connection.close()
 
+    def list_for_principal_on_machine(self, principal_id: str, machine_id: str) -> list[dict]:
+        """Return active keys for one principal usable on this machine, including central AD keys."""
+        if (not isinstance(principal_id, str) or not _PRINCIPAL_ID.fullmatch(principal_id)
+                or not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id)):
+            return []
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """SELECT p.credential_id, p.principal_id, p.label, p.enrolled_at
+                   FROM phone_credentials AS p
+                   LEFT JOIN machines AS m ON m.machine_id = p.machine_id
+                   WHERE p.principal_id = ? AND p.revoked_at IS NULL
+                     AND ((p.machine_id = ? AND m.revoked_at IS NULL)
+                          OR p.machine_id = ?)
+                   ORDER BY p.enrolled_at, p.credential_id""",
+                (principal_id, machine_id, CENTRAL_AD_MACHINE_ID),
+            ).fetchall()
+            return [{"credential_id": str(credential), "principal_id": str(principal),
+                     "label": str(label), "enrolled_at": int(enrolled)}
+                    for credential, principal, label, enrolled in rows]
+        finally:
+            connection.close()
+
     def revoke_for_machine(self, credential_id: str, machine_id: str,
                            *, now: float | None = None) -> bool:
         """Revoke only a key belonging to the authenticated machine."""

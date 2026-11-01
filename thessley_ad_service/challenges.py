@@ -28,6 +28,12 @@ _CERTIFICATE_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 _CERTIFICATE_TEMPLATE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 CERTIFICATE_ISSUANCE_RETENTION_SECONDS = 24 * 60 * 60
 _CERTIFICATE_UPLOAD_RETENTION_SECONDS = 10 * 60
+_PIV_LOGIN_RESULT_RETENTION_SECONDS = 180
+_EXPIRED_LOGIN_CHALLENGE_SQL = (
+    "(certificate_request_der IS NULL AND ((piv_signing = 0 AND expires_at <= ?) OR "
+    "(piv_signing = 1 AND ((status IN ('pending','expired') AND expires_at <= ?) OR "
+    "(status IN ('approve','deny') AND response_at <= ?)))))"
+)
 
 
 class ChallengeStore:
@@ -97,7 +103,8 @@ class ChallengeStore:
                        certificate_issued_sha256 TEXT,
                        certificate_issued_at REAL,
                        response_at REAL,
-                       delivered_at REAL
+                       delivered_at REAL,
+                       piv_signing INTEGER NOT NULL DEFAULT 0
                    ) WITHOUT ROWID"""
             )
             columns = {row[1] for row in connection.execute("PRAGMA table_info(login_challenges)")}
@@ -119,6 +126,8 @@ class ChallengeStore:
                 connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_issued_sha256 TEXT")
             if "certificate_issued_at" not in columns:
                 connection.execute("ALTER TABLE login_challenges ADD COLUMN certificate_issued_at REAL")
+            if "piv_signing" not in columns:
+                connection.execute("ALTER TABLE login_challenges ADD COLUMN piv_signing INTEGER NOT NULL DEFAULT 0")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS login_challenges_expiry ON login_challenges(expires_at)"
             )
@@ -136,12 +145,12 @@ class ChallengeStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
-                "DELETE FROM login_challenges WHERE "
-                "(certificate_request_der IS NULL AND expires_at <= ?) OR "
+                "DELETE FROM login_challenges WHERE " + _EXPIRED_LOGIN_CHALLENGE_SQL + " OR "
                 "(certificate_request_der IS NOT NULL AND certificate_request_received_at IS NOT NULL AND ("
                 "(certificate_issuance_claimed_at IS NULL AND certificate_request_received_at <= ?) OR "
                 "(certificate_issuance_claimed_at IS NOT NULL AND certificate_issuance_claimed_at <= ?)))",
-                (current, current - _CERTIFICATE_UPLOAD_RETENTION_SECONDS,
+                (current, current, current - _PIV_LOGIN_RESULT_RETENTION_SECONDS,
+                 current - _CERTIFICATE_UPLOAD_RETENTION_SECONDS,
                  current - CERTIFICATE_ISSUANCE_RETENTION_SECONDS),
             )
             connection.execute("COMMIT")
@@ -158,15 +167,20 @@ class ChallengeStore:
     def create(self, *, machine_id: str, sid: str, username: str, authority: str,
                context: str, lifetime_seconds: int = 90, now: float | None = None,
                certificate_request_sha256: str | None = None,
-               certificate_template: str | None = None) -> dict:
+               certificate_template: str | None = None,
+               piv_signing: bool = False) -> dict:
         if not isinstance(machine_id, str) or not _MACHINE_ID.fullmatch(machine_id):
             raise ValueError("invalid machine id")
+        if not isinstance(piv_signing, bool) or (piv_signing and context != "interactive"):
+            raise ValueError("PIV phone signing is supported only for interactive logon")
         if isinstance(lifetime_seconds, bool) or not isinstance(lifetime_seconds, int) or not 30 <= lifetime_seconds <= 180:
             raise ValueError("challenge lifetime must be between 30 and 180 seconds")
         current = time.time() if now is None else now
         principal_id = principal_id_from_sid(sid)
         if (certificate_request_sha256 is None) != (certificate_template is None):
             raise ValueError("certificate digest and template must be supplied together")
+        if piv_signing and certificate_request_sha256 is not None:
+            raise ValueError("PIV signing cannot be combined with the workstation certificate pilot")
         if certificate_request_sha256 is not None:
             if (not isinstance(certificate_request_sha256, str)
                     or not isinstance(certificate_template, str)
@@ -196,24 +210,24 @@ class ChallengeStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
-                "DELETE FROM login_challenges WHERE "
-                "(certificate_request_der IS NULL AND expires_at <= ?) OR "
+                "DELETE FROM login_challenges WHERE " + _EXPIRED_LOGIN_CHALLENGE_SQL + " OR "
                 "(certificate_request_der IS NOT NULL AND certificate_request_received_at IS NOT NULL AND ("
                 "(certificate_issuance_claimed_at IS NULL AND certificate_request_received_at <= ?) OR "
                 "(certificate_issuance_claimed_at IS NOT NULL AND certificate_issuance_claimed_at <= ?)))",
-                (current, current - _CERTIFICATE_UPLOAD_RETENTION_SECONDS,
+                (current, current, current - _PIV_LOGIN_RESULT_RETENTION_SECONDS,
+                 current - _CERTIFICATE_UPLOAD_RETENTION_SECONDS,
                  current - CERTIFICATE_ISSUANCE_RETENTION_SECONDS),
             )
             connection.execute(
                 """INSERT INTO login_challenges
                    (request_id, machine_id, principal_id, principal_sid, principal_type, authority, username,
                     context, nonce, created_at, expires_at, status,
-                    certificate_request_sha256, certificate_template)
-                   VALUES (?, ?, ?, ?, 'domain', ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+                    certificate_request_sha256, certificate_template, piv_signing)
+                   VALUES (?, ?, ?, ?, 'domain', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
                 (request_id, machine_id, principal_id,
                  sid if certificate_request_sha256 is not None else None,
                  authority, username, context, nonce, current, expires,
-                 certificate_request_sha256, certificate_template),
+                 certificate_request_sha256, certificate_template, int(piv_signing)),
             )
             connection.execute("COMMIT")
             request = {
@@ -232,6 +246,7 @@ class ChallengeStore:
                     "certificate_request_sha256": certificate_request_sha256,
                     "certificate_template": certificate_template,
                 })
+            request["piv_signing"] = piv_signing
             return request
         except sqlite3.Error as exc:
             try:

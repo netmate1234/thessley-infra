@@ -108,22 +108,26 @@ class AdminWeb:
         self._sessions: dict[str, dict] = {}
         self._preauth: dict[str, float] = {}
         self._login_attempts: dict[str, list[float]] = {}
-        self._enrollment_qrs: dict[str, tuple[str, float]] = {}
-        self._ad_logon_key_qrs: dict[str, tuple[str, float]] = {}
+        self._enrollment_qrs: dict[str, tuple[str, str, float]] = {}
+        self._ad_logon_key_qrs: dict[str, tuple[str, str, float]] = {}
         self._qr_logins: dict[str, dict] = {}
         self._lock = threading.RLock()
 
     @staticmethod
     def _response(status: int, body: str, content_type: str = "text/html; charset=utf-8",
-                  extra_headers: tuple[tuple[str, str], ...] = ()) -> tuple[int, list[tuple[str, str]], bytes]:
+                  extra_headers: tuple[tuple[str, str], ...] = (),
+                  script_nonce: str | None = None) -> tuple[int, list[tuple[str, str]], bytes]:
         data = body.encode("utf-8")
+        csp = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+        if isinstance(script_nonce, str) and re.fullmatch(r"[A-Za-z0-9_-]{16,64}", script_nonce):
+            csp += f"; script-src 'nonce-{script_nonce}'"
         headers = [
             ("Content-Type", content_type),
             ("Cache-Control", "no-store"),
             ("X-Content-Type-Options", "nosniff"),
             ("Referrer-Policy", "no-referrer"),
             ("Strict-Transport-Security", "max-age=31536000"),
-            ("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"),
+            ("Content-Security-Policy", csp),
             ("Content-Length", str(len(data))),
             ("Connection", "close"),
         ]
@@ -131,24 +135,57 @@ class AdminWeb:
         return status, headers, data
 
     @staticmethod
+    def _icon(name: str, *, decorative: bool = True) -> str:
+        paths = {
+            "shield": '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6l8-3Z"/><path d="m9 12 2 2 4-4"/>',
+            "users": '<path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-3-3.9M16 3.2a4 4 0 0 1 0 7.6"/>',
+            "monitor": '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
+            "admin": '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6l8-3Z"/><path d="M12 8v4m0 4h.01"/>',
+            "phone": '<rect x="6" y="2.5" width="12" height="19" rx="2.2"/><path d="M10 18.5h4"/>',
+            "key": '<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8 2 2-2 2 2 2-3 3-2-2-3 3"/>',
+            "lock": '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/>',
+            "plus": '<path d="M12 5v14M5 12h14"/>',
+            "logout": '<path d="M10 17l5-5-5-5m5 5H3"/><path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6"/>',
+            "settings": '<circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.7 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.7-1l-1.7.7-1.4-2.4L7.3 15a8 8 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.7-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.7 1l1.7-.7 1.4 2.4-1.4 1.1a8 8 0 0 1-.1 2Z"/>',
+            "check": '<path d="m5 12 4 4L19 6"/>',
+            "warning": '<path d="m10.3 3.9-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3.1l-8-14a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4m0 4h.01"/>',
+            "chevron": '<path d="m9 18 6-6-6-6"/>',
+        }
+        if name not in paths:
+            return ""
+        aria = ' aria-hidden="true" focusable="false"' if decorative else ' role="img"'
+        return f'<svg class="icon icon-{name}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"{aria}>{paths[name]}</svg>'
+
+    @staticmethod
     def _page(title: str, content: str) -> str:
+        back_link = ""
+        if title == "Approve admin sign-in":
+            back_link = f'<nav class="back-link"><a class="button secondary small" href="/admin/">{AdminWeb._icon("chevron")} Back to sign-in</a></nav>'
+        elif title not in ("Administrator sign-in", "AD accounts") and 'href="/admin/' not in content:
+            back_link = f'<nav class="back-link"><a class="button secondary small" href="/admin/">{AdminWeb._icon("chevron")} Back to accounts</a></nav>'
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>""" + html.escape(title) + """ · Thessley AD</title>
 <style>
-:root{color-scheme:dark;--ink:#edf3f8;--muted:#b2bfcc;--line:#344555;--blue:#77b7ff;--bg:#0c131a;--surface:#151f29;--field:#0e1720}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:1100px;margin:28px auto;padding:0 18px}.brand{font-weight:750;color:var(--blue);font-size:1.25rem}
-h1{font-size:1.65rem;margin:.4rem 0 1.1rem}h2{font-size:1.2rem;margin:0 0 .7rem}.muted{color:var(--muted)}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0;box-shadow:0 8px 24px #0004}
-.user{display:grid;grid-template-columns:minmax(220px,1fr) minmax(260px,1.2fr) auto;gap:12px;align-items:center}
-.phone{border-top:1px solid var(--line);margin-top:12px;padding-top:10px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.rights{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.badge{display:inline-block;border-radius:999px;padding:2px 9px;background:#283847;color:#e1ebf4;font-size:.82rem;font-weight:650}.badge.yes{background:#173a27;color:#a8e6b8}.badge.no{background:#2a3037;color:#c1cbd4}
-label{display:block;font-weight:600;margin:8px 0 4px}input{font:inherit;padding:9px 10px;border:1px solid #526475;border-radius:7px;max-width:100%;background:var(--field);color:var(--ink)}input:focus-visible,button:focus-visible,.button:focus-visible{outline:3px solid #9acbff;outline-offset:2px}
-button,.button{font:inherit;font-weight:700;background:var(--blue);color:#091522;border:0;border-radius:7px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-block}
-button.danger{background:#d46a73;color:#210b0d}.small{font-size:.9rem}.qr{width:min(310px,82vw);height:auto;background:white;border:1px solid var(--line);border-radius:8px;padding:8px}
-code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;border-color:#7b343e}.success{background:#183324;border-color:#35714b}
-@media(max-width:720px){main{margin:14px auto}.user{grid-template-columns:1fr}.card{padding:14px}}
-</style></head><body><main><div class="brand">Thessley · Active Directory</div>""" + content + "</main></body></html>"
+:root{color-scheme:dark;--ink:#edf3f8;--muted:#aab8c6;--line:#2d4051;--blue:#80bdff;--bg:#0b1219;--surface:#121d27;--raised:#192633;--field:#0d1720;--good:#8be0ad;--warn:#f2c66d;--bad:#ff8991}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -30%,#172b3c 0,transparent 55%),var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;overflow-wrap:anywhere}
+main{width:min(100% - 32px,960px);margin:24px auto 48px}.brand{display:flex;align-items:center;gap:9px;font-weight:750;color:var(--blue);font-size:1.06rem;letter-spacing:.01em;margin-bottom:22px}.brand-mark{width:34px;height:34px;display:grid;place-items:center;border:1px solid #33506a;border-radius:11px;background:#13283a}.icon{width:18px;height:18px;flex:none}.brand-mark .icon{width:21px;height:21px}
+h1{font-size:clamp(1.4rem,4vw,1.8rem);line-height:1.2;margin:0 0 1rem;letter-spacing:-.02em}h1 .icon{vertical-align:-.12em;margin-right:5px}h2{font-size:1.12rem;line-height:1.3;margin:0}.muted{color:var(--muted)}p{margin:.65rem 0 1rem}
+.card{min-width:0;overflow-wrap:anywhere;background:linear-gradient(145deg,#15222d,var(--surface));border:1px solid var(--line);border-radius:16px;padding:20px;margin:14px 0;box-shadow:0 10px 28px #0003}
+.page-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 14px}.page-head>div,.page-actions,.row{min-width:0}.page-head h1{margin:0}.page-actions,.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.page-actions form,.account-actions form,.inline-form{margin:0}
+.page-actions .button,.page-actions button{padding-inline:11px}
+.session-actions{display:flex;justify-content:flex-end;margin:-4px 0 14px}.session-actions form{margin:0}
+.account-card{padding:0;overflow:hidden}.account-top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:18px 20px}.account-name{display:flex;align-items:flex-start;gap:12px;min-width:0}.account-avatar{width:42px;height:42px;display:grid;place-items:center;flex:none;border-radius:14px;background:#20384a;color:#acd5fa}.account-heading{min-width:0}.account-heading h2{overflow-wrap:anywhere}.account-id{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}.rights{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.trust-summary{display:grid;gap:7px;min-width:150px}.trust-label{display:block;color:var(--muted);font-size:.7rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}.trust-icons{display:flex;gap:5px;flex-wrap:wrap}.trust-icons .badge{font-size:.75rem;padding:4px 7px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;background:#263744;color:#dce7f0;font-size:.8rem;line-height:1.25;font-weight:700}.badge .icon{width:15px;height:15px}.badge.yes{background:#153a2a;color:var(--good)}.badge.no{background:#3d2226;color:#ffadb2}.badge.medium{background:#44391f;color:var(--warn)}.badge.neutral{background:#293541;color:#c6d1db}
+.account-actions{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 16px}.account-details{border-top:1px solid var(--line);padding:0 20px}.account-details details{border-bottom:1px solid #263745}.account-details details:last-child{border-bottom:0}.account-details summary{display:flex;align-items:center;gap:9px;min-height:50px;cursor:pointer;list-style:none;font-weight:700}.account-details summary::-webkit-details-marker{display:none}.account-details summary::after{content:"";width:8px;height:8px;margin-left:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .16s}.account-details details[open] summary::after{transform:rotate(225deg)}.summary-count{margin-left:auto;color:var(--muted);font-size:.88rem;font-weight:600}.detail-body{padding:0 0 14px 28px}.key-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:12px;margin:8px 0;border:1px solid #2a3b49;border-radius:12px;background:#0f1922}.key-main{min-width:0}.key-title{font-weight:700;overflow-wrap:anywhere}.key-meta{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}.key-actions{margin-top:8px}.empty{font-size:.92rem;color:var(--muted);padding:3px 0}.help details{border-radius:12px}.help summary{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:700}.help p{color:var(--muted);margin-bottom:0}
+.search-tools{margin:14px 0}.search-row{display:flex;align-items:center;gap:8px}.search-row input{flex:1;min-width:0}.search-row button{flex:none}.empty-results[hidden]{display:none}.empty-results{color:var(--muted)}
+.form-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}.form-actions form{margin:0}.form-actions button,.form-actions .button{margin:0}
+label{display:block;font-weight:650;margin:12px 0 5px}input,select{font:inherit;padding:10px 12px;border:1px solid #485d70;border-radius:9px;width:100%;max-width:100%;background:var(--field);color:var(--ink)}input:focus-visible,select:focus-visible,button:focus-visible,.button:focus-visible,summary:focus-visible{outline:3px solid #9acbff;outline-offset:2px}
+button,.button{font:inherit;font-weight:700;background:var(--blue);color:#071522;border:0;border-radius:10px;min-height:46px;padding:11px 17px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;line-height:1.25}
+button:hover,.button:hover{filter:brightness(1.08)}button.danger,.button.danger{background:#71343b;color:#ffe7e9;border:1px solid #9e4d55}.button.secondary,button.secondary{background:#213545;border:1px solid #3b566c;color:#d9ebfa}.small{font-size:.9rem;min-height:42px;padding:9px 13px}form>.danger+.button{margin-left:8px}.qr-wrap{display:flex;justify-content:center;align-items:center;width:100%;max-width:100%;overflow:hidden;margin:14px 0}.qr{display:block;width:100%;max-width:min(320px,calc(100vw - 64px));height:auto;aspect-ratio:1;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;margin:0}.back-link{margin:0 0 12px}.back-link .icon{transform:rotate(180deg)}
+code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;border-color:#7b343e}.success{background:#183324;border-color:#35714b}.status-line{display:flex;align-items:center;gap:8px}.icon-good{color:var(--good)}.icon-warn{color:var(--warn)}.icon-bad{color:var(--bad)}
+@media(max-width:680px){main{width:min(100% - 24px,960px);margin:14px auto 32px}.brand{margin-bottom:17px}.card{padding:16px;margin:11px 0;border-radius:14px}.page-head{align-items:flex-start}.page-head h1{max-width:65%}.session-actions button{width:100%;min-height:46px}.account-top{padding:16px;display:block}.account-name{gap:10px}.account-avatar{width:38px;height:38px;border-radius:12px}.trust-summary{display:flex;gap:15px;margin:12px 0 0 48px}.trust-summary>div{min-width:0}.rights{gap:6px}.badge{font-size:.76rem;padding:5px 8px}.account-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:0 16px 14px}.account-actions form,.account-actions>.button{min-width:0;width:100%;margin:0}.account-actions button,.account-actions>.button{width:100%;min-height:48px;white-space:normal;text-align:center;padding:9px 8px}.account-details{padding:0 16px}.detail-body{padding-left:0}.key-item{align-items:flex-start;display:block}.key-actions form,.key-actions button{width:100%}.page-actions{gap:7px}.page-actions button,.page-actions .button{min-height:46px}.row{gap:8px}.admin-user-form input,.admin-user-form select{font-size:16px}.admin-user-form .form-actions>*{flex:1 1 145px;min-height:48px}}
+@media(max-width:390px){main{width:calc(100% - 20px)}.page-head{display:block}.page-head h1{max-width:none;margin-bottom:10px}.page-actions>*{flex:1}.page-actions button,.page-actions .button{width:100%;font-size:.9rem}.account-details summary{font-size:.95rem}.form-actions>*{flex:1 1 100%}.form-actions button,.form-actions .button{width:100%}}
+@media(max-width:340px){.account-actions{grid-template-columns:minmax(0,1fr)}}
+</style></head><body><main><div class="brand"><span class="brand-mark">""" + AdminWeb._icon("shield") + """</span><span>Thessley <span class="muted">· Active Directory</span></span></div>""" + back_link + content + "</main></body></html>"
 
     @staticmethod
     def _cookie(headers, name: str) -> str:
@@ -216,7 +253,14 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             token, session = self._session(headers)
             if not session:
                 return self._login_page(headers)
-            return self._directory_page(session)
+            params = parse_qs(query, keep_blank_values=True)
+            notice = params.get("notice", [""])[0] if len(params.get("notice", [])) == 1 else ""
+            notice_text = {
+                "user-created": "AD user created. The account must change its temporary password at first sign-in.",
+                "user-updated": "AD user updated.",
+                "user-deleted": "AD user deleted and its Thessley keys revoked.",
+            }.get(notice, "")
+            return self._directory_page(session, notice=notice_text)
         if path == "/admin/policy":
             token, session = self._session(headers)
             if not session:
@@ -231,20 +275,33 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         token, session = self._session(headers)
         if not session:
             return self._login_page(headers)
+        if path == "/admin/users/new":
+            return self._user_form(session)
+        if path in ("/admin/user/edit", "/admin/user/delete"):
+            params = parse_qs(query, keep_blank_values=True)
+            sid_values = params.get("sid", [])
+            if len(sid_values) != 1 or not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid_values[0]):
+                return self._response(400, self._page("AD user", '<section class="card error">Invalid account reference.</section>'))
+            user = self._find_user(sid_values[0])
+            if not user:
+                return self._response(404, self._page("AD user", '<section class="card error">Account not found in Active Directory.</section>'))
+            return (self._user_form(session, user=user) if path == "/admin/user/edit"
+                    else self._user_delete_page(session, user))
         if path == "/admin/enrollment":
             params = parse_qs(query, keep_blank_values=True)
             request_ids = params.get("id", [])
             if len(request_ids) != 1 or not _REQUEST_ID.fullmatch(request_ids[0]):
                 return self._response(400, self._page("Enrollment", "<section class=card>Invalid enrollment ID.</section>"))
-            qr_data = self._enrollment_qrs.get(request_ids[0], ("", 0))[0]
-            return self._enrollment_page(request_ids[0], session, qr_data=qr_data)
+            qr_data, app_link, _expires = self._enrollment_qrs.get(request_ids[0], ("", "", 0))
+            return self._enrollment_page(request_ids[0], session, qr_data=qr_data, app_link=app_link)
         if path == "/admin/ad-logon-key-enrollment":
             params = parse_qs(query, keep_blank_values=True)
             request_ids = params.get("id", [])
             if len(request_ids) != 1 or not _REQUEST_ID.fullmatch(request_ids[0]):
                 return self._response(400, self._page("AD key enrollment", "<section class=card>Invalid enrollment ID.</section>"))
+            qr_data, app_link, _expires = self._ad_logon_key_qrs.get(request_ids[0], ("", "", 0))
             return self._ad_logon_key_enrollment_page(
-                request_ids[0], session, self._ad_logon_key_qrs.get(request_ids[0], ("", 0))[0]
+                request_ids[0], session, qr_data=qr_data, app_link=app_link
             )
         if path == "/admin/logout":
             return self._response(405, self._page("Sign out", "<section class=card>Use the sign-out button.</section>"))
@@ -260,16 +317,12 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 self._preauth[nonce] = now + 300
         alert = f'<section class="card error">{html.escape(message)}</section>' if message else ""
         body = alert + f"""<h1>Administrator sign-in</h1><section class="card">
-<p class="muted">Sign in with a {html.escape(self.authority)} account that is an administrator on this domain controller.</p>
-<form method="post" action="/admin/login"><input type="hidden" name="preauth" value="{html.escape(nonce)}">
-<label for="user">Account name (without the domain prefix)</label><input id="user" name="user" autocomplete="username" required maxlength="20">
-<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
-<p><button type="submit">Sign in with password</button></p></form></section>
-<section class="card"><h2>Sign in with Thessley Passkey</h2>
-<p class="muted">Use a phone already enrolled centrally for this AD account. The account must be an administrator on this domain controller.</p>
+<h2>QR approval required</h2>
+<p class="muted">Sign in with Thessley Passkey. Only a phone already enrolled centrally for this {html.escape(self.authority)} administrator account can open this page.</p>
 <form method="post" action="/admin/qr-login"><input type="hidden" name="preauth" value="{html.escape(nonce)}">
 <label for="qr-user">Account name (without the domain prefix)</label><input id="qr-user" name="user" autocomplete="username" required maxlength="20">
-<p><button type="submit">Continue with phone</button></p></form></section>"""
+<p><button type="submit">Continue to QR approval</button></p></form>
+<p class="muted small">Password sign-in is disabled. The phone must approve each new web session.</p></section>"""
         return self._response(200, self._page("Administrator sign-in", body), extra_headers=(self._cookie_header(_PREAUTH_COOKIE, nonce, max_age=300),))
 
     def _consume_login_preauth(self, form: dict[str, str], headers, client_ip: str) -> bool:
@@ -347,7 +400,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             qr_data = _qr_data_uri(link)
         except Exception:
             _LOG.exception("admin_qr_login_start_failed source=%s", client_ip)
-            return self._login_page(headers, "Could not start phone sign-in. Try again or use the password option.")
+            return self._login_page(headers, "Could not start phone sign-in. Check the account and try again.")
         with self._lock:
             self._qr_logins[challenge["request_id"]] = {
                 "sid": principal.sid, "principal_id": principal_id, "username": principal.username,
@@ -383,34 +436,105 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             result = {"status": "denied"}
         status = result.get("status") if result else "pending"
         if status == "pending":
+            script_nonce = secrets.token_urlsafe(18)
             refresh = f'<meta http-equiv="refresh" content="2;url=/admin/qr-login?id={html.escape(request_id)}">'
             link = html.escape(pending["link"], quote=True)
             qr = html.escape(pending["qr"], quote=True)
             account = html.escape(self.authority + chr(92) + pending["username"])
             content = f"""{refresh}<h1>Approve admin sign-in</h1><section class="card">
 <p>Scan with Thessley Passkey for <strong>{account}</strong>. The phone must already be enrolled centrally for this account.</p>
-<img class="qr" alt="Thessley AD administrator sign-in QR code" src="{qr}">
-<p><a class="button" href="{link}">Open Thessley Passkey</a></p><p class="status">Waiting for phone approval…</p>
-<p class="muted small">This request expires shortly. Password sign-in remains available.</p></section>"""
-            return self._response(200, self._page("Approve admin sign-in", content))
+<div class="qr-wrap"><img class="qr" alt="Thessley AD administrator sign-in QR code" src="{qr}"></div>
+<p><a class="button" href="{link}">{self._icon('phone')} Open Thessley Passkey</a></p>
+<p class="status status-line">{self._icon('lock')} Waiting for approval</p>
+<p class="muted small">After approving, return to this tab. It checks automatically.</p>
+<p><a class="button secondary small" href="/admin/qr-login?id={html.escape(request_id)}">Refresh status</a></p>
+<p class="muted small">This request expires shortly. Password sign-in is disabled.</p></section>"""
+            resume_script = f'''<script nonce="{script_nonce}">
+(()=>{{let resumed=false;const refresh=()=>{{if(!resumed){{resumed=true;window.location.replace(window.location.href)}}}};
+document.addEventListener("visibilitychange",()=>{{if(!document.hidden)refresh()}});
+window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})();
+</script>'''
+            return self._response(200, self._page("Approve admin sign-in", content + resume_script),
+                                  script_nonce=script_nonce)
         with self._lock:
             self._qr_logins.pop(request_id, None)
         _LOG.warning("admin_qr_login_not_approved sid=%s source=%s status=%s",
                      pending["sid"], pending["client_ip"], status)
-        return self._login_page(headers, "Phone sign-in expired or was denied. You can try again or use your password.")
+        return self._login_page(headers, "Phone sign-in expired or was denied. Start a new QR request.")
+
+    def _reauthenticate_admin(self, session: dict, form: dict[str, str]) -> bool:
+        password = form.pop("admin_password", "")
+        try:
+            sid = WindowsAdminLogin.authenticate(session["user"], password, self.authority)
+            if sid and secrets.compare_digest(sid, session["sid"]):
+                form["_admin_password"] = password
+                return True
+            return False
+        finally:
+            password = ""
+
+    def _find_user(self, sid: str) -> dict | None:
+        if not isinstance(sid, str) or not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid):
+            return None
+        try:
+            snapshot = self.directory.list_users(self.allowed_group_sids, limit=1000)
+            return next((user for user in snapshot.get("users", []) if user.get("sid") == sid), None)
+        except Exception:
+            _LOG.exception("admin_ad_user_lookup_failed target_sid=%s", sid)
+            return None
+
+    def _user_form(self, session: dict, *, user: dict | None = None, message: str = ""):
+        csrf = html.escape(session["csrf"])
+        alert = f'<section class="card error">{html.escape(message)}</section>' if message else ""
+        if user is None:
+            body = f'''<h1>{self._icon("plus")} Add AD user</h1>{alert}
+<section class="card"><form class="admin-user-form" method="post" action="/admin/users/create">
+<input type="hidden" name="csrf" value="{csrf}">
+<label for="new-username">Username</label><input id="new-username" name="username" required maxlength="20" pattern="[A-Za-z0-9_.-]+" autocomplete="off" autocapitalize="none">
+<p class="muted small">The sign-in name is permanent after creation.</p>
+<label for="new-display-name">Display name</label><input id="new-display-name" name="display_name" required maxlength="256" autocomplete="name">
+<label for="new-password">Temporary password</label><input id="new-password" name="initial_password" type="password" required minlength="8" maxlength="256" autocomplete="new-password">
+<p class="muted small">The new user must change this password at first sign-in.</p>
+<label for="admin-confirm-password">Your administrator password</label><input id="admin-confirm-password" name="admin_password" type="password" required autocomplete="current-password">
+<p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
+<div class="form-actions"><button>{self._icon("plus")} Create user</button><a class="button secondary" href="/admin/">Cancel</a></div>
+</form></section>'''
+            return self._response(200, self._page("Add AD user", body))
+        sid = str(user["sid"])
+        name = html.escape(str(user.get("name") or user.get("sam", "")), quote=True)
+        username = html.escape(str(user.get("sam", "")), quote=True)
+        enabled = bool(user.get("enabled"))
+        body = f'''<h1>{self._icon("users")} Edit AD user</h1>{alert}
+<section class="card"><p><strong>{name}</strong><br><span class="muted">{html.escape(self.authority + chr(92))}{username}</span></p>
+<form class="admin-user-form" method="post" action="/admin/users/update">
+<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="sid" value="{html.escape(sid)}">
+<label for="edit-display-name">Display name</label><input id="edit-display-name" name="display_name" value="{name}" required maxlength="256" autocomplete="name">
+<label for="edit-state">Account status</label><select id="edit-state" name="enabled"><option value="yes"{' selected' if enabled else ''}>Enabled</option><option value="no"{' selected' if not enabled else ''}>Disabled</option></select>
+<label for="edit-admin-password">Your administrator password</label><input id="edit-admin-password" name="admin_password" type="password" required autocomplete="current-password">
+<p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
+<div class="form-actions"><button>{self._icon("check")} Save changes</button><a class="button secondary" href="/admin/">Cancel</a></div>
+</form></section>'''
+        return self._response(200, self._page("Edit AD user", body))
+
+    def _user_delete_page(self, session: dict, user: dict, message: str = ""):
+        sid = html.escape(str(user["sid"]))
+        username = html.escape(str(user.get("sam", "")))
+        alert = f'<section class="card error">{html.escape(message)}</section>' if message else ""
+        body = f'''<h1>{self._icon("warning")} Delete AD user</h1>{alert}
+<section class="card error"><p>Delete <strong>{username}</strong> permanently from Active Directory?</p>
+<p>This first disables the account, then revokes its enrolled Thessley phone and sign-in keys before deleting it. If deletion fails, the account remains disabled so access stays blocked.</p>
+<form class="admin-user-form" method="post" action="/admin/users/delete">
+<input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{sid}">
+<label for="delete-confirm-name">Type <strong>{username}</strong> to confirm</label><input id="delete-confirm-name" name="confirm_username" required autocomplete="off" autocapitalize="none">
+<label for="delete-admin-password">Your administrator password</label><input id="delete-admin-password" name="admin_password" type="password" required autocomplete="current-password">
+<div class="form-actions"><button class="danger">{self._icon("warning")} Delete permanently</button><a class="button secondary" href="/admin/">Cancel</a></div>
+</form></section>'''
+        return self._response(200, self._page("Delete AD user", body))
 
     def _post(self, path: str, form: dict[str, str], headers, client_ip: str):
         if path == "/admin/login":
-            if not self._consume_login_preauth(form, headers, client_ip):
-                return self._login_page(headers, "Sign-in failed. Refresh and try again.")
-            username = form.get("user", "")
-            password = form.pop("password", "")
-            sid = WindowsAdminLogin.authenticate(username, password, self.authority)
-            del password
-            if not sid:
-                _LOG.warning("admin_login_failed source=%s", client_ip)
-                return self._login_page(headers, "Sign-in failed. Check the account and password, then try again.")
-            return self._new_admin_session(sid, username, client_ip, "password")
+            _LOG.warning("admin_password_login_blocked source=%s", client_ip)
+            return self._login_page(headers, "Password-only web sign-in is disabled. Use the enrolled phone QR approval.")
 
         if path == "/admin/qr-login":
             return self._start_qr_admin_login(form, headers, client_ip)
@@ -418,6 +542,113 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         token, session = self._session(headers)
         if not session or not secrets.compare_digest(form.get("csrf", ""), session["csrf"]):
             return self._response(403, self._page("Session expired", '<section class="card error">Session expired. Sign in again.</section>'))
+        if path == "/admin/users/create":
+            if not self._reauthenticate_admin(session, form):
+                return self._user_form(session, message="Enter your current administrator password to confirm user creation.")
+            username = form.get("username", "").strip()
+            display_name = form.get("display_name", "").strip()
+            initial_password = form.pop("initial_password", "")
+            try:
+                if not callable(getattr(self.directory, "create_user", None)):
+                    raise ValueError("AD user creation is unavailable on this service.")
+                sid = self.directory.create_user(
+                    administrator=session["user"], password=form.pop("_admin_password", ""),
+                    username=username, display_name=display_name, initial_password=initial_password,
+                )
+            except ValueError as exc:
+                return self._user_form(session, message=str(exc))
+            except Exception:
+                _LOG.exception("admin_ad_user_create_failed actor=%s target=%s",
+                               session["sid"], username[:20])
+                return self._user_form(session, message="AD could not create the account. Check permissions and password policy.")
+            finally:
+                initial_password = ""
+            _LOG.warning("admin_ad_user_created actor=%s target_sid=%s username=%s",
+                         session["sid"], sid, username)
+            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-created"),))
+        if path == "/admin/users/update":
+            sid = form.get("sid", "")
+            user = self._find_user(sid)
+            if not user:
+                return self._response(404, self._page("AD user", '<section class="card error">Account not found. Refresh the account list.</section>'))
+            enabled = form.get("enabled") == "yes"
+            if (not enabled and secrets.compare_digest(sid, session["sid"])):
+                return self._user_form(session, user=user, message="You cannot disable the account used for this session.")
+            if (not enabled and user.get("dc_administrator")):
+                return self._user_form(session, user=user, message="Use a separate AD administration tool to disable a DC administrator.")
+            if not self._reauthenticate_admin(session, form):
+                return self._user_form(session, user=user, message="Enter your current administrator password to confirm this change.")
+            try:
+                if not callable(getattr(self.directory, "update_user", None)):
+                    raise ValueError("AD user editing is unavailable on this service.")
+                changed_sid = self.directory.update_user(
+                    administrator=session["user"], password=form.pop("_admin_password", ""),
+                    username=user["sam"], display_name=form.get("display_name", "").strip(),
+                    enabled=enabled,
+                )
+            except ValueError as exc:
+                return self._user_form(session, user=user, message=str(exc))
+            except Exception:
+                _LOG.exception("admin_ad_user_update_failed actor=%s target_sid=%s",
+                               session["sid"], sid)
+                return self._user_form(session, user=user, message="AD could not update the account. Check permissions and the supplied values.")
+            _LOG.warning("admin_ad_user_updated actor=%s target_sid=%s enabled=%s",
+                         session["sid"], changed_sid, enabled)
+            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-updated"),))
+        if path == "/admin/users/delete":
+            sid = form.get("sid", "")
+            user = self._find_user(sid)
+            if not user:
+                return self._response(404, self._page("AD user", '<section class="card error">Account not found. Refresh the account list.</section>'))
+            if secrets.compare_digest(sid, session["sid"]):
+                return self._user_delete_page(session, user, "You cannot delete the account used for this session.")
+            if user.get("dc_administrator") or sid.endswith("-500"):
+                return self._user_delete_page(session, user, "Privileged and built-in administrator accounts cannot be deleted here.")
+            confirmation = form.get("confirm_username", "").strip()
+            if not secrets.compare_digest(confirmation.casefold(), user["sam"].casefold()):
+                return self._user_delete_page(session, user, "Type the exact username to confirm deletion.")
+            if not self._reauthenticate_admin(session, form):
+                return self._user_delete_page(session, user, "Enter your current administrator password to confirm deletion.")
+            principal_id = principal_id_from_sid_safe(sid)
+            admin_password = form.pop("_admin_password", "")
+            try:
+                if not callable(getattr(self.directory, "disable_user", None)) or not callable(getattr(self.directory, "delete_user", None)):
+                    raise ValueError("AD user deletion is unavailable on this service.")
+                # Disable first. If key cleanup or deletion fails, the account
+                # remains safely disabled and the administrator can retry.
+                self.directory.disable_user(
+                    administrator=session["user"], password=admin_password,
+                    username=user["sam"],
+                )
+                for phone in self.phones.list_for_principal(principal_id):
+                    if self.ad_logon_keys is not None:
+                        revoked = self.ad_logon_keys.revoke_for_approval_credential(
+                            phone["credential_id"], administrator=session["sid"],
+                        )
+                        if revoked is None:
+                            raise ValueError("The account was disabled, but linked sign-in keys could not be revoked. Retry deletion.")
+                    if not self.phones.revoke(phone["credential_id"]):
+                        raise ValueError("The account was disabled, but a phone key could not be revoked. Retry deletion.")
+                if self.ad_logon_keys is not None:
+                    for key in self.ad_logon_keys.list_for_principal(principal_id):
+                        if key["revoked_at"] is None and not self.ad_logon_keys.revoke(
+                            key_id=key["key_id"], administrator=session["sid"],
+                        ):
+                            raise ValueError("The account was disabled, but an AD key could not be revoked. Retry deletion.")
+                deleted_sid = self.directory.delete_user(
+                    administrator=session["user"], password=admin_password,
+                    username=user["sam"],
+                )
+            except ValueError as exc:
+                return self._user_delete_page(session, user, str(exc))
+            except Exception:
+                _LOG.exception("admin_ad_user_delete_failed actor=%s target_sid=%s",
+                               session["sid"], sid)
+                return self._user_delete_page(session, user, "The account was disabled, but AD deletion did not finish. Check permissions, then retry.")
+            finally:
+                admin_password = ""
+            _LOG.warning("admin_ad_user_deleted actor=%s target_sid=%s", session["sid"], deleted_sid)
+            return self._response(303, "", extra_headers=(("Location", "/admin/?notice=user-deleted"),))
         if path == "/admin/logout":
             with self._lock:
                 self._sessions.pop(token, None)
@@ -489,8 +720,8 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 return self._response(503, self._page("Enrollment", '<section class="card error">QR rendering is unavailable on this DC. No enrollment was started.</section>'))
             with self._lock:
                 now = time.time()
-                self._enrollment_qrs = {key: value for key, value in self._enrollment_qrs.items() if value[1] > now}
-                self._enrollment_qrs[enrollment["request_id"]] = (qr_data, enrollment["expires_at"])
+                self._enrollment_qrs = {key: value for key, value in self._enrollment_qrs.items() if value[2] > now}
+                self._enrollment_qrs[enrollment["request_id"]] = (qr_data, link, enrollment["expires_at"])
             _LOG.info("admin_enrollment_started actor=%s target=%s", session["sid"], principal.sid)
             return self._response(303, "", extra_headers=((
                 "Location", f"/admin/enrollment?id={enrollment['request_id']}"),))
@@ -515,6 +746,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
                 return self._response(503, self._page("AD key enrollment", '<section class="card error">Could not start the key enrollment.</section>'))
             link = "thessleypam://ad-key-enroll?" + urlencode({
                 "h": self.public_host, "p": "47810", "fp": self.certificate_fingerprint,
+                "ep": "47811",
                 "id": request["request_id"], "n": request["nonce"], "m": CENTRAL_AD_MACHINE_ID,
                 "hn": self.authority, "u": principal.username, "pv": "2", "sid": principal_id,
                 # PamRequest accepts the shared enrollment context for both
@@ -530,9 +762,9 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             with self._lock:
                 now = time.time()
                 self._ad_logon_key_qrs = {
-                    key: value for key, value in self._ad_logon_key_qrs.items() if value[1] > now
+                    key: value for key, value in self._ad_logon_key_qrs.items() if value[2] > now
                 }
-                self._ad_logon_key_qrs[request["request_id"]] = (qr, request["expires_at"])
+                self._ad_logon_key_qrs[request["request_id"]] = (qr, link, request["expires_at"])
             _LOG.info("admin_ad_logon_key_enrollment_started actor=%s target=%s request=%s",
                       session["sid"], principal.sid, request["request_id"])
             return self._response(303, "", extra_headers=((
@@ -598,7 +830,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
 <p>This phone will no longer approve sign-ins. AD logon keys enrolled through this phone will also be revoked. Revocation is permanent; audit records are retained.</p>
 <form method="post" action="/admin/confirm-revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
 <input type="hidden" name="credential_id" value="{html.escape(credential)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}">
-<button class="danger">Yes, revoke this phone</button> <a class="button" href="/admin/">Cancel</a></form></section>'''
+<div class="form-actions"><button class="danger">Yes, revoke this phone</button><a class="button" href="/admin/">Cancel</a></div></form></section>'''
             return self._response(200, self._page("Confirm phone revocation", content))
         if path == "/admin/confirm-revoke":
             credential = form.get("credential_id", "")
@@ -639,7 +871,7 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
 <p>This public key is not currently eligible for sign-in. Revocation is permanent.</p>
 <form method="post" action="/admin/confirm-revoke-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}">
 <input type="hidden" name="key_id" value="{html.escape(key_id)}"><input type="hidden" name="principal_id" value="{html.escape(principal_id)}">
-<button class="danger">Yes, revoke this key</button> <a class="button" href="/admin/">Cancel</a></form></section>'''
+<div class="form-actions"><button class="danger">Yes, revoke this key</button><a class="button" href="/admin/">Cancel</a></div></form></section>'''
                 return self._response(200, self._page("Confirm AD logon-key revocation", content))
             if not self.ad_logon_keys.revoke(key_id=key_id, administrator=session["sid"]):
                 return self._response(409, self._page("AD logon key", '<section class="card error">The key was already revoked or could not be updated.</section>'))
@@ -648,76 +880,146 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             return self._response(303, "", extra_headers=(("Location", "/admin/"),))
         return self._response(404, self._page("Not found", "<section class=card>Page not found.</section>"))
 
-    def _directory_page(self, session: dict):
+    def _directory_page(self, session: dict, *, notice: str = ""):
         try:
             snapshot = self.directory.list_users(self.allowed_group_sids, limit=1000)
         except Exception:
             _LOG.exception("admin_directory_query_failed sid=%s", session.get("sid", "unknown"))
             return self._response(503, self._page("Directory unavailable", '<section class="card error">Active Directory could not be queried. Try again shortly.</section>'))
-        content = f"""<div class="row" style="justify-content:space-between"><h1>AD accounts</h1>
-<form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><button class="danger">Sign out</button></form></div>
-<p><a class="button" href="/admin/policy">Sign-in method policy</a></p>
-<p class="muted">Signed in as {html.escape(self.authority + chr(92) + session['user'])}. Enrollments are central to the AD account and work on every paired PC.</p>
-<section class="card small"><strong>Rights:</strong> Workstation QR shows membership in the configured Thessley sign-in group. DC admin shows membership in the domain controller's built-in Administrators group; that right is required for this management site. The indicators are independent and read-only.</section>"""
-        for user in snapshot.get("users", []):
-            if not user.get("enabled"):
-                continue
+        users = list(snapshot.get("users", []))
+        notice_html = f'<section class="card success">{html.escape(notice)}</section>' if notice else ""
+        content = f'''<header class="page-head"><div><h1>{self._icon("users")} AD accounts</h1>
+<div class="muted">Manage phone approvals and AD sign-in keys.</div></div>
+<nav class="page-actions" aria-label="Administration">
+<a class="button" href="/admin/users/new">{self._icon("plus")} Add user</a>
+<a class="button secondary" href="/admin/policy">{self._icon("settings")} Policy</a>
+</nav></header>
+{notice_html}
+<p class="muted">Signed in as <strong>{html.escape(self.authority + chr(92) + session['user'])}</strong> · <span id="account-count" aria-live="polite">{len(users)} accounts</span>. Phone approvals are stored centrally and work on paired PCs.</p>
+<div class="session-actions"><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><button class="danger secondary">{self._icon('logout')} Sign out</button></form></div>
+<section class="search-tools" role="search"><label for="account-search">Find an account</label>
+<div class="search-row"><input id="account-search" type="search" autocomplete="off" placeholder="Name or username" aria-label="Search accounts by name or username">
+<button id="clear-account-search" type="button" class="secondary small">Clear</button></div>
+<div id="empty-account-search" class="card empty-results" hidden>No accounts match <strong id="account-search-term"></strong>.</div></section>
+<section class="card help"><details><summary>{self._icon("admin")} About access rights</summary>
+<p><strong>Workstation QR</strong> means the account is in the configured Thessley sign-in group. <strong>DC admin</strong> means it belongs to this domain controller’s Administrators group. The two rights are separate and read-only here.</p></details></section>'''
+        for user in users:
             sid = str(user.get("sid", ""))
             principal_id = principal_id_from_sid_safe(sid)
             if not principal_id:
                 continue
             authorized = bool(user.get("authorized"))
             dc_administrator = bool(user.get("dc_administrator"))
-            content += '<section class="card user"><div><h2>' + html.escape(user.get("name") or user.get("sam", "")) + '</h2><div class="muted">' + html.escape(self.authority + chr(92) + user.get("sam", "")) + '</div>'
-            content += '<div class="rights"><span class="badge ' + ("yes" if authorized else "no") + '">Workstation QR: ' + ("allowed" if authorized else "not allowed") + '</span>'
-            content += '<span class="badge ' + ("yes" if dc_administrator else "no") + '">DC admin: ' + ("yes" if dc_administrator else "no") + '</span></div></div><div>'
+            display_name = html.escape(user.get("name") or user.get("sam", ""))
+            account_name = html.escape(self.authority + chr(92) + user.get("sam", ""))
+            status_badge = '<span class="badge neutral">Disabled</span>' if not user.get("enabled") else ""
             keys = self.phones.list_for_principal(principal_id)
-            if keys:
-                for key in keys:
-                    attestation = str(key.get("attestation_status", "unverified"))
-                    reason = str(key.get("attestation_reason", ""))
-                    protection, protection_class = {
-                        "verified_tee": ("TEE-protected · server verified", "yes"),
-                        "verified_strongbox": ("StrongBox-protected · server verified", "yes"),
-                        "verified_software": ("Software-backed · server verified", "no"),
-                    }.get(attestation, ("Not verified · treat as software-backed", "no"))
-                    content += '<div class="phone"><div><strong>' + html.escape(key["label"]) + '</strong> · ' + html.escape(key["machine_name"]) + '</div><div class="muted small">Enrolled ' + html.escape(time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(key["enrolled_at"]))) + '</div>'
-                    content += f'<div class="badge {protection_class}">Phone-key protection: {protection}</div>'
-                    if attestation == "unverified" and reason:
-                        content += '<div class="muted small">Server check: ' + html.escape(reason) + '</div>'
-                    content += f'''<form method="post" action="/admin/revoke" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone…</button></form></div>'''
-            else:
-                content += '<div class="muted">No phone enrolled.</div>'
-            content += '<div class="muted small">Phone-key protection is checked by the server during enrollment. AD logon keys are separate sign-in credentials, but revoking the phone key that enrolled them also revokes those linked AD keys.</div>'
             logon_keys = self.ad_logon_keys.list_for_principal(principal_id) if self.ad_logon_keys else []
             active_logon_keys = [key for key in logon_keys if key["revoked_at"] is None]
-            content += '<div class="phone"><strong>AD logon keys</strong><div class="muted small">Separate from phone approvals; sign-in is disabled until attestation and the Windows signing bridge are validated.</div>'
+            phone_markers = "".join(self._protection_badge(key.get("attestation_status", "unverified"), compact=True)
+                                    for key in keys[:3])
+            if len(keys) > 3:
+                phone_markers += f'<span class="badge neutral">+{len(keys) - 3}</span>'
+            if not keys:
+                phone_markers = f'<span class="badge neutral">{self._icon("phone")} No phone</span>'
+            logon_markers = "".join(self._protection_badge(key.get("attestation_status", "unverified"), compact=True)
+                                     for key in active_logon_keys[:2])
+            if len(active_logon_keys) > 2:
+                logon_markers += f'<span class="badge neutral">+{len(active_logon_keys) - 2}</span>'
+            content += f'''<section class="card account-card"><div class="account-top"><div class="account-name">
+<span class="account-avatar">{self._icon("users")}</span><div class="account-heading"><h2>{display_name}</h2><div class="account-id">{account_name}</div>
+<div class="rights">{status_badge}<span class="badge {'yes' if authorized else 'no'}">{self._icon('monitor')} Workstation QR · {'Allowed' if authorized else 'Not allowed'}</span>
+<span class="badge {'yes' if dc_administrator else 'neutral'}">{self._icon('admin')} DC admin · {'Yes' if dc_administrator else 'No'}</span></div></div></div>
+<div class="trust-summary"><div><span class="trust-label">Phone</span><div class="trust-icons">{phone_markers}</div></div>
+<div><span class="trust-label">AD sign-in</span><div class="trust-icons">{logon_markers or '<span class="badge neutral">Not active</span>'}</div></div></div></div>'''
+            phone_items = []
+            for key in keys:
+                attestation = str(key.get("attestation_status", "unverified"))
+                reason = str(key.get("attestation_reason", ""))
+                enrolled = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(key["enrolled_at"]))
+                extra = (f'<details class="key-extra"><summary>Verification details</summary><p class="key-meta">{html.escape(reason)}</p></details>'
+                         if attestation == "unverified" and reason else "")
+                phone_items.append(f'''<article class="key-item"><div class="key-main"><div class="key-title">{html.escape(key['label'])}</div>
+<div class="key-meta">{html.escape(key['machine_name'])} · Enrolled {html.escape(enrolled)}</div>
+{self._protection_badge(attestation)}{extra}
+<div class="key-actions"><form method="post" action="/admin/revoke"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="credential_id" value="{html.escape(key['credential_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke phone…</button></form></div></div></article>''')
+            phone_summary = f'{len(keys)} enrolled' if keys else 'None enrolled'
+            logon_items = []
             if active_logon_keys:
                 for key in active_logon_keys:
                     fingerprint = html.escape(key["public_key_sha256"])
                     attestation = str(key.get("attestation_status", "unverified"))
-                    protection, protection_class = {
-                        "verified_tee": ("TEE-protected · verified", "yes"),
-                        "verified_strongbox": ("StrongBox-protected · verified", "yes"),
-                        "verified_software": ("Software-backed · verified", "no"),
-                    }.get(attestation, ("Not verified · treat as software-backed", "no"))
-                    content += f'''<div class="phone"><strong>{html.escape(key["label"])}</strong>
-<div class="muted small">SHA-256 {fingerprint}</div>
-<div class="badge {protection_class}">Key protection: {protection}</div>
-<form method="post" action="/admin/revoke-logon-key" class="row"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="key_id" value="{html.escape(key['key_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke key…</button></form></div>'''
+                    logon_items.append(f'''<article class="key-item"><div class="key-main"><div class="key-title">{html.escape(key["label"])}</div>
+<div class="key-meta">SHA-256 · {fingerprint}</div>{self._protection_badge(attestation)}
+<div class="key-actions"><form method="post" action="/admin/revoke-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="key_id" value="{html.escape(key['key_id'])}"><input type="hidden" name="principal_id" value="{principal_id}"><button class="danger small">Revoke key…</button></form></div></div></article>''')
             else:
-                content += '<div class="muted small">No AD logon key enrolled.</div>'
-            content += '</div>'
-            content += '</div><div>'
-            if authorized or dc_administrator:
-                content += f'''<form method="post" action="/admin/enroll"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button>Enroll phone</button></form>'''
-                content += f'''<form method="post" action="/admin/enroll-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="small">Add AD logon key…</button></form>'''
+                logon_items.append('<p class="empty">No AD sign-in key enrolled.</p>')
+            logon_summary = f'{len(active_logon_keys)} active' if active_logon_keys else 'None enrolled'
+            content += f'''<div class="account-details"><details><summary>{self._icon('phone')} Phone approvals<span class="summary-count">{phone_summary}</span></summary>
+<div class="detail-body">{''.join(phone_items) if phone_items else '<p class="empty">No phone enrolled for this account.</p>'}
+<p class="muted small">Revoking a phone also revokes AD sign-in keys that it enrolled.</p></div></details>
+<details><summary>{self._icon('key')} AD sign-in keys<span class="summary-count">{logon_summary}</span></summary>
+<div class="detail-body"><p class="muted small">These keys are separate from phone approvals. Sign-in remains off until the Windows signing bridge is validated.</p>{''.join(logon_items)}</div></details></div>
+<div class="account-actions">'''
+            if user.get("enabled") and (authorized or dc_administrator):
+                content += f'''<form method="post" action="/admin/enroll"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button>{self._icon('plus')} Enroll phone</button></form>'''
+                content += f'''<form method="post" action="/admin/enroll-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><button class="secondary small">{self._icon('key')} Add AD sign-in key</button></form>'''
+            content += f'''<a class="button secondary small" href="/admin/user/edit?sid={html.escape(sid)}">{self._icon('settings')} Edit</a>'''
+            if sid != session["sid"] and not dc_administrator and not sid.endswith("-500"):
+                content += f'''<a class="button danger small" href="/admin/user/delete?sid={html.escape(sid)}">{self._icon('warning')} Delete…</a>'''
             content += '</div></section>'
         if snapshot.get("truncated"):
             content += '<section class="card">Directory listing reached its 1,000-account limit.</section>'
-        return self._response(200, self._page("AD accounts", content))
+        search_nonce = secrets.token_urlsafe(18)
+        search_script = f'''<script nonce="{search_nonce}">
+(()=>{{
+const input=document.getElementById("account-search");
+const clear=document.getElementById("clear-account-search");
+const status=document.getElementById("account-count");
+const empty=document.getElementById("empty-account-search");
+const term=document.getElementById("account-search-term");
+const cards=[...document.querySelectorAll(".account-card")];
+const update=()=>{{
+ const query=input.value.trim().toLocaleLowerCase();
+ let shown=0;
+ for(const card of cards){{
+  const identity=card.querySelector(".account-heading")?.textContent.toLocaleLowerCase()||"";
+  const matches=!query||query.split(/\\s+/).every(part=>identity.includes(part));
+  card.hidden=!matches;
+  if(matches)shown++;
+ }}
+ status.textContent=shown===cards.length?shown+" accounts":shown+" of "+cards.length+" accounts";
+ term.textContent=input.value.trim();
+ empty.hidden=shown!==0;
+}};
+input.addEventListener("input",update);
+clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
+}})();
+</script>'''
+        return self._response(200, self._page("AD accounts", content + search_script), script_nonce=search_nonce)
 
-    def _ad_logon_key_enrollment_page(self, request_id: str, session: dict, qr_data: str = "", message: str = ""):
+    @staticmethod
+    def _protection(attestation: str) -> tuple[str, str, str, str]:
+        return {
+            "verified_tee": ("TEE verified", "yes", "TEE", "lock"),
+            "verified_strongbox": ("StrongBox verified", "yes", "StrongBox", "lock"),
+            "verified_software": ("Software-backed", "medium", "Software", "lock"),
+        }.get(str(attestation), ("Not verified", "no", "Unverified", "warning"))
+
+    @classmethod
+    def _protection_badge(cls, attestation: str, *, compact: bool = False) -> str:
+        label, level, short, icon = cls._protection(str(attestation))
+        text = short if compact else label
+        return f'<span class="badge {level}" title="{html.escape(label, quote=True)}">{cls._icon(icon)} {text}</span>'
+
+    def _ad_logon_key_enrollment_page(self, request_id: str, session: dict, qr_data: str = "",
+                                      message: str = "", app_link: str = ""):
+        if not qr_data or not app_link:
+            stored_qr, stored_link, _expires = self._ad_logon_key_qrs.get(request_id, ("", "", 0))
+            if not qr_data:
+                qr_data = stored_qr
+            if not app_link:
+                app_link = stored_link
         if self.ad_logon_keys is None:
             return self._response(503, self._page("AD key enrollment", '<section class="card error">AD logon-key registry is unavailable.</section>'))
         state = self.ad_logon_keys.enrollment_status(request_id)
@@ -731,13 +1033,15 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         else:
             refresh = '<meta http-equiv="refresh" content="2">' if state["status"] == "pending" else ''
             error = f'<section class="card error">{html.escape(message)}</section>' if message else ''
-            qr = f'<img class="qr" alt="AD logon key enrollment QR" src="{html.escape(qr_data, quote=True)}">' if qr_data else ''
-            body = refresh + f'<h1>Add AD logon key for {account}</h1>{error}<section class="card"><p>Scan with Thessley Passkey. The phone creates the key and displays a six-digit code. Confirm only when the phone and this page show the same code.</p>{qr}'
+            qr = f'<div class="qr-wrap"><img class="qr" alt="AD logon key enrollment QR" src="{html.escape(qr_data, quote=True)}"></div>' if qr_data else ''
+            open_app = (f'<p><a class="button" href="{html.escape(app_link, quote=True)}">'
+                        f'{self._icon("phone")} Open Thessley Passkey on this device</a></p>' if app_link else '')
+            body = refresh + f'<h1>Add AD logon key for {account}</h1>{error}<section class="card"><p>Open Thessley Passkey on this device, or scan the QR with another device. The phone creates the key and displays a six-digit code. Confirm only when the phone and this page show the same code.</p>{open_app}{qr}'
             if state["status"] == "pending":
                 body += '<p class="status">Waiting for the phone to create and submit its key…</p>'
             elif state["status"] == "ready":
                 body += f'<p class="status">Pairing code: <strong>{html.escape(state["pairing_code"])}</strong></p><p class="muted">Protection reported by Android: {html.escape(state["attestation_status"])}. A code match verifies the request, not the phone manufacturer or hardware beyond the attestation result.</p><form method="post" action="/admin/confirm-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><input type="hidden" name="pairing_code" value="{html.escape(state["pairing_code"])}"><button>Codes match — activate key</button></form>'
-            body += '</section><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button> <a class="button" href="/admin/">Return to accounts</a></form>'
+            body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form><a class="button" href="/admin/">Return to accounts</a></div>'
         return self._response(200, self._page("AD logon-key enrollment", body))
 
     def _policy_page(self, session: dict, message: str = ""):
@@ -799,9 +1103,12 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         from .login_policy import METHOD_LABELS
         return METHOD_LABELS.get(method, "Unknown method")
 
-    def _enrollment_page(self, request_id: str, session: dict, *, qr_data: str = "", message: str = "", status_code: int = 200):
+    def _enrollment_page(self, request_id: str, session: dict, *, qr_data: str = "", app_link: str = "",
+                         message: str = "", status_code: int = 200):
         if not qr_data:
-            qr_data = self._enrollment_qrs.get(request_id, ("", 0))[0]
+            qr_data, stored_link, _expires = self._enrollment_qrs.get(request_id, ("", "", 0))
+            if not app_link:
+                app_link = stored_link
         state = self.phones.enrollment_status(machine_id=CENTRAL_AD_MACHINE_ID, request_id=request_id)
         if state is None:
             return self._response(404, self._page("Phone enrollment", '<section class="card error">Enrollment not found. It may have expired.</section>'))
@@ -816,16 +1123,18 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
         else:
             refresh = '<meta http-equiv="refresh" content="2">' if state["status"] == "pending" else ""
             pairing = state.get("pairing_code")
-            qr = f'<img class="qr" alt="Thessley phone enrollment QR code" src="{qr_data}">' if qr_data else ""
+            qr = f'<div class="qr-wrap"><img class="qr" alt="Thessley phone enrollment QR code" src="{qr_data}"></div>' if qr_data else ""
+            open_app = (f'<p><a class="button" href="{html.escape(app_link, quote=True)}">'
+                        f'{self._icon("phone")} Open Thessley Passkey on this device</a></p>' if app_link else "")
             error = f'<section class="card error">{html.escape(message)}</section>' if message else ""
             content = refresh + '<h1>Enroll ' + html.escape(self.authority + chr(92) + state["username"]) + '</h1>' + error
-            content += '<section class="card"><p>Scan this QR with Thessley Passkey. Compare the six-digit code below with the phone; only confirm when both match.</p>' + qr
+            content += '<section class="card"><p>Open Thessley Passkey on this device, or scan the QR with another device. Compare the six-digit code below with the phone; only confirm when both match.</p>' + open_app + qr
             if state["status"] == "pending":
                 content += '<p class="status">Waiting for phone approval…</p>'
             elif pairing:
                 content += '<p class="status">Pairing code: <strong>' + html.escape(pairing) + '</strong></p>'
                 content += f'''<form method="post" action="/admin/confirm-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button name="confirm" value="match">The codes match — confirm enrollment</button></form>'''
-            content += f'''</section><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button> <a class="button" href="/admin/">Return to accounts</a></form>'''
+            content += f'''</section><div class="form-actions"><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button></form><a class="button" href="/admin/">Return to accounts</a></div>'''
         return self._response(status_code, self._page("Phone enrollment", content))
 
 

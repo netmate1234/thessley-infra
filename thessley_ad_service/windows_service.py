@@ -30,6 +30,7 @@ CERT_PATH = ROOT / "https-cert.pem"
 KEY_PATH = ROOT / "https-key.pem"
 LOG_PATH = ROOT / "service.log"
 API_PORT = 47810
+ENROLLMENT_PORT = 47811
 ADMIN_PORT = 47820
 
 
@@ -158,6 +159,7 @@ def main() -> int:
         from .login_policy import LoginPolicyStore
         from .phone_registry import PhoneRegistry
         from .ad_logon_keys import AdLogonKeyRegistry
+        from .piv_signatures import PivSignatureStore
         from .replay_store import SQLiteReplayStore
         from .admin_web import AdminWeb
 
@@ -165,6 +167,7 @@ def main() -> int:
         login_policy = LoginPolicyStore(STATE_PATH)
         phones = PhoneRegistry(STATE_PATH)
         ad_logon_keys = AdLogonKeyRegistry(STATE_PATH)
+        piv_signatures = PivSignatureStore(STATE_PATH, ad_logon_keys)
         reconciled_ad_keys = ad_logon_keys.revoke_without_active_approval_key()
         if reconciled_ad_keys is None:
             raise RuntimeError("Could not reconcile AD logon keys against active phone credentials")
@@ -181,7 +184,10 @@ def main() -> int:
             challenges, config["public_host"], certificate_pin, phones, login_policy,
             config["certificate_template"],
             ad_logon_keys,
+            piv_signatures,
         )
+        from .http_api import create_ad_enrollment_routes
+        enrollment_routes = create_ad_enrollment_routes(phones, ad_logon_keys)
         admin_web = AdminWeb(
             directory=directory,
             phones=phones,
@@ -202,6 +208,14 @@ def main() -> int:
         except Exception:
             api_server.server_close()
             raise
+        try:
+            enrollment_server = make_server(
+                (config["bind_address"], ENROLLMENT_PORT), str(CERT_PATH), str(KEY_PATH), enrollment_routes,
+            )
+        except Exception:
+            api_server.server_close()
+            admin_server.server_close()
+            raise
         stopped = threading.Event()
         for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
             if sig is not None:
@@ -209,15 +223,17 @@ def main() -> int:
         logging.info("AD login API ready at https://%s:%d/ (TLS SHA-256 %s)",
                      config["public_host"], API_PORT, certificate_pin)
         logging.info("AD administrator site ready at https://%s:%d/admin/", config["public_host"], ADMIN_PORT)
-        servers = (api_server, admin_server)
+        logging.info("AD phone-key enrollment listener ready at https://%s:%d/", config["public_host"], ENROLLMENT_PORT)
+        servers = (api_server, admin_server, enrollment_server)
         threads = [
             threading.Thread(target=server.serve_forever, name=name, daemon=True)
-            for server, name in zip(servers, ("thessley-ad-api", "thessley-ad-admin"), strict=True)
+            for server, name in zip(servers, ("thessley-ad-api", "thessley-ad-admin", "thessley-ad-enrollment"), strict=True)
         ]
         def cleanup_expired_challenges() -> None:
             while not stopped.wait(60):
                 try:
                     challenges.purge_expired()
+                    piv_signatures.purge_expired()
                 except Exception:
                     logging.exception("Could not purge expired AD challenge state")
 

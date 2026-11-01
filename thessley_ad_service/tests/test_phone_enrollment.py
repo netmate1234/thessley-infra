@@ -89,7 +89,13 @@ def test_phone_key_activates_only_after_machine_code_confirmation(tmp_path):
         machine_id="f" * 32, request_id=enrollment["request_id"], now=now
     ) is None
     status = phone.enrollment_status(machine_id=machine_id, request_id=enrollment["request_id"], now=now)
-    assert status == {"status": "ready", "username": "martin", "pairing_code": pairing_code}
+    assert status is not None
+    assert status["status"] == "ready"
+    assert status["username"] == "martin"
+    assert status["pairing_code"] == pairing_code
+    # A key submitted without an attestation chain stays enrollable but is
+    # reported as unverified, so the admin cannot mistake it for a hardware key.
+    assert status["attestation_status"] == "unverified"
 
     assert phone.confirm_enrollment(
         machine_id=machine_id, request_id=enrollment["request_id"], pairing_code=pairing_code, now=now

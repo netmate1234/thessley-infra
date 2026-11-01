@@ -10,6 +10,7 @@ import json
 import logging
 import ssl
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -140,7 +141,14 @@ def make_server(address: tuple[str, int], certfile: str, keyfile: str,
                 if (isinstance(status, bool) or not isinstance(status, int)
                         or not 100 <= status <= 599 or not isinstance(reply, dict)):
                     raise ValueError("invalid API response")
-            except Exception:
+            except Exception as exc:
+                frames = " > ".join(
+                    f"{frame.name}:{frame.lineno}" for frame in traceback.extract_tb(exc.__traceback__)
+                )[-512:]
+                logging.getLogger("thessley.ad.api").error(
+                    "API route handler failed path=%s exception_type=%s frames=%s",
+                    path.path, type(exc).__name__, frames,
+                )
                 status, reply = 500, {"result": "error", "message": "Could not process this request."}
             self._reply(status, reply)
 
