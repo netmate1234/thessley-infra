@@ -214,7 +214,7 @@ class AccountFocusTest(unittest.TestCase):
         status, headers, _body = AdminWeb._accounts_redirect("user-updated", self.SID)
         self.assertEqual(status, 303)
         location = dict(headers)["Location"]
-        self.assertEqual(location, f"/admin/?notice=user-updated#account-{self.SID}")
+        self.assertEqual(location, f"/admin/account?sid={self.SID}&notice=user-updated")
 
     def test_redirect_without_a_sid_has_no_fragment(self):
         _status, headers, _body = AdminWeb._accounts_redirect("user-deleted")
@@ -222,7 +222,7 @@ class AccountFocusTest(unittest.TestCase):
 
     def test_redirect_ignores_a_malformed_sid(self):
         _status, headers, _body = AdminWeb._accounts_redirect("user-updated", "not-a-sid")
-        self.assertNotIn("#", dict(headers)["Location"])
+        self.assertEqual(dict(headers)["Location"], "/admin/?notice=user-updated")
 
     def test_account_cards_carry_a_scroll_target(self):
         web = object.__new__(AdminWeb)
@@ -299,7 +299,7 @@ class RevokeReturnTest(unittest.TestCase):
             with self.subTest(notice=notice):
                 _status, headers, _body = AdminWeb._accounts_redirect(notice, self.SID)
                 self.assertEqual(dict(headers)["Location"],
-                                 f"/admin/?notice={notice}#account-{self.SID}")
+                                 f"/admin/account?sid={self.SID}&notice={notice}")
 
     def _stub_web(self):
         from infra.thessley_ad_service.protocol import principal_id_from_sid
@@ -333,7 +333,7 @@ class RevokeReturnTest(unittest.TestCase):
         html = body.decode("utf-8")
         self.assertEqual(status, 200)
         self.assertIn(f'action="/admin/confirm-revoke"', html)
-        self.assertIn(f'href="/admin/#account-{self.SID}"', html)
+        self.assertIn(f'href="/admin/account?sid={self.SID}"', html)
         self.assertIn(f'name="sid" value="{self.SID}"', html)
 
     def test_logon_key_revocation_confirmation_links_back_to_the_account(self):
@@ -343,7 +343,7 @@ class RevokeReturnTest(unittest.TestCase):
         html = body.decode("utf-8")
         self.assertEqual(status, 200)
         self.assertIn('action="/admin/confirm-revoke-logon-key"', html)
-        self.assertIn(f'href="/admin/#account-{self.SID}"', html)
+        self.assertIn(f'href="/admin/account?sid={self.SID}"', html)
 
     def test_confirmation_ignores_a_sid_for_another_principal(self):
         web, pid, cred, _key = self._stub_web()
@@ -351,8 +351,80 @@ class RevokeReturnTest(unittest.TestCase):
         form = {"csrf": CSRF, "credential_id": cred, "principal_id": pid, "sid": other}
         _status, _headers, body = web._post("/admin/revoke", form, {}, "127.0.0.1")
         html = body.decode("utf-8")
-        self.assertNotIn(f"#account-{other}", html)
+        self.assertNotIn(other, html)
         self.assertIn('name="sid" value=""', html)
+
+
+class DirectoryPagingTest(unittest.TestCase):
+    def _web(self, count):
+        web = object.__new__(AdminWeb)
+        web.authority = "THESSLEYLAB"
+        web._lock = threading.Lock()
+        web.allowed_group_sids = frozenset({"S-1-5-21-1-2-3-1105"})
+        users = [{"sid": f"S-1-5-21-1-2-3-{2000 + i}", "sam": f"user{i:02d}",
+                  "name": f"User {i:02d}", "enabled": True, "authorized": False,
+                  "dc_administrator": False} for i in range(count)]
+
+        class _Dir:
+            def list_users(self, groups, limit=1000):
+                return {"users": users}
+
+        class _NoKeys:
+            def list_for_principal(self, principal_id):
+                return []
+
+        web.directory = _Dir()
+        web.phones = _NoKeys()
+        web.ad_logon_keys = _NoKeys()
+        return web
+
+    @staticmethod
+    def _cards(html):
+        return html.count('class="card account-card"')
+
+    def render(self, web, **kwargs):
+        return _html(web._directory_page({"sid": "S-1-5-21-1-2-3-500", "user": "Administrator",
+                                          "csrf": CSRF}, **kwargs))
+
+    def test_first_page_is_capped_and_offers_next(self):
+        html = self.render(self._web(45))
+        self.assertEqual(self._cards(html), AdminWeb.PAGE_SIZE)
+        self.assertIn("Page 1 of 3", html)
+        self.assertIn("page=2", html)
+        self.assertNotIn("page=0", html)
+
+    def test_last_page_holds_the_remainder(self):
+        html = self.render(self._web(45), page=3)
+        self.assertEqual(self._cards(html), 5)
+        self.assertIn("Page 3 of 3", html)
+        self.assertIn("page=2", html)
+        self.assertNotIn("page=4", html)
+
+    def test_page_beyond_the_end_is_clamped(self):
+        html = self.render(self._web(25), page=99)
+        self.assertEqual(self._cards(html), 5)
+        self.assertIn("Page 2 of 2", html)
+
+    def test_search_filters_before_paging(self):
+        html = self.render(self._web(45), query="user4")
+        self.assertEqual(self._cards(html), 5)           # user40..user44 only
+        self.assertNotIn("Page 1 of", html)              # one page, so no pager
+        self.assertIn("5 accounts", html)
+
+    def test_single_account_view_shows_only_that_account(self):
+        web = self._web(45)
+        sid = "S-1-5-21-1-2-3-2007"
+        html = self.render(web, single_sid=sid)
+        self.assertEqual(self._cards(html), 1)
+        self.assertIn('id="account-' + sid + '"', html)
+        self.assertNotIn("Page 1 of", html)
+        self.assertIn('href="/admin/"', html)            # All accounts
+
+    def test_unknown_single_account_is_a_404(self):
+        status, _headers, _body = self._web(3)._directory_page(
+            {"sid": "S-1-5-21-1-2-3-500", "user": "Administrator", "csrf": CSRF},
+            single_sid="S-1-5-21-1-2-3-999999")
+        self.assertEqual(status, 404)
 
 
 class PhoneEnrollmentPageTest(unittest.TestCase):

@@ -92,6 +92,8 @@ class WindowsAdminLogin:
 class AdminWeb:
     """Cookie-session management UI, mounted under /admin on the DC HTTPS API."""
 
+    PAGE_SIZE = 20
+
     def __init__(self, *, directory, phones, challenges, allowed_group_sids, authority: str,
                  public_host: str, certificate_fingerprint: str, login_policy=None, machines=None,
                  ad_logon_keys=None):
@@ -246,28 +248,47 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
             return self._response(400, self._page("Bad request", "<section class=card>Invalid form.</section>"))
         return self._post(parsed.path, form, headers, client_ip)
 
+    _NOTICES = {
+        "user-created": "AD user created. The account must change its temporary password at first sign-in.",
+        "user-updated": "AD user updated.",
+        "user-password": "AD password changed. The account must set a new one at next sign-in.",
+        "user-deleted": "AD user deleted and its Thessley keys revoked.",
+        "phone-revoked": "Phone revoked. Linked AD sign-in keys were revoked with it.",
+        "logon-key-revoked": "AD sign-in key revoked.",
+        "enrollment-cancelled": "Phone enrollment cancelled.",
+        "ad-key-enrollment-cancelled": "AD sign-in key enrollment cancelled.",
+        "workstation-qr-allowed": "Workstation QR allowed. The account can now use QR sign-in at paired workstations.",
+        "workstation-qr-revoked": "Workstation QR revoked. The account can no longer sign in at paired workstations.",
+    }
+
+    @classmethod
+    def _notice_text(cls, notice: str) -> str:
+        return cls._NOTICES.get(notice, "")
+
     def _get(self, path: str, query: str, headers, client_ip: str):
         if path == "/":
             return self._response(303, "", extra_headers=(("Location", "/admin/"),))
+        if path == "/admin/account":
+            token, session = self._session(headers)
+            if not session:
+                return self._login_page(headers)
+            params = parse_qs(query, keep_blank_values=True)
+            sid_values = params.get("sid", [])
+            if len(sid_values) != 1 or not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid_values[0]):
+                return self._response(400, self._page("AD account", '<section class="card error">Invalid account reference.</section>'))
+            notice = params.get("notice", [""])[0] if len(params.get("notice", [])) == 1 else ""
+            return self._directory_page(session, notice=self._notice_text(notice), single_sid=sid_values[0])
         if path in ("/admin", "/admin/"):
             token, session = self._session(headers)
             if not session:
                 return self._login_page(headers)
             params = parse_qs(query, keep_blank_values=True)
             notice = params.get("notice", [""])[0] if len(params.get("notice", [])) == 1 else ""
-            notice_text = {
-                "user-created": "AD user created. The account must change its temporary password at first sign-in.",
-                "user-updated": "AD user updated.",
-                "user-password": "AD password changed. The account must set a new one at next sign-in.",
-                "phone-revoked": "Phone revoked. Linked AD sign-in keys were revoked with it.",
-                "enrollment-cancelled": "Phone enrollment cancelled.",
-                "ad-key-enrollment-cancelled": "AD sign-in key enrollment cancelled.",
-                "logon-key-revoked": "AD sign-in key revoked.",
-                "workstation-qr-allowed": "Workstation QR allowed. The account can now use QR sign-in at paired workstations.",
-                "workstation-qr-revoked": "Workstation QR revoked. The account can no longer sign in at paired workstations.",
-                "user-deleted": "AD user deleted and its Thessley keys revoked.",
-            }.get(notice, "")
-            return self._directory_page(session, notice=notice_text)
+            query_text = params.get("q", [""])[0] if len(params.get("q", [])) == 1 else ""
+            page_value = params.get("page", ["1"])[0] if len(params.get("page", [])) == 1 else "1"
+            page_number = int(page_value) if page_value.isdigit() else 1
+            return self._directory_page(session, notice=self._notice_text(notice),
+                                        page=page_number, query=query_text)
         if path == "/admin/policy":
             token, session = self._session(headers)
             if not session:
@@ -549,7 +570,7 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
 <label for="edit-state">Account status</label><select id="edit-state" name="enabled"><option value="yes"{' selected' if enabled else ''}>Enabled</option><option value="no"{' selected' if not enabled else ''}>Disabled</option></select>
 <label for="edit-admin-password">Your administrator password</label><input id="edit-admin-password" name="admin_password" type="password" required autocomplete="current-password">
 <p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
-<div class="form-actions"><button>{self._icon("check")} Save changes</button><a class="button secondary" href="/admin/#account-{sid}">Cancel</a></div>
+<div class="form-actions"><button>{self._icon("check")} Save changes</button><a class="button secondary" href="/admin/account?sid={sid}">Cancel</a></div>
 </form></section>'''
         return self._response(200, self._page("Edit AD user", body))
 
@@ -575,7 +596,7 @@ window.addEventListener("pageshow",event=>{{if(event.persisted)refresh()}})}})()
 <label for="workstation-admin-password">Your administrator password</label>
 <input id="workstation-admin-password" name="admin_password" type="password" required autocomplete="current-password">
 <p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
-<div class="form-actions"><button{'' if allow else ' class="danger"'}>{self._icon("monitor")} {title}</button><a class="button secondary" href="/admin/#account-{sid}">Cancel</a></div>
+<div class="form-actions"><button{'' if allow else ' class="danger"'}>{self._icon("monitor")} {title}</button><a class="button secondary" href="/admin/account?sid={sid}">Cancel</a></div>
 </form></section>'''
         return self._response(200, self._page(title, body))
 
@@ -594,7 +615,7 @@ The account must change it at next sign-in.</p>
 <label for="change-admin-password">Your administrator password</label>
 <input id="change-admin-password" name="admin_password" type="password" required autocomplete="current-password">
 <p class="muted small">Re-enter it to confirm this directory change. It is not saved.</p>
-<div class="form-actions"><button>{self._icon("key")} Set password</button><a class="button secondary" href="/admin/#account-{sid}">Cancel</a></div>
+<div class="form-actions"><button>{self._icon("key")} Set password</button><a class="button secondary" href="/admin/account?sid={sid}">Cancel</a></div>
 </form></section>'''
         return self._response(200, self._page("Change AD password", body))
 
@@ -609,7 +630,7 @@ The account must change it at next sign-in.</p>
 <input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{sid}">
 <label for="delete-confirm-name">Type <strong>{username}</strong> to confirm</label><input id="delete-confirm-name" name="confirm_username" required autocomplete="off" autocapitalize="none">
 <label for="delete-admin-password">Your administrator password</label><input id="delete-admin-password" name="admin_password" type="password" required autocomplete="current-password">
-<div class="form-actions"><button class="danger">{self._icon("warning")} Delete permanently</button><a class="button secondary" href="/admin/#account-{sid}">Cancel</a></div>
+<div class="form-actions"><button class="danger">{self._icon("warning")} Delete permanently</button><a class="button secondary" href="/admin/account?sid={sid}">Cancel</a></div>
 </form></section>'''
         return self._response(200, self._page("Delete AD user", body))
 
@@ -975,7 +996,7 @@ The account must change it at next sign-in.</p>
             if not matching:
                 return self._response(404, self._page("Revoke key", '<section class="card error">No active matching phone key was found.</section>'))
             anchor_sid = self._anchor_sid(form.get("sid", ""), principal_id)
-            cancel_href = f"/admin/#account-{anchor_sid}" if anchor_sid else "/admin/"
+            cancel_href = f"/admin/account?sid={anchor_sid}" if anchor_sid else "/admin/"
             label = html.escape(str(matching.get("label", "Phone")))
             machine_name = html.escape(str(matching.get("machine_name", "")))
             content = f'''<h1>Confirm phone revocation</h1>
@@ -1019,7 +1040,7 @@ The account must change it at next sign-in.</p>
                 return self._response(404, self._page("AD logon key", '<section class="card error">No active matching key was found.</section>'))
             if path == "/admin/revoke-logon-key":
                 anchor_sid = self._anchor_sid(form.get("sid", ""), principal_id)
-                cancel_href = f"/admin/#account-{anchor_sid}" if anchor_sid else "/admin/"
+                cancel_href = f"/admin/account?sid={anchor_sid}" if anchor_sid else "/admin/"
                 content = f'''<h1>Confirm AD logon-key revocation</h1>
 <section class="card error"><p>Revoke <strong>{html.escape(key["label"])}</strong> for this AD account?</p>
 <p>Fingerprint: <code>{html.escape(key["public_key_sha256"])}</code></p>
@@ -1044,35 +1065,71 @@ The account must change it at next sign-in.</p>
 
     @staticmethod
     def _accounts_redirect(notice: str, sid: str = ""):
-        """Send the operator back to the account they just changed."""
-        location = f"/admin/?notice={notice}"
+        """Send the operator back to the account they just changed.
+
+        A single-account view is used instead of an anchor in the list, so the
+        operator lands on the same card regardless of paging, filtering or how
+        many accounts the directory holds.
+        """
         if isinstance(sid, str) and re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid):
-            location += f"#account-{sid}"
+            location = f"/admin/account?sid={sid}&notice={notice}"
+        else:
+            location = f"/admin/?notice={notice}"
         return AdminWeb._response(303, "", extra_headers=(("Location", location),))
 
-    def _directory_page(self, session: dict, *, notice: str = ""):
+    def _directory_page(self, session: dict, *, notice: str = "", page: int = 1,
+                        query: str = "", single_sid: str = ""):
         try:
             snapshot = self.directory.list_users(self.allowed_group_sids, limit=1000)
         except Exception:
             _LOG.exception("admin_directory_query_failed sid=%s", session.get("sid", "unknown"))
             return self._response(503, self._page("Directory unavailable", '<section class="card error">Active Directory could not be queried. Try again shortly.</section>'))
-        users = list(snapshot.get("users", []))
+        everyone = list(snapshot.get("users", []))
+        single = None
+        total, pages = len(everyone), 1
+        if single_sid:
+            single = next((item for item in everyone if str(item.get("sid", "")) == single_sid), None)
+            if single is None:
+                return self._response(404, self._page(
+                    "AD account", '<section class="card error">Account not found in Active Directory.</section>'))
+            users = [single]
+        else:
+            needle = (query or "").strip().casefold()
+            if needle:
+                everyone = [
+                    item for item in everyone
+                    if needle in f"{item.get('name') or ''} {item.get('sam') or ''}".casefold()
+                ]
+            total = len(everyone)
+            pages = max(1, -(-total // self.PAGE_SIZE))
+            page = min(max(page, 1), pages)
+            users = everyone[(page - 1) * self.PAGE_SIZE: page * self.PAGE_SIZE]
         notice_html = f'<section class="card success">{html.escape(notice)}</section>' if notice else ""
-        content = f'''<header class="page-head"><div><h1>{self._icon("users")} AD accounts</h1>
+        signed_in = html.escape(self.authority + chr(92) + session['user'])
+        help_card = f'''<section class="card help"><details><summary>{self._icon("admin")} About access rights</summary>
+<p><strong>Workstation QR</strong> means the account is in the configured Thessley sign-in group and can approve QR sign-in at paired workstations. It can be allowed or revoked below. <strong>DC admin</strong> means the account belongs to this domain controller’s Administrators group; that right is read-only here.</p></details></section>'''
+        if single_sid:
+            single_name = html.escape(str(single.get("name") or single.get("sam", "")))
+            content = f'''<header class="page-head"><div><h1>{self._icon("users")} {single_name}</h1>
+<div class="muted">{html.escape(self.authority + chr(92) + str(single.get("sam", "")))}</div></div>
+<nav class="page-actions" aria-label="Account"><a class="button secondary" href="/admin/">{self._icon("chevron")} All accounts</a></nav></header>
+{notice_html}
+<p class="muted">Signed in as <strong>{signed_in}</strong>. This view shows one account; use All accounts to pick another.</p>'''
+        else:
+            search_value = html.escape((query or "").strip(), quote=True)
+            content = f'''<header class="page-head"><div><h1>{self._icon("users")} AD accounts</h1>
 <div class="muted">Manage phone approvals and AD sign-in keys.</div></div>
 <nav class="page-actions" aria-label="Administration">
 <a class="button" href="/admin/users/new">{self._icon("plus")} Add user</a>
 <a class="button secondary" href="/admin/policy">{self._icon("settings")} Policy</a>
 </nav></header>
 {notice_html}
-<p class="muted">Signed in as <strong>{html.escape(self.authority + chr(92) + session['user'])}</strong> · <span id="account-count" aria-live="polite">{len(users)} accounts</span>. Phone approvals are stored centrally and work on paired PCs.</p>
+<p class="muted">Signed in as <strong>{signed_in}</strong> · <span id="account-count" aria-live="polite">{total} account{'s' if total != 1 else ''}</span>. Phone approvals are stored centrally and work on paired PCs.</p>
 <div class="session-actions"><form method="post" action="/admin/logout"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><button class="danger secondary">{self._icon('logout')} Sign out</button></form></div>
-<section class="search-tools" role="search"><label for="account-search">Find an account</label>
-<div class="search-row"><input id="account-search" type="search" autocomplete="off" placeholder="Name or username" aria-label="Search accounts by name or username">
-<button id="clear-account-search" type="button" class="secondary small">Clear</button></div>
-<div id="empty-account-search" class="card empty-results" hidden>No accounts match <strong id="account-search-term"></strong>.</div></section>
-<section class="card help"><details><summary>{self._icon("admin")} About access rights</summary>
-<p><strong>Workstation QR</strong> means the account is in the configured Thessley sign-in group and can approve QR sign-in at paired workstations. It can be allowed or revoked below. <strong>DC admin</strong> means the account belongs to this domain controller’s Administrators group; that right is read-only here.</p></details></section>'''
+<section class="search-tools" role="search"><form method="get" action="/admin/"><label for="account-search">Find an account</label>
+<div class="search-row"><input id="account-search" name="q" type="search" value="{search_value}" autocomplete="off" placeholder="Name or username" aria-label="Search accounts by name or username">
+<button type="submit" class="secondary small">Search</button> <a class="button secondary small" href="/admin/">Clear</a></div></form></section>'''
+        content += help_card
         for user in users:
             sid = str(user.get("sid", ""))
             principal_id = principal_id_from_sid_safe(sid)
@@ -1145,35 +1202,20 @@ The account must change it at next sign-in.</p>
             if sid != session["sid"] and not dc_administrator and not sid.endswith("-500"):
                 content += f'''<a class="button danger small" href="/admin/user/delete?sid={html.escape(sid)}">{self._icon('warning')} Delete…</a>'''
             content += '</div></section>'
-        if snapshot.get("truncated"):
-            content += '<section class="card">Directory listing reached its 1,000-account limit.</section>'
-        search_nonce = secrets.token_urlsafe(18)
-        search_script = f'''<script nonce="{search_nonce}">
-(()=>{{
-const input=document.getElementById("account-search");
-const clear=document.getElementById("clear-account-search");
-const status=document.getElementById("account-count");
-const empty=document.getElementById("empty-account-search");
-const term=document.getElementById("account-search-term");
-const cards=[...document.querySelectorAll(".account-card")];
-const update=()=>{{
- const query=input.value.trim().toLocaleLowerCase();
- let shown=0;
- for(const card of cards){{
-  const identity=card.querySelector(".account-heading")?.textContent.toLocaleLowerCase()||"";
-  const matches=!query||query.split(/\\s+/).every(part=>identity.includes(part));
-  card.hidden=!matches;
-  if(matches)shown++;
- }}
- status.textContent=shown===cards.length?shown+" accounts":shown+" of "+cards.length+" accounts";
- term.textContent=input.value.trim();
- empty.hidden=shown!==0;
-}};
-input.addEventListener("input",update);
-clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
-}})();
-</script>'''
-        return self._response(200, self._page("AD accounts", content + search_script), script_nonce=search_nonce)
+        if not single_sid:
+            if snapshot.get("truncated"):
+                content += '<section class="card">Directory listing reached its 1,000-account limit.</section>'
+            if pages > 1:
+                base = "/admin/?q=" + html.escape((query or "").strip(), quote=True) + "&page="
+                prev_link = (f'<a class="button secondary small" href="{base}{page - 1}">Previous</a>'
+                             if page > 1 else '<span class="badge neutral">Previous</span>')
+                next_link = (f'<a class="button secondary small" href="{base}{page + 1}">Next</a>'
+                             if page < pages else '<span class="badge neutral">Next</span>')
+                content += (f'<nav class="pager" aria-label="Account pages">{prev_link}'
+                            f'<span class="muted small">Page {page} of {pages}</span>{next_link}</nav>')
+        elif not users:
+            content += '<section class="card">This account has no directory entry.</section>'
+        return self._response(200, self._page("AD accounts" if not single_sid else "AD account", content))
 
     @staticmethod
     def _protection(attestation: str) -> tuple[str, str, str, str]:
@@ -1226,7 +1268,7 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
                 body += '<p class="status">Waiting for the phone to create and submit its key…</p>'
             elif state["status"] == "ready":
                 body += f'<p class="status">Pairing code: <strong>{html.escape(state["pairing_code"])}</strong></p><p class="muted">Protection reported by Android: {html.escape(state["attestation_status"])}. A code match verifies the request, not the phone manufacturer or hardware beyond the attestation result.</p><form method="post" action="/admin/confirm-ad-logon-key"><input type="hidden" name="csrf" value="{html.escape(session["csrf"])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><input type="hidden" name="pairing_code" value="{html.escape(state["pairing_code"])}"><button>Codes match — activate key</button></form>'
-            body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="sid" value="' + html.escape(sid) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form>' + reload_link + '<a class="button" href="/admin/' + (('#account-' + sid) if sid else '') + '">Return to accounts</a></div>'
+            body += '</section><div class="form-actions"><form method="post" action="/admin/cancel-ad-logon-key"><input type="hidden" name="csrf" value="' + html.escape(session["csrf"]) + '"><input type="hidden" name="sid" value="' + html.escape(sid) + '"><input type="hidden" name="id" value="' + html.escape(request_id) + '"><button class="danger">Cancel</button></form>' + reload_link + '<a class="button" href="/admin/' + (('account?sid=' + sid) if sid else '') + '">Return to accounts</a></div>'
         return self._response(200, self._page("AD logon-key enrollment", body))
 
     def _policy_page(self, session: dict, message: str = ""):
@@ -1300,13 +1342,13 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
         if state["status"] == "confirmed":
             with self._lock:
                 self._enrollment_qrs.pop(request_id, None)
-            back = (f'<a class="button" href="/admin/#account-{html.escape(sid, quote=True)}">Back to accounts</a>'
+            back = (f'<a class="button" href="/admin/account?sid={html.escape(sid, quote=True)}">Back to accounts</a>'
                     if sid else '<a class="button" href="/admin/">Back to accounts</a>')
             content = '<h1>Phone enrolled</h1><section class="card success">The AD account phone is now active across paired PCs.</section>' + back
         elif state["status"] in ("expired", "denied"):
             with self._lock:
                 self._enrollment_qrs.pop(request_id, None)
-            back = (f'<a class="button" href="/admin/#account-{html.escape(sid, quote=True)}">Back to accounts</a>'
+            back = (f'<a class="button" href="/admin/account?sid={html.escape(sid, quote=True)}">Back to accounts</a>'
                     if sid else '<a class="button" href="/admin/">Back to accounts</a>')
             content = '<h1>Enrollment ended</h1><section class="card error">This request expired or was cancelled. Start a fresh enrollment from the account list.</section>' + back
         else:
@@ -1328,7 +1370,7 @@ clear.addEventListener("click",()=>{{input.value="";update();input.focus()}});
             elif pairing:
                 content += '<p class="status">Pairing code: <strong>' + html.escape(pairing) + '</strong></p>'
                 content += f'''<form method="post" action="/admin/confirm-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button name="confirm" value="match">The codes match — confirm enrollment</button></form>'''
-            content += f'''</section><div class="form-actions"><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button></form>''' + reload_link + '<a class="button" href="/admin/' + (('#account-' + sid) if sid else '') + '">Return to accounts</a></div>'
+            content += f'''</section><div class="form-actions"><form method="post" action="/admin/cancel-enrollment"><input type="hidden" name="csrf" value="{html.escape(session['csrf'])}"><input type="hidden" name="sid" value="{html.escape(sid)}"><input type="hidden" name="id" value="{html.escape(request_id)}"><button class="danger">Cancel enrollment</button></form>''' + reload_link + '<a class="button" href="/admin/' + (('account?sid=' + sid) if sid else '') + '">Return to accounts</a></div>'
         return self._response(status_code, self._page("Phone enrollment", content))
 
 
