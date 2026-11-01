@@ -420,6 +420,19 @@ class DirectoryPagingTest(unittest.TestCase):
         self.assertNotIn("Page 1 of", html)
         self.assertIn('href="/admin/"', html)            # All accounts
 
+    def test_sign_out_is_in_the_top_right_of_the_page_header(self):
+        html = self.render(self._web(5))
+        header = html.split("<header", 1)[1].split("</header>", 1)[0]
+        self.assertIn('action="/admin/logout"', header)
+        self.assertIn('class="header-actions"', header)
+        self.assertEqual(html.count('action="/admin/logout"'), 1)
+        self.assertNotIn('class="session-actions"', html)
+
+    def test_single_account_view_also_has_sign_out_in_the_header(self):
+        html = self.render(self._web(5), single_sid="S-1-5-21-1-2-3-2003")
+        header = html.split("<header", 1)[1].split("</header>", 1)[0]
+        self.assertIn('action="/admin/logout"', header)
+
     def test_unknown_single_account_is_a_404(self):
         status, _headers, _body = self._web(3)._directory_page(
             {"sid": "S-1-5-21-1-2-3-500", "user": "Administrator", "csrf": CSRF},
