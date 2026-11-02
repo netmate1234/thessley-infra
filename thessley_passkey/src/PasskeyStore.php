@@ -201,14 +201,14 @@ class PasskeyStore {
   }
 
   /**
-   * A user's devices, most recently used first; devices never used come last,
-   * newest first.
+   * A user's active (not revoked) devices, most recently used first; devices
+   * never used come last, newest first. A removed key must not linger as a card.
    *
    * @return object[]
    */
   public function devicesForUser(int $uid): array {
     return $this->db->query(
-      'SELECT id, credential_id, label, attestation_level, created, last_used, revoked FROM {thessley_passkeys} WHERE uid = :uid ORDER BY (last_used IS NULL), last_used DESC, created DESC, id DESC',
+      'SELECT id, credential_id, label, attestation_level, created, last_used, revoked FROM {thessley_passkeys} WHERE uid = :uid AND revoked IS NULL ORDER BY (last_used IS NULL), last_used DESC, created DESC, id DESC',
       [':uid' => $uid]
     )->fetchAll();
   }
