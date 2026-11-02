@@ -93,7 +93,7 @@
           }
 
           qrEl.innerHTML = '';
-          ThessleyQR.render(qrEl, data.app_link, 270);
+          ThessleyQR.render(qrEl, data.app_link, 340);
           linkEl.href = data.app_link;
           if (cfg.identify) { stepTwo(name); }
 

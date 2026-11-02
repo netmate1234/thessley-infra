@@ -160,7 +160,7 @@
           hint.textContent = Drupal.t("Scan this with the Thessley Passkey app on the device you're enrolling, or tap the link below on that same device.");
           qrBox.style.display = 'inline-block';
           qrBox.textContent = '';
-          ThessleyQR.render(qrBox, data.app_link, 236);
+          ThessleyQR.render(qrBox, data.app_link, 340);
           var open = el('a', 'button button--primary thessley-pk-open', Drupal.t('Open on this device'));
           open.href = data.app_link;
           status.textContent = '';

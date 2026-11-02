@@ -6,7 +6,7 @@ the same protocol the *Thessley Security Hardening* WordPress plugin speaks
 (`includes/modules/passkey-login`), so the **existing app works unchanged**:
 same endpoints, request/response fields, error codes and signed string.
 
-Requires Drupal 10.3+ / 11, PHP 8.1+ with OpenSSL. Tested on Drupal 11.4.8,
+Requires Drupal 10.6 / 11, PHP 8.3+ with OpenSSL. Tested on Drupal 11.4.8,
 PHP 8.4, SQLite and MySQL.
 
 ## Install

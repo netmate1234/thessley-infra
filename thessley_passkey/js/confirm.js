@@ -9,7 +9,7 @@
       if (!cfg || !qr || qr.getAttribute('data-thessley-ready')) { return; }
       qr.setAttribute('data-thessley-ready', '1');
 
-      ThessleyQR.render(qr, cfg.appLink, 300);
+      ThessleyQR.render(qr, cfg.appLink, 340);
       var statusEl = document.getElementById('thessley-pk-confirm-status');
       var poll = setInterval(function () {
         fetch(cfg.status, { credentials: 'same-origin' })

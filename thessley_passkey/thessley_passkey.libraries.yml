@@ -1,11 +1,11 @@
 qr:
-  version: 1.1
+  version: 1.2
   js:
     js/vendor/qrcode-generator.js: {}
     js/thessley-qr.js: {}
 
 login:
-  version: 1.1
+  version: 1.2
   css:
     theme:
       css/thessley-passkey.css: {}
@@ -15,7 +15,7 @@ login:
     - thessley_passkey/qr
 
 confirm:
-  version: 1.1
+  version: 1.2
   css:
     theme:
       css/thessley-passkey.css: {}
@@ -25,7 +25,7 @@ confirm:
     - thessley_passkey/qr
 
 devices:
-  version: 1.1
+  version: 1.2
   css:
     theme:
       css/thessley-passkey.css: {}

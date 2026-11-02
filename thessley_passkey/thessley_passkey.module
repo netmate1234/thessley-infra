@@ -49,6 +49,35 @@ function thessley_passkey_form_user_login_form_alter(array &$form, FormStateInte
 }
 
 /**
+ * Implements hook_user_view().
+ *
+ * Keep device management discoverable from the profile body as well as the
+ * local task tab. Some site themes hide local task tabs on the /user page.
+ */
+function thessley_passkey_user_view(array &$build, UserInterface $account, $display, $view_mode) {
+  if ($view_mode !== 'full') {
+    return;
+  }
+
+  $current = \Drupal::currentUser();
+  $is_own_account = (int) $current->id() === (int) $account->id()
+    && $current->hasPermission('use thessley passkey');
+  if (!$is_own_account && !$current->hasPermission('administer thessley passkey')) {
+    return;
+  }
+
+  $build['thessley_passkey_devices_link'] = [
+    '#type' => 'link',
+    '#title' => t('Manage Thessley Passkey devices'),
+    '#url' => Url::fromRoute('thessley_passkey.user_devices', ['user' => $account->id()]),
+    '#weight' => 100,
+    '#prefix' => '<p class="thessley-passkey-profile-link">',
+    '#suffix' => '</p>',
+    '#cache' => ['contexts' => ['user', 'user.permissions']],
+  ];
+}
+
+/**
  * Implements hook_mail().
  */
 function thessley_passkey_mail($key, &$message, $params) {

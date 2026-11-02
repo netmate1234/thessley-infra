@@ -188,15 +188,45 @@ class PasskeyManager {
    * Verifies the Keystore attestation chain and records the result. Never
    * rejects enrolment on it: visibility only, same as the WordPress module.
    */
-  public function recordAttestation(int $row_id, array $chain, string $nonce, string $public_key): void {
+  /**
+   * Verify the device's Keystore chain and record where the key lives.
+   *
+   * @return array{level:string,status:string,reason:string}
+   *   The storage name, the verdict word shared with the PAM and AD services,
+   *   and why. Nothing here rejects the enrolment; it is visibility.
+   */
+  public function recordAttestation(int $row_id, array $chain, string $nonce, string $public_key): array {
     $result = Attestation::verify($chain, $nonce, $public_key);
     if (empty($result['ok'])) {
       $this->store->setAttestationLevel($row_id, NULL);
       $this->audit('attestation_unverified', 'device #' . $row_id . ': ' . ($result['reason'] ?? ''));
-      return;
+      return ['level' => '', 'status' => 'unverified', 'reason' => (string) ($result['reason'] ?? '')];
     }
-    $this->store->setAttestationLevel($row_id, $result['security_level_name']);
-    $this->audit('attestation_verified', 'device #' . $row_id . ': ' . $result['security_level_name']);
+    $level = (string) $result['security_level_name'];
+    $this->store->setAttestationLevel($row_id, $level);
+    $this->audit('attestation_verified', 'device #' . $row_id . ': ' . $level);
+    return ['level' => $level, 'status' => self::attestationStatus($level), 'reason' => 'hardware_attestation_valid'];
+  }
+
+  /**
+   * The verdict words the phone already understands from the Linux PAM and
+   * Windows AD services: the same sentence for a site, a PC and a VPN.
+   */
+  public static function attestationStatus(string $level): string {
+    switch ($level) {
+      case 'tee':
+        return 'verified_tee';
+
+      case 'strongbox':
+        return 'verified_strongbox';
+
+      case 'software':
+        return 'verified_software';
+
+      case 'tpm':
+        return 'verified_tpm';
+    }
+    return 'unverified';
   }
 
   // ---- TPM hardware attestation ---------------------------------------------------------

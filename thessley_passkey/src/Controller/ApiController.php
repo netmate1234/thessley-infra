@@ -322,7 +322,13 @@ class ApiController extends ControllerBase {
 
     $m->audit('enroll_approved', 'user #' . $uid . ' added device "' . $label . '"');
     $m->notifyDeviceEnrolled($uid, $label);
+    // `attestation` is the old field the desktop agents read (a storage name);
+    // `attestation_status` is the verdict the phone shows, in the same words as
+    // the Linux PAM and Windows AD services. Without it a site entry could only
+    // read "not verified" on the phone.
     $level = '';
+    $att_status = 'unverified';
+    $att_reason = '';
     $tpm = $this->param($request, 'tpm');
     if (is_array($tpm)) {
       $result = $m->verifyTpm($id, $row->nonce, $public_key, $tpm);
@@ -330,14 +336,20 @@ class ApiController extends ControllerBase {
         $store->setAttestationLevel($row_id, 'tpm');
         $m->audit('attestation_verified', 'device #' . $row_id . ': tpm (' . trim($result['maker'] . ' ' . $result['model']) . ')');
         $level = 'tpm';
+        $att_status = 'verified_tpm';
+        $att_reason = 'hardware_attestation_valid';
       }
       else {
         $store->setAttestationLevel($row_id, NULL);
         $m->audit('attestation_unverified', 'device #' . $row_id . ': tpm: ' . $result['reason'], TRUE);
+        $att_reason = (string) $result['reason'];
       }
     }
     else {
-      $m->recordAttestation($row_id, $chain, $row->nonce, $public_key);
+      $recorded = $m->recordAttestation($row_id, $chain, $row->nonce, $public_key);
+      $level = $recorded['level'];
+      $att_status = $recorded['status'];
+      $att_reason = $recorded['reason'];
     }
 
     return $this->json([
@@ -345,6 +357,8 @@ class ApiController extends ControllerBase {
       'credential_id' => $credential_id,
       'username' => $account->getAccountName(),
       'attestation' => $level,
+      'attestation_status' => $att_status,
+      'attestation_reason' => $att_reason,
     ]);
   }
 
