@@ -306,7 +306,11 @@ def principal_resolve_name_route(registry: "MachineRegistry", replay_guard: "Rep
         if "\\" in account:
             domain, username = account.split("\\", 1)
             configured_authority = getattr(getattr(directory, "config", None), "authority", "")
-            if not configured_authority or domain.casefold() != configured_authority.casefold():
+            aliases = {configured_authority.casefold()} if configured_authority else set()
+            dns_domain = getattr(directory, "dns_domain", "") or ""
+            if dns_domain:
+                aliases.add(dns_domain.casefold())
+            if not aliases or domain.casefold() not in aliases:
                 return 404, {"result": "error", "message": "This domain account is unavailable for sign-in."}
         if not re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", username, re.IGNORECASE):
             return 400, {"result": "error", "message": "Invalid domain-account request."}

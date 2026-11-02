@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import socket
 import subprocess
 from dataclasses import dataclass
 
@@ -153,6 +154,15 @@ $userSearch.Dispose()
 $groupSearch.Dispose()
 $primarySearch.Dispose()
 """
+
+    @property
+    def dns_domain(self) -> str:
+        """The DNS suffix of this domain, accepted as an alias for the NetBIOS authority."""
+        try:
+            fqdn = socket.getfqdn()
+        except OSError:
+            return ""
+        return fqdn.split(".", 1)[1] if "." in fqdn else ""
 
     def resolve_user_sid(self, sid: str) -> DirectoryPrincipal:
         try:
