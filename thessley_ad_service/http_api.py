@@ -40,6 +40,16 @@ PHONE_ENROLL_CONFIRM_PATH = "/thessley-ad/v1/enrollments/confirm"
 PHONE_ENROLL_CANCEL_PATH = "/thessley-ad/v1/enrollments/cancel"
 AD_LOGON_KEY_ENROLL_PATH = "/thessley-ad/v1/logon-keys/enroll"
 AD_LOGON_KEY_STATUS_PATH = "/thessley-ad/v1/logon-keys/status"
+
+# Members of the configured workstation group sign in; DC administrators may use the
+# same phone flow on a paired workstation, as they already can on the admin site.
+_ADMINISTRATORS_SID = "S-1-5-32-544"
+
+
+def _principal_authorized(principal, allowed_group_sids: frozenset[str]) -> bool:
+    return bool(principal.group_sids.intersection(allowed_group_sids)) or (
+        _ADMINISTRATORS_SID in principal.group_sids
+    )
 PIV_SIGN_START_PATH = "/thessley-ad/v1/piv-sign/start"
 PIV_SIGN_RESULT_PATH = "/thessley-ad/v1/piv-sign/result"
 PIV_SIGN_PHONE_PENDING_PATH = "/thessley-ad/v1/piv-sign/phone-pending"
@@ -250,7 +260,7 @@ def principal_resolve_route(registry: "MachineRegistry", replay_guard: "ReplayGu
             return 404, {"result": "error", "message": "Domain user was not found or is disabled."}
         except DirectoryUnavailable:
             return 503, {"result": "error", "message": "Domain authorization is temporarily unavailable."}
-        authorized = bool(principal.group_sids.intersection(allowed_group_sids))
+        authorized = _principal_authorized(principal, allowed_group_sids)
         try:
             policy = login_policy.resolve(machine_id, principal.group_sids) if login_policy else {
                 "method": METHOD_TPM, "source": "domain-default"
@@ -312,7 +322,7 @@ def principal_resolve_name_route(registry: "MachineRegistry", replay_guard: "Rep
             return 404, {"result": "error", "message": "This domain account is unavailable for sign-in."}
         except DirectoryUnavailable:
             return 503, {"result": "error", "message": "Domain authorization is temporarily unavailable."}
-        if not principal.group_sids.intersection(allowed_group_sids):
+        if not _principal_authorized(principal, allowed_group_sids):
             # Do not return identity details for users outside the configured sign-in population.
             return 404, {"result": "error", "message": "This domain account is unavailable for sign-in."}
         try:
@@ -390,7 +400,7 @@ def login_start_route(registry: "MachineRegistry", replay_guard: "ReplayGuard",
             return 404, {"result": "error", "message": "Domain user was not found or is disabled."}
         except DirectoryUnavailable:
             return 503, {"result": "error", "message": "Domain authorization is temporarily unavailable."}
-        if not principal.group_sids.intersection(allowed_group_sids):
+        if not _principal_authorized(principal, allowed_group_sids):
             return 403, {"result": "error", "message": "This account is not authorized on this computer."}
         try:
             policy = login_policy.resolve(machine_id, principal.group_sids) if login_policy else {
@@ -628,7 +638,7 @@ def phone_enrollment_start_route(registry: "MachineRegistry", replay_guard: "Rep
             return 404, {"result": "error", "message": "Domain user was not found or is disabled."}
         except DirectoryUnavailable:
             return 503, {"result": "error", "message": "Domain authorization is temporarily unavailable."}
-        if not principal.group_sids.intersection(allowed_group_sids):
+        if not _principal_authorized(principal, allowed_group_sids):
             return 403, {"result": "error", "message": "This account is not authorized to enroll a phone."}
         enrollment = phones.create_enrollment(
             machine_id=machine_id, sid=principal.sid, username=principal.username, authority=principal.authority,
