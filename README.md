@@ -1,13 +1,29 @@
-# Thessley infrastructure
+# Thessley Infrastructure
+
+![License](https://img.shields.io/badge/license-GPL--2.0--or--later-7c6cf0?style=flat-square) ![Deck](https://img.shields.io/badge/deck-slides-7c6cf0?style=flat-square)
+
+[![Thessley Infrastructure](docs/preview/hero.png)](https://netmate1234.github.io/Thessley/)
 
 Lab and service infrastructure behind the Thessley projects.
 
-- **`thessley_ad_service/`** — the Active Directory side: phone-key registry, admin web console, AD logon-key enrolment and the DC pairing flow.
-- **`windows-ad-lab/`** — the Windows/AD lab: domain controller notes, the credential-provider prototype, certificate pilot and the SSH gate.
-- **`thessley_passkey/`** — shared server pieces used by the lab service.
-- **`unwantedip_api/`** — the small API the reputation tracker exposes to the hardening plugin.
-- **`crawler-nets-updater.php`** — keeps the crawler network list current on the WordPress hosts.
+## Layout
 
-Lab credentials are **not** in this repository: `windows-ad-lab/LOCAL-CREDENTIALS.txt` is ignored and stays on the machines that need it.
+| Path | What it is |
+|---|---|
+| `thessley_ad_service/` | Active Directory side: phone-key registry, admin web console, logon-key enrolment, DC pairing. |
+| `windows-ad-lab/` | The Windows/AD lab: domain notes, credential-provider prototype, certificate pilot, SSH gate. |
+| `thessley_passkey/` | Shared server pieces used by the lab service. |
+| `unwantedip_api/` | The small API the reputation tracker exposes to the hardening plugin. |
+| `crawler-nets-updater.php` | Keeps the crawler network list current on the WordPress hosts. |
 
-Project family: [Thessley](https://github.com/netmate1234/Thessley) · deck: [overview](https://netmate1234.github.io/Thessley/).
+## Credentials
+
+Lab credentials are **not** in this repository. `windows-ad-lab/LOCAL-CREDENTIALS.txt` is ignored and stays on the machines that need it. Nothing here phones home.
+
+## Related
+
+- [Thessley](https://github.com/netmate1234/Thessley) — overview and the other projects
+
+## License
+
+GPL-2.0-or-later.
