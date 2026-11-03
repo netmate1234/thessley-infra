@@ -652,23 +652,38 @@ code{overflow-wrap:anywhere}.status{font-weight:700}.error{background:#351b20;bo
 <p class="muted small">This request expires shortly. Password sign-in is disabled.</p></section></div>"""
             resume_script = f'''<script nonce="{script_nonce}">
 (()=>{{
- let failures=0;
- const finish=()=>window.location.replace("/admin/qr-login?id={request_id}");
- const poll=async()=>{{
-  try {{
-   const response=await fetch("/admin/qr-status?id={request_id}",{{cache:"no-store"}});
-   const data=await response.json();
-   if (data.status!=="pending") {{ finish(); }}
-   failures=0;
-  }} catch (error) {{
-   // If the poll cannot run, fall back to a single reload rather than waiting forever.
-   failures+=1;
-   if (failures>=3) {{ finish(); }}
-  }}
+ const target = "/admin/qr-login?id={request_id}";
+ const line = document.querySelector(".status-line");
+ const say = (text) => {{ if (line) {{ line.textContent = text; }} }};
+ let done = false, busy = false;
+ const started = Date.now();
+ const stop = () => {{ clearInterval(timer); }};
+ const finish = (text) => {{
+  if (done) return;
+  done = true; stop();
+  if (text) {{ say(text); }} else {{ location.replace(target); }}
  }};
- const timer=setInterval(poll,2000);
- document.addEventListener("visibilitychange",()=>{{ if(!document.hidden) poll(); }});
+ async function poll() {{
+  if (done || busy) return;
+  if (Date.now() - started > 300000) return finish("This request expired. Start a new sign-in.");
+  busy = true;
+  try {{
+   const response = await fetch("/admin/qr-status?id={request_id}", {{cache: "no-store", headers: {{Accept: "application/json"}}}});
+   if (!response.ok) return;
+   const data = await response.json();
+   if (data.status === "approved") return finish(null);
+   if (data.status === "denied") return finish("Approval was denied. Start a new sign-in.");
+   if (data.status === "expired") return finish("This request expired. Start a new sign-in.");
+   say("Waiting for approval on the phone…");
+  }} catch (error) {{
+   // A failed poll is not a reason to reload the page; keep waiting quietly.
+  }} finally {{
+   busy = false;
+  }}
+ }}
+ const timer = setInterval(poll, 2000);
  poll();
+ document.addEventListener("visibilitychange", () => {{ if (!document.hidden) {{ done ? null : poll(); }} }});
 }})();
 </script>'''
             return self._response(200, self._page("Approve admin sign-in", content + resume_script),
