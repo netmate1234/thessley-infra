@@ -1,6 +1,6 @@
 # Thessley Infrastructure
 
-![License](https://img.shields.io/badge/license-GPL--2.0--or--later-7c6cf0?style=flat-square) ![Deck](https://img.shields.io/badge/deck-slides-7c6cf0?style=flat-square)
+![License](https://img.shields.io/badge/license-GPL--2.0--or--later-7c6cf0?style=flat-square) ![Deck](https://img.shields.io/badge/deck-7c6cf0?style=flat-square)
 
 [![Thessley Infrastructure](docs/preview/hero.png)](https://netmate1234.github.io/Thessley/)
 
