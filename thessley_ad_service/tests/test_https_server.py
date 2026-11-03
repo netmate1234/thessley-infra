@@ -3,6 +3,7 @@ import http.client
 import ipaddress
 import json
 import os
+import socket
 import ssl
 import tempfile
 import threading
@@ -107,6 +108,20 @@ class HttpsServerTest(unittest.TestCase):
         self.assertEqual(response.status, 400)
         self.assertEqual(self.route_calls, [])
         connection.close()
+
+    def test_stalled_tls_client_does_not_block_another_request(self):
+        # Regression: the listening socket used to be wrapped in TLS, so one
+        # client that connected without sending a ClientHello blocked accept()
+        # and every later request. The handshake now runs per connection with
+        # a timeout, in the worker thread.
+        stalled = socket.create_connection(("127.0.0.1", self.server.server_address[1]), timeout=2)
+        try:
+            request = Request(self.base + "/test", data=b"{}",
+                              headers={"Content-Type": "application/json"}, method="POST")
+            with urlopen(request, context=self.context, timeout=3) as response:
+                self.assertEqual(response.status, 201)
+        finally:
+            stalled.close()
 
 
 if __name__ == "__main__":

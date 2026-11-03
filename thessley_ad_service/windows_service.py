@@ -205,33 +205,49 @@ def main() -> int:
             session_store=session_store,
         )
         api_server = make_server((config["bind_address"], API_PORT), str(CERT_PATH), str(KEY_PATH), routes)
+        servers = [(api_server, "thessley-ad-api")]
+        admin_server = None
         try:
             admin_server = make_server(
                 (config["bind_address"], ADMIN_PORT), str(CERT_PATH), str(KEY_PATH), {}, admin_web,
             )
-        except Exception:
-            api_server.server_close()
-            raise
+        except OSError:
+            logging.exception(
+                "AD administrator site could not bind %s:%d; the login API and phone-key enrollment stay up. "
+                "Another product may own the port; free it and restart the service to restore /admin/.",
+                config["bind_address"], ADMIN_PORT,
+            )
+        else:
+            servers.append((admin_server, "thessley-ad-admin"))
+        enrollment_server = None
         try:
             enrollment_server = make_server(
                 (config["bind_address"], ENROLLMENT_PORT), str(CERT_PATH), str(KEY_PATH), enrollment_routes,
             )
-        except Exception:
-            api_server.server_close()
-            admin_server.server_close()
-            raise
+        except OSError:
+            logging.exception(
+                "AD phone-key enrollment listener could not bind %s:%d; existing keys and the login API stay up.",
+                config["bind_address"], ENROLLMENT_PORT,
+            )
+        else:
+            servers.append((enrollment_server, "thessley-ad-enrollment"))
         stopped = threading.Event()
         for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
             if sig is not None:
                 signal.signal(sig, lambda _sig, _frame: stopped.set())
         logging.info("AD login API ready at https://%s:%d/ (TLS SHA-256 %s)",
                      config["public_host"], API_PORT, certificate_pin)
-        logging.info("AD administrator site ready at https://%s:%d/admin/", config["public_host"], ADMIN_PORT)
-        logging.info("AD phone-key enrollment listener ready at https://%s:%d/", config["public_host"], ENROLLMENT_PORT)
-        servers = (api_server, admin_server, enrollment_server)
+        if admin_server is not None:
+            logging.info("AD administrator site ready at https://%s:%d/admin/", config["public_host"], ADMIN_PORT)
+        else:
+            logging.error("AD administrator site is NOT running: TCP %d is unavailable.", ADMIN_PORT)
+        if enrollment_server is not None:
+            logging.info("AD phone-key enrollment listener ready at https://%s:%d/", config["public_host"], ENROLLMENT_PORT)
+        else:
+            logging.error("AD phone-key enrollment listener is NOT running: TCP %d is unavailable.", ENROLLMENT_PORT)
         threads = [
             threading.Thread(target=server.serve_forever, name=name, daemon=True)
-            for server, name in zip(servers, ("thessley-ad-api", "thessley-ad-admin", "thessley-ad-enrollment"), strict=True)
+            for server, name in servers
         ]
         def cleanup_expired_challenges() -> None:
             while not stopped.wait(60):
@@ -251,7 +267,7 @@ def main() -> int:
             stopped.wait()
         finally:
             stopped.set()
-            for server in servers:
+            for server, _name in servers:
                 server.shutdown()
                 server.server_close()
             for thread in threads:

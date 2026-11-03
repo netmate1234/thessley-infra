@@ -17,6 +17,13 @@ if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
 if (-not (Get-Service -Name ADWS -ErrorAction SilentlyContinue)) {
     throw 'The Active Directory Web Services are missing; this host does not appear to be a domain controller.'
 }
+# The optional Thessley PAM for Windows web page also defaults to TCP 47820.
+# Refuse to install over it: the AD administrator site would lose the port and
+# the service would start without /admin/.
+$pamWebTask = Get-ScheduledTask -TaskName 'ThessleyPamWinWeb' -ErrorAction SilentlyContinue
+if ($pamWebTask -and $pamWebTask.State -ne 'Disabled') {
+    throw 'The Thessley PAM web page (ThessleyPamWinWeb) is enabled and uses TCP 47820. Turn it off first (thessley-pam-win web off), then rerun this installer.'
+}
 # Automatic defaults: the LAN address that carries the default route, the
 # sign-in group when it exists (otherwise Domain Admins), and a /24 firewall
 # scope derived from that address.

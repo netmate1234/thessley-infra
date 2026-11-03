@@ -16,6 +16,18 @@ Lab and service infrastructure behind the Thessley projects.
 | `unwantedip_api/` | The small API the reputation tracker exposes to the hardening plugin. |
 | `crawler-nets-updater.php` | Keeps the crawler network list current on the WordPress hosts. |
 
+## Ports on the AD service
+
+| Port | What it serves |
+| --- | --- |
+| 47810 | AD login API (phone approvals) |
+| 47811 | Phone-key enrollment |
+| 47820 | `/admin/` console |
+
+The optional Thessley PAM for Windows web page also defaults to **47820**.
+On a domain controller leave it off: the AD service owns that port. Its
+startup now keeps 47810/47811 running and logs an error if 47820 is taken.
+
 ## Credentials
 
 Lab credentials are **not** in this repository. `windows-ad-lab/LOCAL-CREDENTIALS.txt` is ignored and stays on the machines that need it. Nothing here phones home.

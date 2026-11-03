@@ -162,6 +162,7 @@ def make_server(address: tuple[str, int], certfile: str, keyfile: str,
     class Server(ThreadingHTTPServer):
         daemon_threads = True
         request_queue_size = 32
+        ssl_context: ssl.SSLContext
 
         def __init__(self, *args, **kwargs):
             self._request_slots = threading.BoundedSemaphore(32)
@@ -178,8 +179,19 @@ def make_server(address: tuple[str, int], certfile: str, keyfile: str,
                 raise
 
         def process_request_thread(self, request, client_address):
+            # Do the TLS handshake here, in the worker, with a timeout. Wrapping
+            # the listening socket made accept() perform the handshake in the
+            # single accept thread with no timeout: one client that connected
+            # and stalled blocked every later connection indefinitely.
             try:
-                super().process_request_thread(request, client_address)
+                tls = request
+                try:
+                    request.settimeout(5)
+                    tls = self.ssl_context.wrap_socket(request, server_side=True)
+                except (OSError, ValueError):
+                    self.shutdown_request(request)
+                    return
+                super().process_request_thread(tls, client_address)
             finally:
                 self._request_slots.release()
 
@@ -190,7 +202,7 @@ def make_server(address: tuple[str, int], certfile: str, keyfile: str,
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certfile=certfile, keyfile=keyfile)
-    httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+    httpd.ssl_context = context
     return httpd
 
 
