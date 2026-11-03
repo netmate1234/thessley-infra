@@ -32,7 +32,9 @@ enum SAMPLE_FIELD_ID
     SFI_EDIT_TEXT         = 11,
     SFI_COMBOBOX          = 12,
     SFI_QR_SETUP_LINK     = 13,
-    SFI_NUM_FIELDS        = 14,  // Keep NUM_FIELDS last; it is the credential field count.
+    SFI_USERNAME          = 14,
+    SFI_DOMAINNAME        = 15,
+    SFI_NUM_FIELDS        = 16,  // Keep NUM_FIELDS last; it is the credential field count.
 };
 
 // The first value indicates when the tile is displayed (selected, not selected)
@@ -66,6 +68,8 @@ static const FIELD_STATE_PAIR s_rgFieldStatePairs[] =
     { CPFS_DISPLAY_IN_SELECTED_TILE,   CPFIS_NONE    },    // SFI_EDIT_TEXT (QR)
     { CPFS_HIDDEN,                     CPFIS_NONE    },    // SFI_COMBOBOX
     { CPFS_HIDDEN,                     CPFIS_NONE    },    // SFI_QR_SETUP_LINK
+    { CPFS_HIDDEN,                     CPFIS_NONE    },    // SFI_USERNAME (Other user)
+    { CPFS_HIDDEN,                     CPFIS_NONE    },    // SFI_DOMAINNAME (Other user)
 };
 
 // Field descriptors for unlock and logon.
@@ -77,7 +81,7 @@ static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_rgCredProvFieldDescriptors[]
     { SFI_TILEIMAGE,         CPFT_TILE_IMAGE,    L"Image",                      CPFG_CREDENTIAL_PROVIDER_LOGO  },
     { SFI_LABEL,             CPFT_SMALL_TEXT,    L"Tooltip",                    CPFG_CREDENTIAL_PROVIDER_LABEL },
     { SFI_LARGE_TEXT,        CPFT_LARGE_TEXT,    L"Thessley AD Passkey"                                       },
-    { SFI_PASSWORD,          CPFT_PASSWORD_TEXT, L"TPM smart-card PIN"                                       },
+    { SFI_PASSWORD,          CPFT_PASSWORD_TEXT, L"PIN or password"                                         },
     { SFI_SUBMIT_BUTTON,     CPFT_SUBMIT_BUTTON, L"Submit"                                                     },
     { SFI_LAUNCHWINDOW_LINK, CPFT_COMMAND_LINK,  L"Launch helper window"                                       },
     { SFI_HIDECONTROLS_LINK, CPFT_COMMAND_LINK,  L"Hide additional controls"                                   },
@@ -88,6 +92,8 @@ static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_rgCredProvFieldDescriptors[]
     { SFI_EDIT_TEXT,         CPFT_LARGE_TEXT,    L"Scan this QR with Thessley Passkey"                         },
     { SFI_COMBOBOX,          CPFT_COMBOBOX,      L"Combobox"                                                   },
     { SFI_QR_SETUP_LINK,     CPFT_COMMAND_LINK,  L"Set up QR-only sign-in"                                    },
+    { SFI_USERNAME,          CPFT_EDIT_TEXT,     L"Username"                                                   },
+    { SFI_DOMAINNAME,        CPFT_EDIT_TEXT,     L"Domain"                                                     },
 };
 
 static const PWSTR s_rgComboBoxStrings[] =

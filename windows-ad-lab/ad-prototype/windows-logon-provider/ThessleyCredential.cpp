@@ -14,10 +14,15 @@
 #endif
 #include <unknwn.h>
 #include <wincrypt.h>
+#include <ntsecapi.h>
+#include <sddl.h>
+#include <wtsapi32.h>
+#include <tlhelp32.h>
 #include <string>
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <cstring>
 #include "CSampleCredential.h"
 #include "guid.h"
 #include "provider_diag.h"
@@ -46,6 +51,171 @@ static bool IsTicketLogonTestMode(const AdLabVscConfig& config)
     (void)config;
     return false;
 #endif
+}
+
+static bool IsPivPhoneTestMode(const AdLabVscConfig& config)
+{
+    return config.pivPhoneSigning && !config.passwordPlusPhoneTest;
+}
+
+static bool IsAdPasswordPlusPhoneTestMode(const AdLabVscConfig& config)
+{
+    return config.passwordPlusPhoneTest;
+}
+
+// Identify local accounts from the machine SAM SID, not the provider ID or
+// display name. LogonUI can surface domain profiles through the local-user
+// provider, and name formats can vary between DOMAIN\\user and MACHINE\\user.
+static bool IsLocalSamAccountSid(PCWSTR sidText)
+{
+    if (!sidText || !*sidText) return false;
+    PSID accountSid = nullptr;
+    if (!ConvertStringSidToSidW(sidText, &accountSid)) return false;
+
+    LSA_OBJECT_ATTRIBUTES attributes{};
+    attributes.Length = sizeof(attributes);
+    LSA_HANDLE policy = nullptr;
+    NTSTATUS status = LsaOpenPolicy(nullptr, &attributes,
+                                    POLICY_VIEW_LOCAL_INFORMATION, &policy);
+    PPOLICY_ACCOUNT_DOMAIN_INFO info = nullptr;
+    if (status >= 0)
+        status = LsaQueryInformationPolicy(policy, PolicyAccountDomainInformation,
+                                           reinterpret_cast<PVOID *>(&info));
+
+    bool isLocal = false;
+    if (status >= 0 && info && info->DomainSid && IsValidSid(accountSid))
+    {
+        const UCHAR localCount = *GetSidSubAuthorityCount(info->DomainSid);
+        const UCHAR accountCount = *GetSidSubAuthorityCount(accountSid);
+        const SID_IDENTIFIER_AUTHORITY *localAuthority = GetSidIdentifierAuthority(info->DomainSid);
+        const SID_IDENTIFIER_AUTHORITY *accountAuthority = GetSidIdentifierAuthority(accountSid);
+        isLocal = localAuthority && accountAuthority && accountCount == localCount + 1 &&
+            std::memcmp(localAuthority, accountAuthority, sizeof(*localAuthority)) == 0;
+        for (UCHAR index = 0; isLocal && index < localCount; ++index)
+            isLocal = *GetSidSubAuthority(info->DomainSid, index) ==
+                      *GetSidSubAuthority(accountSid, index);
+    }
+
+    if (info) LsaFreeMemory(info);
+    if (policy) LsaClose(policy);
+    LocalFree(accountSid);
+    return isLocal;
+}
+
+// CPUS_LOGON is also used by LogonUI while unlocking an existing console
+// session on some Windows builds. In that case KerbCertificateLogon creates
+// a separate logon context, leaving the shell's original ticket cache empty.
+// Identify the existing console user's AuthenticationId so the caller can
+// use KERB_CERTIFICATE_UNLOCK_LOGON instead. WTSQueryUserToken requires
+// SeTcbPrivilege, which LogonUI does not hold. Read the token statistics of
+// the existing shell process instead; the process/token handles are query-only
+// and are immediately closed.
+static HRESULT GetActiveConsoleLogonIdForSid(PCWSTR expectedSid, bool requireLocked,
+                                            DWORD* sessionId, LUID* logonId)
+{
+    if (!expectedSid || !sessionId || !logonId) return E_POINTER;
+    *sessionId = 0xffffffff;
+    ZeroMemory(logonId, sizeof(*logonId));
+
+    const DWORD activeSession = WTSGetActiveConsoleSessionId();
+    if (activeSession == 0xffffffff)
+        return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+
+    LPWSTR sessionInfoBuffer = nullptr;
+    DWORD sessionInfoBytes = 0;
+    if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, activeSession,
+                                     WTSSessionInfoEx, &sessionInfoBuffer,
+                                     &sessionInfoBytes))
+        return HRESULT_FROM_WIN32(GetLastError());
+    const auto* sessionInfo = reinterpret_cast<const WTSINFOEXW*>(sessionInfoBuffer);
+    const bool isLocked = sessionInfoBytes >= sizeof(WTSINFOEXW) &&
+        sessionInfo->Level == 1 &&
+        sessionInfo->Data.WTSInfoExLevel1.SessionFlags == WTS_SESSIONSTATE_LOCK;
+    WTSFreeMemory(sessionInfoBuffer);
+    if (requireLocked && !isLocked)
+        return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+
+    PSID expected = nullptr;
+    if (!ConvertStringSidToSidW(expectedSid, &expected))
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+    {
+        const HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
+        LocalFree(expected);
+        return hr;
+    }
+
+    HRESULT result = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry))
+    {
+        do
+        {
+            if (_wcsicmp(entry.szExeFile, L"StartMenuExperienceHost.exe") != 0 &&
+                _wcsicmp(entry.szExeFile, L"explorer.exe") != 0)
+                continue;
+
+            DWORD processSession = 0xffffffff;
+            if (!ProcessIdToSessionId(entry.th32ProcessID, &processSession) ||
+                processSession != activeSession)
+                continue;
+
+            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                         entry.th32ProcessID);
+            if (!process) { result = HRESULT_FROM_WIN32(GetLastError()); continue; }
+            HANDLE token = nullptr;
+            if (!OpenProcessToken(process, TOKEN_QUERY, &token))
+            {
+                result = HRESULT_FROM_WIN32(GetLastError());
+                CloseHandle(process);
+                continue;
+            }
+
+            DWORD bytes = 0;
+            GetTokenInformation(token, TokenUser, nullptr, 0, &bytes);
+            if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || bytes == 0)
+            {
+                result = HRESULT_FROM_WIN32(GetLastError());
+                CloseHandle(token);
+                CloseHandle(process);
+                continue;
+            }
+            std::vector<BYTE> tokenUserBuffer(bytes);
+            if (!GetTokenInformation(token, TokenUser, tokenUserBuffer.data(), bytes, &bytes))
+            {
+                result = HRESULT_FROM_WIN32(GetLastError());
+                CloseHandle(token);
+                CloseHandle(process);
+                continue;
+            }
+            const bool sameUser = EqualSid(expected,
+                reinterpret_cast<TOKEN_USER*>(tokenUserBuffer.data())->User.Sid) != FALSE;
+            if (sameUser)
+            {
+                TOKEN_STATISTICS statistics{};
+                if (GetTokenInformation(token, TokenStatistics, &statistics,
+                                        sizeof(statistics), &bytes))
+                {
+                    *sessionId = activeSession;
+                    *logonId = statistics.AuthenticationId;
+                    result = S_OK;
+                    CloseHandle(token);
+                    CloseHandle(process);
+                    break;
+                }
+                result = HRESULT_FROM_WIN32(GetLastError());
+            }
+            CloseHandle(token);
+            CloseHandle(process);
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    LocalFree(expected);
+    return result;
 }
 
 static std::wstring RenderQr(const std::string &matrix)
@@ -81,41 +251,127 @@ static std::wstring RenderQr(const std::string &matrix)
     return out;
 }
 
-static bool LaunchQrViewer(const std::string &matrix)
+struct QrViewerWindowSearch
 {
-    if (matrix.empty() || matrix.size() > 12000) return false;
+    DWORD processId;
+    HWND window;
+};
+
+static BOOL CALLBACK FindQrViewerWindow(HWND window, LPARAM parameter)
+{
+    auto *search = reinterpret_cast<QrViewerWindowSearch *>(parameter);
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    if (processId != search->processId) return TRUE;
+
+    wchar_t className[64]{};
+    if (GetClassNameW(window, className, ARRAYSIZE(className)) > 0 &&
+        wcscmp(className, L"ThessleyADQrViewer") == 0 && IsWindowVisible(window))
+    {
+        search->window = window;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static bool LaunchQrViewer(const std::string &matrix, HWND *viewerWindow,
+                           const std::atomic<bool> &cancelled, DWORD *launchError,
+                           bool currentDesktop)
+{
+    if (viewerWindow) *viewerWindow = nullptr;
+    if (launchError) *launchError = ERROR_SUCCESS;
+    if (matrix.empty() || matrix.size() > 12000)
+    {
+        if (launchError) *launchError = ERROR_INVALID_DATA;
+        return false;
+    }
     const int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, matrix.data(),
                                            static_cast<int>(matrix.size()), nullptr, 0);
-    if (chars <= 0) return false;
+    if (chars <= 0)
+    {
+        if (launchError) *launchError = ERROR_NO_UNICODE_TRANSLATION;
+        return false;
+    }
     std::wstring wideMatrix(static_cast<size_t>(chars), L'\0');
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, matrix.data(),
-                             static_cast<int>(matrix.size()), wideMatrix.data(), chars)) return false;
+                             static_cast<int>(matrix.size()), wideMatrix.data(), chars))
+    {
+        if (launchError) *launchError = GetLastError();
+        return false;
+    }
 #ifdef THESSLEY_TICKET_LOGON_TEST
     const std::wstring app = L"C:\\ProgramData\\ThessleyPamWin\\ad-ticket-logon-test\\ThessleyADQrViewer.exe";
 #else
-    const std::wstring app = L"C:\\ProgramData\\ThessleyPamWin\\ad-credential-provider\\ThessleyADQrViewer.exe";
+    const std::wstring app = L"C:\\ProgramData\\ThessleyPamWin\\ad-credential-provider\\ThessleyADQrViewer-wake-safe.exe";
 #endif
     std::wstring command = L"\"" + app + L"\" --matrix=" + wideMatrix;
     std::vector<wchar_t> writable(command.begin(), command.end());
     writable.push_back(L'\0');
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
-    startup.lpDesktop = const_cast<LPWSTR>(L"WinSta0\\Winlogon");
+    // Credential UI (mstsc) runs on the caller's interactive desktop. The
+    // Winlogon desktop is appropriate only for pre-login and unlock scenarios.
+    startup.lpDesktop = currentDesktop
+        ? nullptr : const_cast<LPWSTR>(L"WinSta0\\Winlogon");
     PROCESS_INFORMATION process{};
     const BOOL ok = CreateProcessW(app.c_str(), writable.data(), nullptr, nullptr, FALSE,
                                    CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &startup, &process);
-    if (ok)
+    if (!ok)
     {
-        CloseHandle(process.hThread);
-        CloseHandle(process.hProcess);
+        if (launchError) *launchError = GetLastError();
+        return false;
     }
-    return ok != FALSE;
+
+    CloseHandle(process.hThread);
+    HWND found = nullptr;
+    DWORD error = ERROR_TIMEOUT;
+    // CreateProcess only means the viewer process was created. Wait for its
+    // visible Winlogon-desktop window before claiming that the QR is shown.
+    // This avoids the wake/re-enumeration race where cancellation can arrive
+    // before the viewer has created a window, leaving either no QR or a stale
+    // QR window after the credential is idle.
+    for (DWORD waited = 0; waited < 5000 && !cancelled.load(); waited += 100)
+    {
+        QrViewerWindowSearch search{ process.dwProcessId, nullptr };
+        EnumWindows(FindQrViewerWindow, reinterpret_cast<LPARAM>(&search));
+        if (search.window)
+        {
+            found = search.window;
+            error = ERROR_SUCCESS;
+            break;
+        }
+        if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0)
+        {
+            DWORD exitCode = ERROR_APP_INIT_FAILURE;
+            GetExitCodeProcess(process.hProcess, &exitCode);
+            error = exitCode == ERROR_SUCCESS ? ERROR_APP_INIT_FAILURE : exitCode;
+            break;
+        }
+        Sleep(100);
+    }
+
+    if (!found)
+    {
+        if (cancelled.load()) error = ERROR_CANCELLED;
+        // The child is our QR viewer and failed to produce a usable window.
+        // Do not leave an untracked process/window displaying a stale login QR.
+        if (WaitForSingleObject(process.hProcess, 0) != WAIT_OBJECT_0)
+            TerminateProcess(process.hProcess, error);
+        WaitForSingleObject(process.hProcess, 500);
+    }
+    else if (viewerWindow)
+    {
+        *viewerWindow = found;
+    }
+
+    CloseHandle(process.hProcess);
+    if (launchError) *launchError = error;
+    return found != nullptr;
 }
 
-static void CloseQrViewer()
+static void CloseQrViewer(HWND viewer)
 {
-    HWND viewer = FindWindowW(L"ThessleyADQrViewer", L"Thessley AD approval QR");
-    if (viewer) PostMessageW(viewer, WM_CLOSE, 0, 0);
+    if (viewer && IsWindow(viewer)) PostMessageW(viewer, WM_CLOSE, 0, 0);
 }
 
 static std::string JsonString(const std::string &line, const char *key)
@@ -129,6 +385,38 @@ static std::string JsonString(const std::string &line, const char *key)
     const auto end = line.find('"', start + 1);
     if (end == std::string::npos) return {};
     return line.substr(start + 1, end - start - 1);
+}
+
+// RunAgent combines the CLI's stdout and stderr. On failure, retain only a
+// short, single-line human diagnostic; never write a successful JSON response
+// (which contains the one-time QR link and request identifiers) to the log.
+static std::wstring SafeAgentFailureDetail(const std::string &output)
+{
+    if (output.empty() || output.size() > 4096 || output.find('{') != std::string::npos ||
+        output.find("thessleypam:") != std::string::npos ||
+        output.find("https:") != std::string::npos ||
+        output.find("request_id") != std::string::npos ||
+        output.find("qr_matrix") != std::string::npos ||
+        output.find("signature") != std::string::npos ||
+        output.find("nonce") != std::string::npos ||
+        output.find("machine_id") != std::string::npos)
+        return L"agent failed; diagnostic suppressed";
+
+    const size_t lineEnd = output.find_first_of("\r\n");
+    const size_t length = std::min<size_t>(lineEnd == std::string::npos ? output.size() : lineEnd, 180);
+    if (length == 0) return L"agent failed without a diagnostic";
+    std::string line = output.substr(0, length);
+    for (char &ch : line)
+        if (static_cast<unsigned char>(ch) < 0x20 || static_cast<unsigned char>(ch) > 0x7e)
+            ch = ' ';
+    const int chars = MultiByteToWideChar(CP_UTF8, 0, line.data(),
+                                           static_cast<int>(line.size()), nullptr, 0);
+    if (chars <= 0) return L"agent failed; diagnostic encoding unavailable";
+    std::wstring detail(static_cast<size_t>(chars), L'\0');
+    if (!MultiByteToWideChar(CP_UTF8, 0, line.data(), static_cast<int>(line.size()),
+                             detail.data(), chars))
+        return L"agent failed; diagnostic encoding unavailable";
+    return L"agent_error=" + detail;
 }
 
 static HRESULT RetrieveKerberosAuthPackage(ULONG *packageId)
@@ -147,6 +435,25 @@ static HRESULT RetrieveKerberosAuthPackage(ULONG *packageId)
     return status < 0 ? HRESULT_FROM_NT(status) : S_OK;
 }
 
+static std::wstring ReadConfiguredAdDefaultDomain()
+{
+    constexpr wchar_t keyPath[] = L"SOFTWARE\\Thessley\\ADCredentialProvider";
+    DWORD type = 0;
+    DWORD bytes = 0;
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, keyPath, L"DefaultDomain",
+                     RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+                     &type, nullptr, &bytes) != ERROR_SUCCESS ||
+        bytes < sizeof(wchar_t) || bytes > 1024)
+        return L"";
+
+    std::vector<wchar_t> value(bytes / sizeof(wchar_t), L'\0');
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, keyPath, L"DefaultDomain",
+                     RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+                     &type, value.data(), &bytes) != ERROR_SUCCESS)
+        return L"";
+    return std::wstring(value.data());
+}
+
 struct PasswordVectorWiper
 {
     std::vector<WCHAR> &value;
@@ -162,6 +469,7 @@ CSampleCredential::CSampleCredential():
     _pszUserSid(nullptr),
     _pszQualifiedUserName(nullptr),
     _fIsLocalUser(false),
+    _fOtherUserTile(false),
     _adLabUser(false),
     _vaultAvailable(false),
     _passwordEntryMode(false),
@@ -243,9 +551,13 @@ void CSampleCredential::_StartApproval()
     _approvalCancelled.store(false);
     _phoneApproved.store(false);
     _phoneApprovedAt.store(0);
+    if (_adLabUser && IsPivPhoneTestMode(_adLabVscConfig))
+        SetAdLabPivRequestId(_pszUserSid, nullptr);
     ThessleySecureClear(_passwordPendingSave);
     ThessleySecureClear(_pinPendingSave);
     _savePasswordAfterSuccess = false;
+    const bool passwordFollowsPhone = _fOtherUserTile ||
+        (_adLabUser && IsAdPasswordPlusPhoneTestMode(_adLabVscConfig));
     if (_rgFieldStrings[SFI_EDIT_TEXT])
     {
         SecureZeroMemory(_rgFieldStrings[SFI_EDIT_TEXT], wcslen(_rgFieldStrings[SFI_EDIT_TEXT]) * sizeof(WCHAR));
@@ -264,6 +576,22 @@ void CSampleCredential::_StartApproval()
     {
         _pCredProvCredentialEvents->SetFieldString(this, SFI_EDIT_TEXT, _rgFieldStrings[SFI_EDIT_TEXT]);
         _pCredProvCredentialEvents->SetFieldString(this, SFI_LOGONSTATUS_TEXT, _rgFieldStrings[SFI_LOGONSTATUS_TEXT]);
+        if (passwordFollowsPhone)
+            _pCredProvCredentialEvents->SetFieldState(this, SFI_PASSWORD, CPFS_HIDDEN);
+    }
+    // The generic domain tile must not retain a password entered before the
+    // phone approval. The user enters it only after the one-use approval is
+    // granted.
+    if (passwordFollowsPhone && _rgFieldStrings[SFI_PASSWORD])
+    {
+        SecureZeroMemory(_rgFieldStrings[SFI_PASSWORD],
+                         wcslen(_rgFieldStrings[SFI_PASSWORD]) * sizeof(WCHAR));
+        CoTaskMemFree(_rgFieldStrings[SFI_PASSWORD]);
+        _rgFieldStrings[SFI_PASSWORD] = nullptr;
+        SHStrDupW(L"", &_rgFieldStrings[SFI_PASSWORD]);
+        if (_pCredProvCredentialEvents && _rgFieldStrings[SFI_PASSWORD])
+            _pCredProvCredentialEvents->SetFieldString(this, SFI_PASSWORD,
+                                                       _rgFieldStrings[SFI_PASSWORD]);
     }
 
     IStream *eventStream = nullptr, *credentialStream = nullptr;
@@ -343,9 +671,14 @@ void CSampleCredential::_StartApproval()
             };
             bool ok = false;
             const PCWSTR context = _cpus == CPUS_UNLOCK_WORKSTATION ? L"unlock" : L"interactive";
+            const bool pivSigning = _adLabUser && IsPivPhoneTestMode(_adLabVscConfig) &&
+                _cpus == CPUS_LOGON;
             std::string started;
-            HRESULT agentHr = StartAdApprovalForSid(_pszUserSid, context,
-                                                    _approvalCancelled, &started);
+            HRESULT agentHr = _fOtherUserTile
+                ? StartAdApprovalForAccount(_pszQualifiedUserName, context,
+                                            _approvalCancelled, &started)
+                : StartAdApprovalForSid(_pszUserSid, context,
+                                        _approvalCancelled, &started, pivSigning);
             std::string requestId = SUCCEEDED(agentHr)
                 ? JsonString(started, "\"request_id\"") : std::string();
             std::string credentialMethod = SUCCEEDED(agentHr)
@@ -360,10 +693,13 @@ void CSampleCredential::_StartApproval()
             if (SUCCEEDED(agentHr) && credentialMethod != "tpm_smartcard")
                 agentHr = E_ACCESSDENIED;
 #endif
-            ClearAdApprovalOutput(&started);
+            const std::wstring failureDetail = FAILED(agentHr)
+                ? SafeAgentFailureDetail(started) : L"QR matrix received; contents omitted";
             ProviderDiag(L"ADApprovalStart", agentHr,
-                         static_cast<DWORD>(std::min<size_t>(matrix.size(), MAXDWORD)),
-                         matrix.empty() ? L"QR matrix missing" : L"QR matrix received; contents omitted");
+                         static_cast<DWORD>(std::min<size_t>(started.size(), MAXDWORD)),
+                         FAILED(agentHr) ? failureDetail.c_str()
+                                         : (matrix.empty() ? L"QR matrix missing" : failureDetail.c_str()));
+            ClearAdApprovalOutput(&started);
 
             std::wstring wideRequestId;
             if (!requestId.empty() && requestId.size() <= 128 &&
@@ -374,17 +710,53 @@ void CSampleCredential::_StartApproval()
             else
                 agentHr = E_INVALIDARG;
 
+            bool pivRequestStored = false;
+            if (SUCCEEDED(agentHr) && !_approvalCancelled.load() && pivSigning)
+            {
+                pivRequestStored = SetAdLabPivRequestId(_pszUserSid, wideRequestId.c_str());
+                if (!pivRequestStored)
+                {
+                    agentHr = E_ACCESSDENIED;
+                    ProviderDiag(L"StorePendingPivPhoneRequestId", agentHr, 0,
+                                 L"could not publish the one-use pending request id");
+                }
+                else
+                {
+                    ProviderDiag(L"PendingPivPhoneRequestIdReady", S_OK, 0,
+                                 L"one-use id available; no QR or credential data logged");
+                }
+            }
+
+            bool qrViewerFailed = false;
             if (SUCCEEDED(agentHr) && !_approvalCancelled.load() && !matrix.empty())
             {
-                const bool viewerStarted = LaunchQrViewer(matrix);
-                const DWORD viewerError = viewerStarted ? ERROR_SUCCESS : GetLastError();
+                HWND qrViewer = nullptr;
+                DWORD viewerError = ERROR_SUCCESS;
+                bool viewerStarted = LaunchQrViewer(matrix, &qrViewer,
+                    _approvalCancelled, &viewerError, _cpus == CPUS_CREDUI);
+                if (!viewerStarted && !_approvalCancelled.load())
+                {
+                    ProviderDiag(L"ADApprovalQrViewerRetry",
+                                 HRESULT_FROM_WIN32(viewerError), 1,
+                                 L"first viewer attempt did not produce a visible window");
+                    Sleep(350);
+                    if (!_approvalCancelled.load())
+                        viewerStarted = LaunchQrViewer(matrix, &qrViewer,
+                            _approvalCancelled, &viewerError, _cpus == CPUS_CREDUI);
+                }
                 ProviderDiag(L"ADApprovalQrViewer",
                     viewerStarted ? S_OK : HRESULT_FROM_WIN32(viewerError),
-                    static_cast<DWORD>(std::min<size_t>(matrix.size(), MAXDWORD)));
+                    static_cast<DWORD>(std::min<size_t>(matrix.size(), MAXDWORD)),
+                    viewerStarted ? L"visible QR window confirmed on Winlogon desktop"
+                                  : L"viewer did not produce a visible window; launch error recorded");
                 if (viewerStarted)
                 {
-                    update(SFI_EDIT_TEXT, L"Scan and approve on your phone. First setup may ask for the card PIN once.");
-                    update(SFI_LOGONSTATUS_TEXT, L"Waiting for phone approval.");
+                    update(SFI_EDIT_TEXT, pivSigning
+                        ? L"Approve on your phone, then submit this tile for its exact PIV signature."
+                        : L"Scan and approve on your phone.");
+                    update(SFI_LOGONSTATUS_TEXT, pivSigning
+                        ? L"Waiting for phone approval and the matching Windows PIV request."
+                        : L"Waiting for phone approval.");
                     std::string result;
                     agentHr = PollAdApproval(wideRequestId.c_str(), 175,
                                              _approvalCancelled, &result);
@@ -393,9 +765,11 @@ void CSampleCredential::_StartApproval()
                 }
                 else
                 {
-                    agentHr = HRESULT_FROM_WIN32(GetLastError());
-                    update(SFI_LOGONSTATUS_TEXT, L"Could not open the approval QR. Select this tile to retry.");
+                    agentHr = HRESULT_FROM_WIN32(viewerError == ERROR_SUCCESS
+                        ? ERROR_CANCELLED : viewerError);
+                    qrViewerFailed = true;
                 }
+                CloseQrViewer(qrViewer);
             }
             else if (SUCCEEDED(agentHr))
             {
@@ -404,16 +778,36 @@ void CSampleCredential::_StartApproval()
                 agentHr = E_FAIL;
             }
             if (FAILED(agentHr) && !_approvalCancelled.load())
-                update(SFI_LOGONSTATUS_TEXT, L"Could not start phone approval. Check network access and retry.");
+                update(SFI_LOGONSTATUS_TEXT, qrViewerFailed
+                    ? L"The approval QR window did not appear. Select this tile to retry."
+                    : L"Could not start phone approval. Check network access and retry.");
             ClearAdApprovalOutput(&started);
-            CloseQrViewer();
+            if ((!ok || _approvalCancelled.load()) && pivRequestStored)
+            {
+                SetAdLabPivRequestId(_pszUserSid, nullptr);
+                ProviderDiag(L"ClearPendingPivPhoneRequestId", S_OK, 0,
+                             L"request ended before approval; one-use id cleared");
+            }
             if (ok && !_approvalCancelled.load())
             {
                 _phoneApprovedAt.store(GetTickCount64());
                 _phoneApproved.store(true);
-                update(SFI_LOGONSTATUS_TEXT, IsAutoLogonReady() && providerEvents
-                    ? L"Phone approved. Signing in..."
-                    : L"Phone approved. Select Submit to sign in.");
+                const bool passwordFollowsPhone = _fOtherUserTile ||
+                    (_adLabUser && IsAdPasswordPlusPhoneTestMode(_adLabVscConfig));
+                update(SFI_LOGONSTATUS_TEXT, pivSigning
+                    ? L"Phone signed this PIV login. Windows is checking it."
+                    : (IsAutoLogonReady() && providerEvents
+                        ? L"Phone approved. Signing in..."
+                        : (passwordFollowsPhone
+                            ? L"Phone approved. Enter the Windows password and submit."
+                            : L"Phone approved. Select Submit to sign in.")));
+                if (passwordFollowsPhone && events && credential)
+                {
+                    const HRESULT showPasswordHr = events->SetFieldState(
+                        credential, SFI_PASSWORD, CPFS_DISPLAY_IN_SELECTED_TILE);
+                    ProviderDiag(L"OtherUserShowPasswordAfterApproval", showPasswordHr, 0,
+                                 L"password field revealed only after phone approval");
+                }
                 if (IsAutoLogonReady() && providerEvents)
                 {
                     const HRESULT changedHr = providerEvents->CredentialsChanged(providerAdviseContext);
@@ -461,9 +855,13 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
     HRESULT hr = S_OK;
     _cpus = cpus;
 
-    GUID guidProvider;
-    pcpUser->GetProviderID(&guidProvider);
-    _fIsLocalUser = (guidProvider == Identity_LocalUserProvider);
+    if (pcpUser)
+    {
+        GUID guidProvider{};
+        const HRESULT providerHr = pcpUser->GetProviderID(&guidProvider);
+        if (FAILED(providerHr)) return providerHr;
+        _fIsLocalUser = (guidProvider == Identity_LocalUserProvider);
+    }
 
     // Copy the field descriptors for each field. This is useful if you want to vary the field
     // descriptors based on what Usage scenario the credential was created for.
@@ -521,6 +919,70 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
     }
     if (SUCCEEDED(hr))
     {
+        hr = SHStrDupW(L"", &_rgFieldStrings[SFI_USERNAME]);
+    }
+    if (SUCCEEDED(hr))
+    {
+        hr = SHStrDupW(L"", &_rgFieldStrings[SFI_DOMAINNAME]);
+    }
+    if (SUCCEEDED(hr) && !pcpUser)
+    {
+        _fOtherUserTile = true;
+        _adLabUser = true;
+        _passwordEntryMode = true;
+        _adLabVscConfig.passwordPlusPhoneTest = true;
+        hr = SHStrDupW(L"", &_pszQualifiedUserName);
+        if (FAILED(hr)) return hr;
+        const bool credUi = cpus == CPUS_CREDUI;
+        hr = SHStrDupW(credUi ? L"RDP sign-in" : L"Other user",
+                       &_rgFieldStrings[SFI_FULLNAME_TEXT]);
+        if (SUCCEEDED(hr)) hr = SHStrDupW(credUi ? L"Remote desktop" : L"Domain sign-in",
+                                           &_rgFieldStrings[SFI_DISPLAYNAME_TEXT]);
+        if (SUCCEEDED(hr)) hr = SHStrDupW(
+            credUi ? L"Enter your domain account, approve on your phone, then enter your password."
+                   : L"Enter a domain account and request phone approval.",
+            &_rgFieldStrings[SFI_LOGONSTATUS_TEXT]);
+        if (SUCCEEDED(hr)) {
+            if (_rgFieldStrings[SFI_LABEL]) CoTaskMemFree(_rgFieldStrings[SFI_LABEL]);
+            _rgFieldStrings[SFI_LABEL] = nullptr;
+            hr = SHStrDupW(L"Thessley Passkey",
+                           &_rgFieldStrings[SFI_LABEL]);
+        }
+        if (SUCCEEDED(hr)) {
+            if (_rgFieldStrings[SFI_LARGE_TEXT]) CoTaskMemFree(_rgFieldStrings[SFI_LARGE_TEXT]);
+            _rgFieldStrings[SFI_LARGE_TEXT] = nullptr;
+            hr = SHStrDupW(L"Thessley Passkey",
+                           &_rgFieldStrings[SFI_LARGE_TEXT]);
+        }
+        if (SUCCEEDED(hr)) {
+            if (_rgFieldStrings[SFI_QR_SETUP_LINK]) CoTaskMemFree(_rgFieldStrings[SFI_QR_SETUP_LINK]);
+            _rgFieldStrings[SFI_QR_SETUP_LINK] = nullptr;
+            hr = SHStrDupW(L"Request phone approval", &_rgFieldStrings[SFI_QR_SETUP_LINK]);
+        }
+        if (SUCCEEDED(hr)) {
+            const std::wstring defaultDomain = ReadConfiguredAdDefaultDomain();
+            if (!defaultDomain.empty()) {
+                CoTaskMemFree(_rgFieldStrings[SFI_DOMAINNAME]);
+                _rgFieldStrings[SFI_DOMAINNAME] = nullptr;
+                hr = SHStrDupW(defaultDomain.c_str(), &_rgFieldStrings[SFI_DOMAINNAME]);
+            }
+            _rgFieldStatePairs[SFI_USERNAME].cpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            _rgFieldStatePairs[SFI_USERNAME].cpfis = CPFIS_FOCUSED;
+            _rgFieldStatePairs[SFI_DOMAINNAME].cpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            _rgFieldStatePairs[SFI_DOMAINNAME].cpfis = CPFIS_NONE;
+            _rgFieldStatePairs[SFI_PASSWORD].cpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            _rgFieldStatePairs[SFI_PASSWORD].cpfis = CPFIS_NONE;
+            _rgFieldStatePairs[SFI_QR_SETUP_LINK].cpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            _rgFieldStatePairs[SFI_LOGONSTATUS_TEXT].cpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            _rgFieldStatePairs[SFI_FULLNAME_TEXT].cpfs = CPFS_HIDDEN;
+            _rgFieldStatePairs[SFI_DISPLAYNAME_TEXT].cpfs = CPFS_HIDDEN;
+            _rgFieldStatePairs[SFI_SUBMIT_BUTTON].cpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+        }
+        return hr;
+    }
+    if (!pcpUser) return hr;
+    if (SUCCEEDED(hr))
+    {
         hr = pcpUser->GetStringValue(PKEY_Identity_QualifiedUserName, &_pszQualifiedUserName);
     }
     if (SUCCEEDED(hr))
@@ -568,7 +1030,7 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
         }
         else
         {
-            hr = SHStrDupW(L"Logon Status is NULL", &_rgFieldStrings[SFI_LOGONSTATUS_TEXT]);
+            hr = SHStrDupW(L"", &_rgFieldStrings[SFI_LOGONSTATUS_TEXT]);
         }
     }
 
@@ -578,36 +1040,87 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
     }
     if (SUCCEEDED(hr))
     {
-        // A configured account SID is the allowlist. Do not infer local vs
-        // domain identity from the provider ID: Windows may report a domain
-        // profile through Identity_LocalUserProvider.
-        bool isAllowedAdLabUser = LoadAdLabVscConfig(_pszUserSid, &_adLabVscConfig);
+        _fIsLocalUser = IsLocalSamAccountSid(_pszUserSid);
+        ProviderDiag(L"LocalSamSidCheck", S_OK, _fIsLocalUser ? 1 : 0,
+                     L"identity is classified from the local SAM SID prefix");
+        const bool adLabConfigLoaded = LoadAdLabVscConfig(_pszUserSid, &_adLabVscConfig);
+        bool isAllowedAdLabUser = false;
 #ifdef THESSLEY_TICKET_LOGON_TEST
+        isAllowedAdLabUser = adLabConfigLoaded;
         ProviderDiag(L"TicketConfigRead", S_OK, isAllowedAdLabUser ? 1 : 0,
             _adLabVscConfig.ticketLogonTest ? L"ticket-flag=1" : L"ticket-flag=0");
-        isAllowedAdLabUser = isAllowedAdLabUser && _adLabVscConfig.ticketLogonTest;
-#else
-        // Ticket-test-only SIDs must never appear on the established VSC tile.
         isAllowedAdLabUser = isAllowedAdLabUser &&
-            !_adLabVscConfig.providerName.empty() &&
-            (_adLabVscConfig.keySpec == AT_KEYEXCHANGE ||
-             _adLabVscConfig.keySpec == AT_SIGNATURE);
+            (_adLabVscConfig.ticketLogonTest || IsPivPhoneTestMode(_adLabVscConfig));
+#else
+        if (!_fIsLocalUser && !adLabConfigLoaded)
+        {
+            // Named domain accounts get the same username-first, phone-then-
+            // password flow as Other user. The AD service still authorizes
+            // the SID before it creates an approval request; this only makes
+            // the named tile available without per-PC enrollment state.
+            _adLabVscConfig.passwordPlusPhoneTest = true;
+            isAllowedAdLabUser = true;
+        }
+        else
+        {
+            // Ticket-test-only SIDs never appear on the established VSC tile.
+            isAllowedAdLabUser = adLabConfigLoaded &&
+                (IsPivPhoneTestMode(_adLabVscConfig) ||
+                 IsAdPasswordPlusPhoneTestMode(_adLabVscConfig) ||
+                 (!_adLabVscConfig.providerName.empty() &&
+                  (_adLabVscConfig.keySpec == AT_KEYEXCHANGE ||
+                   _adLabVscConfig.keySpec == AT_SIGNATURE)));
+        }
 #endif
-        ProviderDiag(L"AdLabSidCheck", S_OK, isAllowedAdLabUser ? 1 : 0);
-        ProviderDiag(L"IdentityLocalProvider", S_OK, _fIsLocalUser ? 1 : 0);
-        if (!isAllowedAdLabUser)
+        wchar_t adLabIdentityDetail[512]{};
+        StringCchPrintfW(adLabIdentityDetail, ARRAYSIZE(adLabIdentityDetail),
+            L"sid=%s config=%u piv=%u password_plus_phone=%u ticket=%u keySpec=%lu",
+            _pszUserSid ? _pszUserSid : L"(null)",
+            adLabConfigLoaded ? 1u : 0u,
+            _adLabVscConfig.pivPhoneSigning ? 1u : 0u,
+            _adLabVscConfig.passwordPlusPhoneTest ? 1u : 0u,
+            _adLabVscConfig.ticketLogonTest ? 1u : 0u,
+            static_cast<unsigned long>(_adLabVscConfig.pivKeySpec));
+        ProviderDiag(L"AdLabSidCheck", S_OK, isAllowedAdLabUser ? 1 : 0,
+                     adLabIdentityDetail);
+        ProviderDiag(L"IdentityLocalProvider", S_OK, _fIsLocalUser ? 1 : 0,
+                     L"SID-based local/domain classification");
+        if (!isAllowedAdLabUser && !_fIsLocalUser)
         {
             hr = E_ACCESSDENIED;
         }
         else
         {
-            _fIsLocalUser = false;
-            _adLabUser = true;
-            _vaultAvailable = !IsTicketLogonTestMode(_adLabVscConfig) &&
-                ThessleyPinVaultExists(_pszUserSid);
-            _passwordEntryMode = !IsTicketLogonTestMode(_adLabVscConfig) &&
-                !_vaultAvailable; // only VSC mode asks for its one-time PIN
+            if (_fIsLocalUser)
+            {
+                // The local recovery route stays inside this provider when the
+                // Windows Password provider is excluded by machine policy.
+                _adLabUser = false;
+                _vaultAvailable = false;
+                _passwordEntryMode = true;
+            }
+            else
+            {
+                _fIsLocalUser = false;
+                _adLabUser = true;
+                _vaultAvailable = !IsTicketLogonTestMode(_adLabVscConfig) &&
+                    !IsAdPasswordPlusPhoneTestMode(_adLabVscConfig) &&
+                    ThessleyPinVaultExists(_pszUserSid);
+                _passwordEntryMode = !IsTicketLogonTestMode(_adLabVscConfig) &&
+                    (IsAdPasswordPlusPhoneTestMode(_adLabVscConfig) || !_vaultAvailable);
+            }
             _fChecked = false;
+            if (IsPivPhoneTestMode(_adLabVscConfig))
+            {
+                // Keep the isolated PIV test visibly distinct from the regular
+                // Thessley AD phone-approval tile.
+                if (_rgFieldStrings[SFI_LABEL]) CoTaskMemFree(_rgFieldStrings[SFI_LABEL]);
+                _rgFieldStrings[SFI_LABEL] = nullptr;
+                SHStrDupW(L"Phone test: scan QR code", &_rgFieldStrings[SFI_LABEL]);
+                if (_rgFieldStrings[SFI_LARGE_TEXT]) CoTaskMemFree(_rgFieldStrings[SFI_LARGE_TEXT]);
+                _rgFieldStrings[SFI_LARGE_TEXT] = nullptr;
+                SHStrDupW(L"Phone test: scan QR code", &_rgFieldStrings[SFI_LARGE_TEXT]);
+            }
             if (_rgFieldStrings[SFI_EDIT_TEXT])
             {
                 SecureZeroMemory(_rgFieldStrings[SFI_EDIT_TEXT], wcslen(_rgFieldStrings[SFI_EDIT_TEXT]) * sizeof(WCHAR));
@@ -616,22 +1129,52 @@ HRESULT CSampleCredential::Initialize(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus,
             _rgFieldStrings[SFI_EDIT_TEXT] = nullptr;
             SHStrDupW(IsTicketLogonTestMode(_adLabVscConfig)
                 ? L"Ticket-logon feasibility test: phone approval submits one short-lived, local-only Kerberos ticket."
-                : (_vaultAvailable
-                    ? L"Phone approval will unlock this PC's TPM sign-in key."
-                    : L"For the first sign-in, enter the TPM PIN once. Check Remember to use QR approval alone next time."),
+                : (IsAdPasswordPlusPhoneTestMode(_adLabVscConfig)
+                    ? L"Select Request phone approval to show a QR. Then enter your Windows password."
+                    : (IsPivPhoneTestMode(_adLabVscConfig)
+                            ? (_vaultAvailable
+                                ? L"Your phone signs each Windows PIV login. The AD key stays on your phone."
+                                : L"Approve on your phone and enter the disposable PIV test PIN for this lab.")
+                        : (_vaultAvailable
+                            ? L"Phone approval will unlock this PC's TPM sign-in key."
+                            : L"For the first sign-in, enter the TPM PIN once. Check Remember to use QR approval alone next time."))),
                 &_rgFieldStrings[SFI_EDIT_TEXT]);
-            if (IsTicketLogonTestMode(_adLabVscConfig))
+            if (_fIsLocalUser && _rgFieldStrings[SFI_EDIT_TEXT])
+            {
+                SecureZeroMemory(_rgFieldStrings[SFI_EDIT_TEXT],
+                    wcslen(_rgFieldStrings[SFI_EDIT_TEXT]) * sizeof(WCHAR));
+                CoTaskMemFree(_rgFieldStrings[SFI_EDIT_TEXT]);
+                _rgFieldStrings[SFI_EDIT_TEXT] = nullptr;
+                SHStrDupW(L"Local recovery account. Enter its Windows password.",
+                          &_rgFieldStrings[SFI_EDIT_TEXT]);
+            }
+            if (IsTicketLogonTestMode(_adLabVscConfig) ||
+                IsAdPasswordPlusPhoneTestMode(_adLabVscConfig))
             {
                 if (_rgFieldStrings[SFI_LARGE_TEXT]) CoTaskMemFree(_rgFieldStrings[SFI_LARGE_TEXT]);
                 _rgFieldStrings[SFI_LARGE_TEXT] = nullptr;
-                SHStrDupW(L"Thessley AD Ticket Test (Clone 1 only)",
+                SHStrDupW(IsTicketLogonTestMode(_adLabVscConfig)
+                    ? L"Thessley AD Ticket Test (Clone 1 only)"
+                    : L"Thessley AD Passkey",
                           &_rgFieldStrings[SFI_LARGE_TEXT]);
+            }
+            if ((IsAdPasswordPlusPhoneTestMode(_adLabVscConfig) ||
+                 IsPivPhoneTestMode(_adLabVscConfig)) &&
+                _rgFieldStrings[SFI_QR_SETUP_LINK])
+            {
+                CoTaskMemFree(_rgFieldStrings[SFI_QR_SETUP_LINK]);
+                _rgFieldStrings[SFI_QR_SETUP_LINK] = nullptr;
+                SHStrDupW(L"Request phone approval", &_rgFieldStrings[SFI_QR_SETUP_LINK]);
             }
             if (_rgFieldStrings[SFI_CHECKBOX]) CoTaskMemFree(_rgFieldStrings[SFI_CHECKBOX]);
             _rgFieldStrings[SFI_CHECKBOX] = nullptr;
             SHStrDupW(IsTicketLogonTestMode(_adLabVscConfig)
                 ? L"Ticket test (no PIN or password is sent)"
-                : L"Remember TPM PIN on this PC for QR-only sign-in (encrypted)",
+                : (IsAdPasswordPlusPhoneTestMode(_adLabVscConfig)
+                    ? L"Password is never saved"
+                    : (IsPivPhoneTestMode(_adLabVscConfig)
+                        ? L"Remember PIV test PIN on this PC (encrypted)"
+                        : L"Remember TPM PIN on this PC for QR-only sign-in (encrypted)")),
                 &_rgFieldStrings[SFI_CHECKBOX]);
         }
     }
@@ -672,10 +1215,9 @@ HRESULT CSampleCredential::SetSelected(_Out_ BOOL *pbAutoLogon)
 {
     *pbAutoLogon = FALSE;
     ProviderDiag(L"CredentialSetSelected", S_OK, 0);
-    if (!_phoneApproved.load())
-    {
-        _StartApproval();
-    }
+    // LogonUI may select the default credential while the workstation is
+    // idle or waking. Require an explicit command-link click before showing a
+    // QR or creating a phone approval request.
     return S_OK;
 }
 
@@ -732,19 +1274,47 @@ HRESULT CSampleCredential::GetFieldState(DWORD dwFieldID,
     {
         *pcpfs = _rgFieldStatePairs[dwFieldID].cpfs;
         *pcpfis = _rgFieldStatePairs[dwFieldID].cpfis;
-        if (dwFieldID == SFI_PASSWORD)
+        if ((dwFieldID == SFI_USERNAME || dwFieldID == SFI_DOMAINNAME) && !_fOtherUserTile)
         {
-            *pcpfs = (_adLabUser && (!_passwordEntryMode ||
+            *pcpfs = CPFS_HIDDEN;
+            *pcpfis = CPFIS_NONE;
+        }
+        else if (dwFieldID == SFI_USERNAME && _fOtherUserTile)
+        {
+            *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            *pcpfis = CPFIS_FOCUSED;
+        }
+        else if (dwFieldID == SFI_DOMAINNAME && _fOtherUserTile)
+        {
+            *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            *pcpfis = CPFIS_NONE;
+        }
+        else if (dwFieldID == SFI_PASSWORD)
+        {
+            *pcpfs = (_fOtherUserTile ||
+                      (_adLabUser && IsAdPasswordPlusPhoneTestMode(_adLabVscConfig)))
+                ? (_phoneApproved.load() ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN)
+                : ((_adLabUser && (!_passwordEntryMode ||
                                      IsTicketLogonTestMode(_adLabVscConfig)))
-                ? CPFS_HIDDEN : CPFS_DISPLAY_IN_SELECTED_TILE;
+                    ? CPFS_HIDDEN : CPFS_DISPLAY_IN_SELECTED_TILE);
             *pcpfis = CPFIS_FOCUSED;
         }
         else if (dwFieldID == SFI_CHECKBOX && !_adLabUser)
             *pcpfs = CPFS_HIDDEN; // Local accounts never expose the AD card-PIN option.
         else if (dwFieldID == SFI_CHECKBOX && _adLabUser)
-            *pcpfs = _passwordEntryMode ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN;
+            *pcpfs = IsAdPasswordPlusPhoneTestMode(_adLabVscConfig)
+                ? CPFS_HIDDEN
+                : (_passwordEntryMode
+                    ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN);
+        else if (dwFieldID == SFI_QR_SETUP_LINK && _fOtherUserTile)
+            *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+        else if (dwFieldID == SFI_QR_SETUP_LINK && _adLabUser &&
+                 (IsAdPasswordPlusPhoneTestMode(_adLabVscConfig) ||
+                  IsPivPhoneTestMode(_adLabVscConfig)))
+            *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
         else if (dwFieldID == SFI_QR_SETUP_LINK &&
-                 IsTicketLogonTestMode(_adLabVscConfig))
+                 (!_adLabUser || IsTicketLogonTestMode(_adLabVscConfig) || IsPivPhoneTestMode(_adLabVscConfig) ||
+                  IsAdPasswordPlusPhoneTestMode(_adLabVscConfig)))
             *pcpfs = CPFS_HIDDEN;
         hr = S_OK;
     }
@@ -858,6 +1428,41 @@ HRESULT CSampleCredential::GetSubmitButtonValue(DWORD dwFieldID, _Out_ DWORD *pd
 
 // Sets the value of a field which can accept a string as a value.
 // This is called on each keystroke when a user types into an edit field
+void CSampleCredential::_ResetApprovalForIdentityChange()
+{
+    _CancelApproval();
+    _phoneApproved.store(false);
+    _phoneApprovedAt.store(0);
+    if (_approvalThread.joinable() &&
+        _approvalThread.get_id() != std::this_thread::get_id())
+        _approvalThread.join();
+    _approvalInProgress.store(false);
+}
+
+HRESULT CSampleCredential::_RefreshOtherUserQualifiedName()
+{
+    const PCWSTR user = _rgFieldStrings[SFI_USERNAME];
+    const PCWSTR domain = _rgFieldStrings[SFI_DOMAINNAME];
+    std::wstring qualified;
+    if (user && user[0] && domain && domain[0] &&
+        !wcschr(user, L'\\') && !wcschr(user, L'/') &&
+        !wcschr(domain, L'\\') && !wcschr(domain, L'/'))
+    {
+        qualified.assign(domain);
+        qualified.push_back(L'\\');
+        qualified.append(user);
+    }
+
+    PWSTR replacement = nullptr;
+    const HRESULT hr = SHStrDupW(qualified.c_str(), &replacement);
+    if (SUCCEEDED(hr))
+    {
+        CoTaskMemFree(_pszQualifiedUserName);
+        _pszQualifiedUserName = replacement;
+    }
+    return hr;
+}
+
 HRESULT CSampleCredential::SetStringValue(DWORD dwFieldID, _In_ PCWSTR pwz)
 {
     HRESULT hr;
@@ -868,10 +1473,20 @@ HRESULT CSampleCredential::SetStringValue(DWORD dwFieldID, _In_ PCWSTR pwz)
         CPFT_PASSWORD_TEXT == _rgCredProvFieldDescriptors[dwFieldID].cpft))
     {
         PWSTR *ppwszStored = &_rgFieldStrings[dwFieldID];
+        const bool identityField = dwFieldID == SFI_USERNAME || dwFieldID == SFI_DOMAINNAME;
+        if (_fOtherUserTile && identityField &&
+            (!pwz || wcslen(pwz) > 128 || wcschr(pwz, L'\\') || wcschr(pwz, L'/')))
+            return E_INVALIDARG;
+        const bool identityChanged = _fOtherUserTile && identityField &&
+            *ppwszStored && wcscmp(*ppwszStored, pwz) != 0;
+        if (identityChanged)
+            _ResetApprovalForIdentityChange();
         if (dwFieldID == SFI_PASSWORD && *ppwszStored)
             SecureZeroMemory(*ppwszStored, wcslen(*ppwszStored) * sizeof(WCHAR));
         CoTaskMemFree(*ppwszStored);
         hr = SHStrDupW(pwz, ppwszStored);
+        if (SUCCEEDED(hr) && identityField && _fOtherUserTile)
+            hr = _RefreshOtherUserQualifiedName();
     }
     else
     {
@@ -906,6 +1521,8 @@ HRESULT CSampleCredential::GetCheckboxValue(DWORD dwFieldID, _Out_ BOOL *pbCheck
 HRESULT CSampleCredential::SetCheckboxValue(DWORD dwFieldID, BOOL bChecked)
 {
     if (!_fIsLocalUser && !_adLabUser)
+        return E_ACCESSDENIED;
+    if (_adLabUser && IsAdPasswordPlusPhoneTestMode(_adLabVscConfig))
         return E_ACCESSDENIED;
     HRESULT hr;
 
@@ -1028,8 +1645,28 @@ HRESULT CSampleCredential::CommandLinkClicked(DWORD dwFieldID)
             _fShowControls = !_fShowControls;
             break;
         case SFI_QR_SETUP_LINK:
+            if (_fOtherUserTile)
+            {
+                ProviderDiag(L"OtherUserApprovalLinkClicked", S_OK, dwFieldID,
+                             L"account text and QR payload omitted");
+                if (!_pszQualifiedUserName || !_pszQualifiedUserName[0])
+                {
+            if (_pCredProvCredentialEvents)
+                _pCredProvCredentialEvents->SetFieldString(this, SFI_LOGONSTATUS_TEXT,
+                    L"Enter both your username and domain first.");
+                    return S_OK;
+                }
+                _StartApproval();
+                break;
+            }
             if (_adLabUser)
             {
+                if (IsAdPasswordPlusPhoneTestMode(_adLabVscConfig) ||
+                    IsPivPhoneTestMode(_adLabVscConfig))
+                {
+                    _StartApproval();
+                    break;
+                }
                 if (IsTicketLogonTestMode(_adLabVscConfig))
                     return E_ACCESSDENIED;
                 _passwordEntryMode = !_passwordEntryMode;
@@ -1122,17 +1759,44 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
             _phoneApprovedAt.store(0);
         }
     }
-    if (!_phoneApproved.load())
+    std::wstring pendingPivRequestId;
+    const bool pendingPivMaySubmit = _adLabUser && IsPivPhoneTestMode(_adLabVscConfig) &&
+        _cpus == CPUS_LOGON && GetAdLabPivRequestId(_pszUserSid, &pendingPivRequestId);
+    if (_adLabUser && !_phoneApproved.load() && !pendingPivMaySubmit)
     {
+        // On the username-first Other user tile, pressing Submit is also a
+        // clear way to start the phone step. It never serializes credentials
+        // before approval; it only launches the same approval flow as the
+        // Request phone approval link.
+        const bool passwordFirstFlow = _fOtherUserTile ||
+            (_adLabUser && IsAdPasswordPlusPhoneTestMode(_adLabVscConfig));
+        if (passwordFirstFlow)
+        {
+            if (_fOtherUserTile && (!_pszQualifiedUserName || !_pszQualifiedUserName[0]))
+            {
+                SHStrDupW(L"Enter your username and domain, then request phone approval.",
+                          ppwszOptionalStatusText);
+                *pcpsiOptionalStatusIcon = CPSI_WARNING;
+                return S_OK;
+            }
+            ProviderDiag(L"PasswordFirstSubmitStartsApproval", S_OK, 0,
+                         L"submit starts phone approval; credentials not serialized");
+            _StartApproval();
+            SHStrDupW(L"Phone approval started. Scan the QR; then enter the Windows password and submit again.",
+                      ppwszOptionalStatusText);
+            *pcpsiOptionalStatusIcon = CPSI_WARNING;
+            return S_OK;
+        }
         SHStrDupW(L"Approve this sign-in with Thessley Passkey first, or choose another Windows sign-in option.",
                   ppwszOptionalStatusText);
         *pcpsiOptionalStatusIcon = CPSI_WARNING;
         return S_OK;
     }
 
-    // The AD lab clone never serializes an account password. Phone approval
-    // only authorizes this one attempt to use the local TPM virtual smart-card
-    // certificate. The PIN is typed once during setup, then may be DPAPI-protected locally.
+    // The normal certificate mode never serializes an account password. The
+    // explicit password-plus-phone test below is the sole exception: it sends
+    // the typed password through Windows' standard interactive logon path and
+    // never persists it.
     if (_adLabUser)
     {
         if (IsTicketLogonTestMode(_adLabVscConfig))
@@ -1201,6 +1865,88 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
             *pcpsiOptionalStatusIcon = CPSI_WARNING;
             return S_OK;
         }
+        if (IsAdPasswordPlusPhoneTestMode(_adLabVscConfig))
+        {
+            PCWSTR enteredPassword = _rgFieldStrings[SFI_PASSWORD];
+            if (!enteredPassword || !enteredPassword[0])
+            {
+                SHStrDupW(L"Phone approved. Enter the Windows password to continue.",
+                          ppwszOptionalStatusText);
+                *pcpsiOptionalStatusIcon = CPSI_WARNING;
+                return S_OK;
+            }
+
+            // The phone approval is a one-use second factor. Hand the typed
+            // password to Windows' normal Negotiate/interactive logon path;
+            // never save it in a vault or log it.
+            _phoneApproved.store(false);
+            _phoneApprovedAt.store(0);
+            PWSTR protectedPassword = nullptr;
+            PWSTR domain = nullptr;
+            PWSTR user = nullptr;
+            KERB_INTERACTIVE_UNLOCK_LOGON interactive{};
+            hr = ProtectIfNecessaryAndCopyPassword(
+                const_cast<PWSTR>(enteredPassword), _cpus, &protectedPassword);
+            ProviderDiag(L"ProtectAdPasswordPlusPhone", hr, 0);
+            if (SUCCEEDED(hr))
+            {
+                hr = SplitDomainAndUsername(_pszQualifiedUserName, &domain, &user);
+                ProviderDiag(L"SplitAdQualifiedName", hr, 0);
+            }
+            if (SUCCEEDED(hr))
+                hr = KerbInteractiveUnlockLogonInit(domain, user, protectedPassword,
+                                                     _cpus, &interactive);
+            if (SUCCEEDED(hr))
+                hr = KerbInteractiveUnlockLogonPack(interactive,
+                    &pcpcs->rgbSerialization, &pcpcs->cbSerialization);
+            ULONG authPackage = 0;
+            if (SUCCEEDED(hr)) hr = RetrieveNegotiateAuthPackage(&authPackage);
+
+            if (protectedPassword)
+            {
+                SecureZeroMemory(protectedPassword,
+                                 wcslen(protectedPassword) * sizeof(WCHAR));
+                CoTaskMemFree(protectedPassword);
+            }
+            if (domain) CoTaskMemFree(domain);
+            if (user) CoTaskMemFree(user);
+            if (_rgFieldStrings[SFI_PASSWORD])
+            {
+                SecureZeroMemory(_rgFieldStrings[SFI_PASSWORD],
+                    wcslen(_rgFieldStrings[SFI_PASSWORD]) * sizeof(WCHAR));
+                CoTaskMemFree(_rgFieldStrings[SFI_PASSWORD]);
+                _rgFieldStrings[SFI_PASSWORD] = nullptr;
+                SHStrDupW(L"", &_rgFieldStrings[SFI_PASSWORD]);
+                if (_pCredProvCredentialEvents)
+                    _pCredProvCredentialEvents->SetFieldString(
+                        this, SFI_PASSWORD, _rgFieldStrings[SFI_PASSWORD]);
+            }
+
+            if (SUCCEEDED(hr))
+            {
+                pcpcs->ulAuthenticationPackage = authPackage;
+                pcpcs->clsidCredentialProvider = CLSID_ThessleyAD;
+                ProviderDiag(L"ADPasswordPlusPhoneReady", S_OK,
+                             pcpcs->cbSerialization,
+                             L"phone gate passed; normal Windows password serialization; password omitted");
+                *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
+                return S_OK;
+            }
+
+            if (pcpcs->rgbSerialization)
+            {
+                SecureZeroMemory(pcpcs->rgbSerialization, pcpcs->cbSerialization);
+                CoTaskMemFree(pcpcs->rgbSerialization);
+                pcpcs->rgbSerialization = nullptr;
+                pcpcs->cbSerialization = 0;
+            }
+            ProviderDiag(L"ADPasswordPlusPhoneFailed", hr, 0,
+                         L"password serialization failed; password omitted");
+            SHStrDupW(L"Could not prepare the Windows password sign-in. Request a new phone approval and try again.",
+                      ppwszOptionalStatusText);
+            *pcpsiOptionalStatusIcon = CPSI_WARNING;
+            return S_OK;
+        }
         ProviderDiag(L"ADGetSerializationStart", S_OK, _vaultAvailable ? 1 : 0,
                      L"vault-available; no identity or PIN recorded");
         std::vector<WCHAR> savedPin;
@@ -1252,23 +1998,56 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         if (SUCCEEDED(hr))
         {
             LUID logonId{};
+            DWORD consoleSessionId = 0xffffffff;
+            const bool explicitUnlock = _cpus == CPUS_UNLOCK_WORKSTATION;
+            const HRESULT unlockContextHr = GetActiveConsoleLogonIdForSid(
+                _pszUserSid, !explicitUnlock, &consoleSessionId, &logonId);
+            const bool unlockScenario = explicitUnlock || SUCCEEDED(unlockContextHr);
+            wchar_t unlockContext[256]{};
+            StringCchPrintfW(unlockContext, ARRAYSIZE(unlockContext),
+                L"session=%lu logon_luid=%08lx:%08lx console_user_match=%u",
+                static_cast<unsigned long>(consoleSessionId),
+                static_cast<unsigned long>(logonId.HighPart),
+                static_cast<unsigned long>(logonId.LowPart),
+                SUCCEEDED(unlockContextHr) ? 1u : 0u);
+            ProviderDiag(L"ADUnlockContextCheck", unlockContextHr,
+                         unlockScenario ? 1u : 0u, unlockContext);
+            ProviderDiag(L"ADSerializationScenario", S_OK, _cpus,
+                unlockScenario ? (explicitUnlock
+                    ? L"CPUS_UNLOCK_WORKSTATION; certificate-unlock serialization"
+                    : L"CPUS_LOGON for matching locked console; certificate-unlock serialization")
+                               : (_cpus == CPUS_LOGON
+                                    ? L"CPUS_LOGON; certificate-logon serialization"
+                                    : L"certificate-logon serialization"));
             wchar_t metadata[1024]{};
             StringCchPrintfW(metadata, ARRAYSIZE(metadata),
                 L"Configured per-account VSC metadata; keySpec=%lu",
-                _adLabVscConfig.keySpec);
-            ProviderDiag(L"ADVscMetadata", S_OK, _adLabVscConfig.keySpec, metadata);
-            hr = BuildKerbCertificateSerialization(
+                IsPivPhoneTestMode(_adLabVscConfig)
+                    ? _adLabVscConfig.pivKeySpec : _adLabVscConfig.keySpec);
+            ProviderDiag(IsPivPhoneTestMode(_adLabVscConfig) ? L"AdPivMetadata" : L"ADVscMetadata",
+                         S_OK, IsPivPhoneTestMode(_adLabVscConfig)
+                            ? _adLabVscConfig.pivKeySpec : _adLabVscConfig.keySpec, metadata);
+            if (IsPivPhoneTestMode(_adLabVscConfig))
+                ProviderDiag(L"AdPivContainer", S_OK,
+                    static_cast<DWORD>(_adLabVscConfig.pivContainerName.size()),
+                    _adLabVscConfig.pivContainerName.c_str());
+            if (explicitUnlock && FAILED(unlockContextHr))
+                hr = unlockContextHr;
+            else
+                hr = BuildKerbCertificateSerialization(
                 domain, user, protectedPin,
-                _adLabVscConfig.cardName.c_str(),
-                _adLabVscConfig.readerName.c_str(),
-                _adLabVscConfig.containerName.c_str(),
-                _adLabVscConfig.providerName.c_str(),
-                _adLabVscConfig.keySpec,
-                _cpus == CPUS_UNLOCK_WORKSTATION, &logonId,
+                (IsPivPhoneTestMode(_adLabVscConfig) ? _adLabVscConfig.pivCardName : _adLabVscConfig.cardName).c_str(),
+                (IsPivPhoneTestMode(_adLabVscConfig) ? _adLabVscConfig.pivReaderName : _adLabVscConfig.readerName).c_str(),
+                (IsPivPhoneTestMode(_adLabVscConfig) ? _adLabVscConfig.pivContainerName : _adLabVscConfig.containerName).c_str(),
+                (IsPivPhoneTestMode(_adLabVscConfig) ? _adLabVscConfig.pivProviderName : _adLabVscConfig.providerName).c_str(),
+                IsPivPhoneTestMode(_adLabVscConfig)
+                    ? _adLabVscConfig.pivKeySpec : _adLabVscConfig.keySpec,
+                unlockScenario, unlockScenario ? &logonId : nullptr,
                 authPackage, CLSID_ThessleyAD, pcpcs);
             ProviderDiag(L"BuildADCertificateLogon", hr,
                          SUCCEEDED(hr) ? pcpcs->cbSerialization : 0,
-                         L"serializer result; PIN omitted");
+                         unlockScenario ? L"certificate-unlock message_type=15"
+                                        : L"certificate-logon message_type=13");
         }
         if (protectedPin)
         {
@@ -1296,7 +2075,9 @@ HRESULT CSampleCredential::GetSerialization(_Out_ CREDENTIAL_PROVIDER_GET_SERIAL
         FreeKerbCertificateSerialization(pcpcs);
         ProviderDiag(L"ADGetSerializationFailed", hr, 0,
                      L"local serialization failed before LSA sign-in");
-        SHStrDupW(L"Could not prepare TPM sign-in. Re-enter the card PIN and request fresh phone approval.",
+        SHStrDupW(IsPivPhoneTestMode(_adLabVscConfig)
+                    ? L"Could not prepare PIV sign-in. Enter the disposable test PIN and request fresh approval."
+                    : L"Could not prepare TPM sign-in. Re-enter the card PIN and request fresh phone approval.",
                   ppwszOptionalStatusText);
         *pcpsiOptionalStatusIcon = CPSI_WARNING;
         return S_OK;
@@ -1474,6 +2255,10 @@ HRESULT CSampleCredential::ReportResult(NTSTATUS ntsStatus,
                                         _Outptr_result_maybenull_ PWSTR *ppwszOptionalStatusText,
                                         _Out_ CREDENTIAL_PROVIDER_STATUS_ICON *pcpsiOptionalStatusIcon)
 {
+    // Do not clear the phone request here. Windows may call ReportResult
+    // before the smart-card/Kerberos stack sends GENERAL AUTHENTICATE. The
+    // reader consumes the request id when the first valid signature APDU
+    // arrives; clearing it here leaves the logon without its PKINIT signature.
     // Keep the NTSTATUS and its substatus as separate, explicitly hex fields.
     // Do not log account secrets, PINs, ticket data, or QR payloads.
     if (_adLabUser && IsTicketLogonTestMode(_adLabVscConfig))
@@ -1537,7 +2322,10 @@ HRESULT CSampleCredential::ReportResult(NTSTATUS ntsStatus,
                 CoTaskMemFree(_rgFieldStrings[SFI_EDIT_TEXT]);
             }
             _rgFieldStrings[SFI_EDIT_TEXT] = nullptr;
-            SHStrDupW(L"Phone approval unlocks this PC's TPM sign-in key.", &_rgFieldStrings[SFI_EDIT_TEXT]);
+            SHStrDupW(IsPivPhoneTestMode(_adLabVscConfig)
+                ? L"Your phone signs each Windows PIV login. The AD key stays on your phone."
+                : L"Phone approval unlocks this PC's TPM sign-in key.",
+                &_rgFieldStrings[SFI_EDIT_TEXT]);
             if (_pCredProvCredentialEvents)
             {
                 _pCredProvCredentialEvents->SetFieldState(this, SFI_PASSWORD, CPFS_HIDDEN);
@@ -1621,7 +2409,7 @@ HRESULT CSampleCredential::ReportResult(NTSTATUS ntsStatus,
                         ? L"Password was not accepted. Check it and submit again, or choose PIN."
                         : L"Sign-in failed. Request fresh phone approval, or choose PIN."));
         }
-        _StartApproval();
+        if (_adLabUser) _StartApproval();
     }
 
     // Since nullptr is a valid value for *ppwszOptionalStatusText and *pcpsiOptionalStatusIcon
@@ -1637,6 +2425,10 @@ HRESULT CSampleCredential::GetUserSid(_Outptr_result_nullonfailure_ PWSTR *ppszS
     if (_pszUserSid != nullptr)
     {
         hr = SHStrDupW(_pszUserSid, ppszSid);
+    }
+    else if (_fOtherUserTile)
+    {
+        hr = S_FALSE;
     }
     // Return S_FALSE with a null SID in ppszSid for the
     // credential to be associated with an empty user tile.

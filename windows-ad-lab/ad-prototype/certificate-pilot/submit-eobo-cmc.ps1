@@ -34,20 +34,24 @@ end {
             'csr_sha256', 'requester', 'template',
             'enrollment_agent_thumbprint', 'cmc_base64'
         )
-        if ($null -eq $bundle -or $bundle -isnot [System.Management.Automation.PSCustomObject]
-                -or (@($bundle.PSObject.Properties.Name | Sort-Object) -join ',') -ne
-                   (@($expectedFields | Sort-Object) -join ',')
-                -or $bundle.result -ne 'eobo_cmc_prepared' -or $bundle.submitted -ne $false
-                -or $bundle.thessley_request_id -isnot [string]
-                -or $bundle.thessley_request_id -notmatch '^[A-Za-z0-9_-]{8,128}$'
-                -or $bundle.machine_id -isnot [string]
-                -or $bundle.machine_id -notmatch '^[a-f0-9]{32}$'
-                -or $bundle.template -cne $TemplateName
-                -or $bundle.csr_sha256 -notmatch '^[a-f0-9]{64}$'
-                -or $bundle.requester -notmatch '^[A-Za-z0-9_.@-]{1,128}\\[A-Za-z0-9_.-]{1,64}$'
-                -or $bundle.enrollment_agent_thumbprint -notmatch '^[A-F0-9]{40}$'
-                -or $bundle.cmc_base64 -isnot [string]
-                -or $bundle.cmc_base64.Length -lt 256 -or $bundle.cmc_base64.Length -gt 128KB) {
+        if ($null -eq $bundle -or $bundle -isnot [System.Management.Automation.PSCustomObject]) {
+            throw 'The CMC bundle is malformed.'
+        }
+        $actualFields = @($bundle.PSObject.Properties.Name | Sort-Object) -join ','
+        $requiredFields = @($expectedFields | Sort-Object) -join ','
+        if ($actualFields -cne $requiredFields) { throw 'The CMC bundle fields are invalid.' }
+        $invalidBundle = ($bundle.result -ne 'eobo_cmc_prepared' -or $bundle.submitted -ne $false)
+        $invalidBundle = $invalidBundle -or ($bundle.thessley_request_id -isnot [string])
+        $invalidBundle = $invalidBundle -or ($bundle.thessley_request_id -notmatch '^[A-Za-z0-9_-]{8,128}$')
+        $invalidBundle = $invalidBundle -or ($bundle.machine_id -isnot [string])
+        $invalidBundle = $invalidBundle -or ($bundle.machine_id -notmatch '^[a-f0-9]{32}$')
+        $invalidBundle = $invalidBundle -or ($bundle.template -cne $TemplateName)
+        $invalidBundle = $invalidBundle -or ($bundle.csr_sha256 -notmatch '^[a-f0-9]{64}$')
+        $invalidBundle = $invalidBundle -or ($bundle.requester -notmatch '^[A-Za-z0-9_.@-]{1,128}\\[A-Za-z0-9_.-]{1,64}$')
+        $invalidBundle = $invalidBundle -or ($bundle.enrollment_agent_thumbprint -notmatch '^[A-F0-9]{40}$')
+        $invalidBundle = $invalidBundle -or ($bundle.cmc_base64 -isnot [string])
+        $invalidBundle = $invalidBundle -or ($bundle.cmc_base64.Length -lt 256 -or $bundle.cmc_base64.Length -gt 128KB)
+        if ($invalidBundle) {
             throw 'The CMC bundle is malformed or does not match the explicitly selected template.'
         }
         $cmcBytes = [Convert]::FromBase64String($bundle.cmc_base64)
@@ -72,8 +76,11 @@ end {
                 throw 'The CA returned an invalid or oversized certificate.'
             }
             $certificateDer = [Convert]::FromBase64String($certificateBase64)
-            if ($certificateDer.Length -lt 256 -or $certificateDer.Length -gt 64KB
-                    -or [Convert]::ToBase64String($certificateDer) -cne $certificateBase64) {
+            if ($certificateDer.Length -lt 256 -or $certificateDer.Length -gt 64KB) {
+                [Array]::Clear($certificateDer, 0, $certificateDer.Length)
+                throw 'The CA response is outside the allowed DER size range.'
+            }
+            if ([Convert]::ToBase64String($certificateDer) -cne $certificateBase64) {
                 [Array]::Clear($certificateDer, 0, $certificateDer.Length)
                 throw 'The CA response is not a canonical DER certificate.'
             }

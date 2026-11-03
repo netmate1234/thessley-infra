@@ -134,6 +134,7 @@ public:
     DWORD                                   _dwComboIndex;                                  // Tracks the current index of our combobox.
     bool                                    _fShowControls;                                 // Tracks the state of our show/hide controls link.
     bool                                    _fIsLocalUser;                                  // If the cred prov is assosiating with a local user tile
+    bool                                    _fOtherUserTile;                                // Anonymous account entered on Other user
     bool                                    _adLabUser;
     AdLabVscConfig                          _adLabVscConfig;
     bool                                    _vaultAvailable;
@@ -146,6 +147,8 @@ public:
     std::atomic<bool>                       _phoneApproved;
     std::atomic<ULONGLONG>                  _phoneApprovedAt;
     std::thread                             _approvalThread;
+    HRESULT _RefreshOtherUserQualifiedName();
+    void _ResetApprovalForIdentityChange();
     void _CancelApproval();
     void _StartApproval();
 };

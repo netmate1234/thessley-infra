@@ -177,17 +177,36 @@ def _approval_test(account: str, context: str) -> int:
     return 0 if approved else 1
 
 
-def _approval_start(sid: str, context: str) -> int:
+def _approval_start(sid: str, context: str, piv_signing: bool = False) -> int:
     """Machine-authenticated, quiet JSON interface for a future native tile."""
     if not re.fullmatch(r"S-1-(?:[0-9]+-)+[0-9]+", sid, re.IGNORECASE):
         raise ValueError("The selected account SID is malformed.")
     _require_domain_joined()
-    started = ad_agent.start_login(sid, context)
+    started = ad_agent.start_login(sid, context, piv_signing=piv_signing)
     print(json.dumps({
         "request_id": started["request_id"],
         "link": started["link"],
         "credential_method": started["credential_method"],
         "policy_source": started["policy_source"],
+        "piv_signing_required": started["piv_signing_required"],
+        "qr_matrix": started["qr_matrix"],
+    }, separators=(",", ":")), flush=True)
+    return 0
+
+
+def _approval_start_user(account: str, context: str) -> int:
+    """Resolve an authorized account through AD, then emit a machine-bound QR request."""
+    if context not in ("interactive", "unlock"):
+        raise ValueError("The Windows logon context is invalid.")
+    _require_domain_joined()
+    principal = ad_agent.resolve_domain_account(account)
+    started = ad_agent.start_login(principal["sid"], context)
+    print(json.dumps({
+        "request_id": started["request_id"],
+        "link": started["link"],
+        "credential_method": started["credential_method"],
+        "policy_source": started["policy_source"],
+        "piv_signing_required": started["piv_signing_required"],
         "qr_matrix": started["qr_matrix"],
     }, separators=(",", ":")), flush=True)
     return 0
@@ -308,6 +327,14 @@ def main(argv: list[str] | None = None) -> int:
     start = commands.add_parser("approval-start", help="start an AD sign-in approval and return JSON for the native tile")
     start.add_argument("--sid", required=True)
     start.add_argument("--context", choices=("interactive", "unlock"), required=True)
+    start.add_argument("--piv-signing", action="store_true",
+                       help="require a fresh phone-held PIV signature after QR approval (lab only)")
+    start_user = commands.add_parser(
+        "approval-start-user",
+        help="resolve and start phone approval for a qualified domain account on the Other user tile",
+    )
+    start_user.add_argument("--account", required=True, help="qualified domain account, e.g. DOMAIN\\user")
+    start_user.add_argument("--context", choices=("interactive", "unlock"), required=True)
     certificate_start = commands.add_parser(
         "certificate-approval-start",
         help="start CSR-bound phone approval for the isolated certificate pilot",
@@ -382,7 +409,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "approval-test":
             return _approval_test(args.user, args.context)
         if args.command == "approval-start":
-            return _approval_start(args.sid, args.context)
+            return _approval_start(args.sid, args.context, args.piv_signing)
+        if args.command == "approval-start-user":
+            return _approval_start_user(args.account, args.context)
         if args.command == "certificate-approval-start":
             return _certificate_approval_start(args.sid, args.csr_sha256, args.csr_file)
         if args.command == "approval-poll":

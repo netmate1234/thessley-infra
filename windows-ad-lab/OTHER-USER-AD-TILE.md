@@ -1,5 +1,17 @@
 # Thessley AD tile for Windows “Other user”
 
+## Current lab prototype update (2026-11-01)
+
+The Windows Other user tile now has an experimental username-first AD flow.
+The current installed build still uses one `DOMAIN\user` field. The updated
+source replaces it with separate **Username** and **Domain** fields and builds
+the qualified name internally. Set an optional domain prefill on the Windows
+host with `configure-ad-default-domain.ps1 -Domain THESSLEYLAB`.
+
+This prototype requests phone approval and then uses the Windows password; it
+is not passwordless. The design discussion below describes the separate,
+unproven passwordless target.
+
 ## Goal
 
 Let an enrolled AD account sign in on a paired Windows workstation by entering

@@ -7,7 +7,8 @@ param(
     [Parameter(Mandatory = $true)][string] $MachineId,
     [Parameter(Mandatory = $true)][string] $RequesterName,
     [Parameter(Mandatory = $true)][string] $TemplateName,
-    [Parameter(Mandatory = $true)][string] $EnrollmentAgentThumbprint
+    [Parameter(Mandatory = $true)][string] $EnrollmentAgentThumbprint,
+    [ValidateSet('CurrentUser', 'LocalMachine')][string] $EnrollmentAgentStoreLocation = 'LocalMachine'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,7 +54,9 @@ try {
         throw 'The CSR path must be a regular file, not a directory or reparse point.'
     }
     $csrDer = [IO.File]::ReadAllBytes($csrItem.FullName)
-    if ($csrDer.Length -lt 256 -or $csrDer.Length -gt 32KB) {
+    # A valid P-256 phone CSR is about 223 bytes DER. Keep the lower bound
+    # aligned with the AD service validator; RSA and Windows CSRs are larger.
+    if ($csrDer.Length -lt 128 -or $csrDer.Length -gt 32KB) {
         throw 'The DER CSR is outside the allowed size range.'
     }
     $hash = [Security.Cryptography.SHA256]::Create()
@@ -65,9 +68,10 @@ try {
         throw 'The CSR file does not match the digest approved by the phone.'
     }
 
+    $storeLocation = [Security.Cryptography.X509Certificates.StoreLocation]::$EnrollmentAgentStoreLocation
     $certificateStore = [Security.Cryptography.X509Certificates.X509Store]::new(
         [Security.Cryptography.X509Certificates.StoreName]::My,
-        [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
+        $storeLocation)
     $certificateStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
     $matches = @($certificateStore.Certificates | Where-Object {
         $_.Thumbprint -and $_.Thumbprint.Replace(' ', '').ToUpperInvariant() -ceq $agentThumbprint
@@ -75,9 +79,9 @@ try {
     if ($matches.Count -ne 1) { throw 'The configured Enrollment Agent certificate is missing or ambiguous.' }
     $signingCertificate = $matches[0]
     $now = [DateTime]::UtcNow
-    if (-not $signingCertificate.HasPrivateKey
-            -or $now -lt $signingCertificate.NotBefore.ToUniversalTime()
-            -or $now -gt $signingCertificate.NotAfter.ToUniversalTime()) {
+    $agentNotBefore = $signingCertificate.NotBefore.ToUniversalTime()
+    $agentNotAfter = $signingCertificate.NotAfter.ToUniversalTime()
+    if (-not $signingCertificate.HasPrivateKey -or $now -lt $agentNotBefore -or $now -gt $agentNotAfter) {
         throw 'The Enrollment Agent certificate is expired, not yet valid, or has no private key.'
     }
     $ekuExtensions = @($signingCertificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' })
@@ -108,24 +112,33 @@ try {
     $pkcs10 = New-Object -ComObject X509Enrollment.CX509CertificateRequestPkcs10
     $comObjects.Add($pkcs10)
     $pkcs10.InitializeDecode([Convert]::ToBase64String($csrDer), 1)
+    [Console]::Error.WriteLine('CMC_STAGE=inner_pkcs10_decoded')
 
     $cmc = New-Object -ComObject X509Enrollment.CX509CertificateRequestCmc
     $comObjects.Add($cmc)
     $cmc.InitializeFromInnerRequestTemplateName($pkcs10, $TemplateName)
     $cmc.RequesterName = $RequesterName
+    # The inner PKCS#10 was signed on the phone. The DC does not hold the
+    # phone's private key, so the outer CMC uses a null primary signature and
+    # the Enrollment Agent certificate as its additional certificate signer.
+    $signatureInformation = $cmc.SignatureInformation
+    $comObjects.Add($signatureInformation)
+    $signatureInformation.NullSigned = $true
+    [Console]::Error.WriteLine("CMC_STAGE=template_initialized requester=$($cmc.RequesterName) template=$($cmc.TemplateObjectId.Value)")
 
     $signer = New-Object -ComObject X509Enrollment.CSignerCertificate
     $comObjects.Add($signer)
     # XCN_CRYPT_STRING_HEXRAW=12; VerifySilent=1. The private key stays in
     # LocalMachine\My and is used through its KSP/CSP without export.
-    $signer.Initialize($true, 1, 12, $agentThumbprint)
+    $signer.Initialize(
+        ($EnrollmentAgentStoreLocation -eq 'LocalMachine'), 1, 12, $agentThumbprint)
     $signer.Silent = $true
     $null = $cmc.SignerCertificates.Add($signer)
+    [Console]::Error.WriteLine("CMC_STAGE=signer_added count=$($cmc.SignerCertificates.Count)")
 
-    $enrollment = New-Object -ComObject X509Enrollment.CX509Enrollment
-    $comObjects.Add($enrollment)
-    $enrollment.InitializeFromRequest($cmc)
-    $cmcBase64 = [string]$enrollment.CreateRequest(1)
+    $cmc.Encode()
+    [Console]::Error.WriteLine('CMC_STAGE=encoded')
+    $cmcBase64 = [string]$cmc.RawData(1) # XCN_CRYPT_STRING_BASE64
     $cmcBase64 = $cmcBase64 -replace '\s', ''
     if ($cmcBase64.Length -lt 256 -or $cmcBase64.Length -gt 128KB) {
         throw 'CertEnroll returned an invalid or oversized CMC request.'

@@ -211,14 +211,38 @@ HRESULT RunAgent(const std::vector<std::wstring>& arguments,
 
 HRESULT StartAdApprovalForSid(PCWSTR sid, PCWSTR context,
                               const std::atomic_bool& cancelled,
-                              std::string* output) {
+                              std::string* output, bool pivSigning) {
     if (!SafeToken(sid, L"-", false) || wcslen(sid) > 184 ||
         wcsncmp(sid, L"S-1-", 4) != 0)
         return E_INVALIDARG;
     if (context == nullptr ||
         (wcscmp(context, L"interactive") != 0 && wcscmp(context, L"unlock") != 0))
         return E_INVALIDARG;
-    return RunAgent({L"approval-start", L"--sid", sid, L"--context", context}, cancelled, output);
+    std::vector<std::wstring> arguments = {L"approval-start", L"--sid", sid,
+                                           L"--context", context};
+    if (pivSigning) arguments.push_back(L"--piv-signing");
+    return RunAgent(arguments, cancelled, output);
+}
+
+HRESULT StartAdApprovalForAccount(PCWSTR account, PCWSTR context,
+                                  const std::atomic_bool& cancelled,
+                                  std::string* output) {
+    if (account == nullptr || wcslen(account) > 160 ||
+        context == nullptr ||
+        (wcscmp(context, L"interactive") != 0 && wcscmp(context, L"unlock") != 0))
+        return E_INVALIDARG;
+    const wchar_t* separator = wcschr(account, L'\\');
+    if (separator == nullptr || separator == account || separator[1] == L'\0' ||
+        wcschr(separator + 1, L'\\') != nullptr)
+        return E_INVALIDARG;
+    for (const wchar_t* p = account; *p; ++p) {
+        if (p == separator) continue;
+        const bool valid = (*p >= L'a' && *p <= L'z') || (*p >= L'A' && *p <= L'Z') ||
+                           (*p >= L'0' && *p <= L'9') || *p == L'.' || *p == L'_' || *p == L'-';
+        if (!valid) return E_INVALIDARG;
+    }
+    return RunAgent({L"approval-start-user", L"--account", account,
+                     L"--context", context}, cancelled, output);
 }
 
 HRESULT PollAdApproval(PCWSTR requestId, DWORD timeoutSeconds,

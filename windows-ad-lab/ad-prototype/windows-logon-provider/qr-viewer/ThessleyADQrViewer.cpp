@@ -25,6 +25,7 @@ constexpr int ID_ENROLL = 1003;
 constexpr int ID_YES = 1004;
 constexpr int ID_NO = 1005;
 constexpr UINT_PTR ID_SAVE_WINDOW_SIZE = 5001;
+constexpr UINT_PTR ID_CLOSE_STALE_QR = 5002;
 constexpr wchar_t VIEWER_SETTINGS_KEY[] = L"SOFTWARE\\ThessleyPamWin\\QrViewer";
 HWND g_window, g_status, g_qr, g_code, g_start, g_enroll, g_cancel, g_prompt, g_yes, g_no, g_logo;
 std::atomic<SOCKET> g_socket{INVALID_SOCKET};
@@ -340,9 +341,20 @@ LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         break;
     case WM_TIMER:
+        if (wp == 4711) {
+            // The UAC consent dialog is topmost too; re-assert so the QR stays
+            // readable above it instead of slipping behind.
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            return 0;
+        }
         if (g_viewer_only && wp == ID_SAVE_WINDOW_SIZE) {
             KillTimer(hwnd, ID_SAVE_WINDOW_SIZE);
             save_viewer_size(hwnd);
+            return 0;
+        }
+        if (g_viewer_only && wp == ID_CLOSE_STALE_QR) {
+            DestroyWindow(hwnd);
             return 0;
         }
         break;
@@ -361,6 +373,10 @@ LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_window = hwnd;
         g_font = CreateFontW(18,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
         if (g_viewer_only) {
+            // The provider normally closes this window when approval ends.
+            // A hard upper bound also removes a stale QR if LogonUI or its
+            // worker exits during a wake/lock transition.
+            SetTimer(hwnd, ID_CLOSE_STALE_QR, 210000, nullptr);
             g_logo = CreateWindowW(L"STATIC", L"", WS_CHILD|WS_VISIBLE|SS_ICON, 14, 12, 32, 32, hwnd, nullptr, nullptr, nullptr);
             SendMessageW(g_logo, STM_SETIMAGE, IMAGE_ICON,
                          (LPARAM)LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_THESSLEY)));
@@ -424,6 +440,7 @@ LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CLOSE: if(g_busy.load()){g_close_when_done=true;cancel_request();}else DestroyWindow(hwnd); return 0;
     case WM_DESTROY:
         if (g_viewer_only) {
+            KillTimer(hwnd, ID_CLOSE_STALE_QR);
             KillTimer(hwnd, ID_SAVE_WINDOW_SIZE);
             save_viewer_size(hwnd);
         }
@@ -477,6 +494,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR command, int show) {
     if(!hwnd) return 1;
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)appIcon);
     ShowWindow(hwnd,show); UpdateWindow(hwnd);
-    if (g_viewer_only) SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);
+    // The UAC consent dialog owns the secure desktop; without topmost the QR
+    // window is created behind it and the user never sees it.
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);
+    SetForegroundWindow(hwnd);
+    SetTimer(hwnd, 4711, 1500, nullptr);
     MSG msg; while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);} return (int)msg.wParam;
 }

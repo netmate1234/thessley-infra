@@ -1,4 +1,7 @@
-param([ValidateRange(5, 30)][int]$RollbackMinutes = 10)
+param(
+    [ValidateRange(5, 30)][int]$RollbackMinutes = 10,
+    [string]$PivCertificatePath
+)
 $ErrorActionPreference = 'Stop'
 
 function Assert-Administrator {
@@ -22,6 +25,13 @@ $viewerSource = Join-Path $source 'ThessleyADQrViewer.exe'
 $rollbackSource = Join-Path $source 'rollback-ad-lab-provider.ps1'
 $keepSource = Join-Path $source 'keep-ad-lab-provider.ps1'
 $configureSource = Join-Path $source 'configure-ad-lab-user.ps1'
+$configurePivSource = Join-Path $source 'configure-ad-lab-piv-phone-test.ps1'
+$pivReaderSource = Join-Path (Split-Path -Parent $source) 'certificate-pilot\piv-phone-reader-poc.py'
+$pivTaskName = 'Thessley-AD-PIV-Phone-Reader'
+$pivReaderTaskRegistered = $false
+$pivSid = $null
+$pivCertInstallDir = $installDir
+$pivPython = Join-Path $env:ProgramFiles 'Python313\python.exe'
 
 $registry = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
     [Microsoft.Win32.RegistryHive]::LocalMachine,
@@ -48,10 +58,20 @@ try {
                 $container = $accountConfig.GetValue('ContainerName', '')
                 $providerName = $accountConfig.GetValue('ProviderName', '')
                 $keySpec = $accountConfig.GetValue('KeySpec', 0)
-                if (-not [string]::IsNullOrWhiteSpace([string]$container) -and
+                $isVsc = -not [string]::IsNullOrWhiteSpace([string]$container) -and
                     -not [string]::IsNullOrWhiteSpace([string]$providerName) -and
-                    [int]$keySpec -in @(1, 2)) {
+                    [int]$keySpec -in @(1, 2)
+                $piv = [int]$accountConfig.GetValue('PivPhoneSigning', 0) -eq 1 -and
+                    [int]$accountConfig.GetValue('PivKeySpec', 0) -in @(1, 2) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$accountConfig.GetValue('PivContainerName', '')) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$accountConfig.GetValue('PivReaderName', '')) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$accountConfig.GetValue('PivProviderName', ''))
+                if ($isVsc -or $piv) {
                     $configuredCount++
+                }
+                if ($piv) {
+                    if ($pivSid) { throw 'Only one account can use the PIV phone-sign test on this lab PC.' }
+                    $pivSid = $sid
                 }
             } finally {
                 $accountConfig.Dispose()
@@ -68,8 +88,25 @@ try {
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     throw 'A previous AD lab provider rollback task exists. Resolve that setup before reinstalling.'
 }
-foreach ($file in @($dllSource, $viewerSource, $rollbackSource, $keepSource, $configureSource)) {
+foreach ($file in @($dllSource, $viewerSource, $rollbackSource, $keepSource, $configureSource, $configurePivSource)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required package file is missing: $file" }
+}
+if ($pivSid) {
+    if ([string]::IsNullOrWhiteSpace($PivCertificatePath)) {
+        throw 'PIV phone-sign mode needs -PivCertificatePath for the certificate matching the enrolled phone key.'
+    }
+    $PivCertificatePath = [IO.Path]::GetFullPath($PivCertificatePath)
+    foreach ($required in @($pivReaderSource, $PivCertificatePath, $pivPython)) {
+        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+            throw "PIV phone-sign mode is configured, but a required file is missing: $required"
+        }
+    }
+    if ([IO.Path]::GetExtension($PivCertificatePath) -notin @('.cer', '.der')) {
+        throw 'Provide the public PIV certificate as a .cer or .der file.'
+    }
+    if (Get-ScheduledTask -TaskName $pivTaskName -ErrorAction SilentlyContinue) {
+        throw 'The PIV phone-reader task already exists. Resolve the previous test setup before reinstalling.'
+    }
 }
 if (Test-Path -LiteralPath $installDir) {
     # A timed rollback deliberately keeps its protected files for diagnosis.
@@ -119,7 +156,7 @@ try {
         }
     }
 
-    Copy-Item -LiteralPath $dllSource, $viewerSource, $rollbackSource, $keepSource, $configureSource -Destination $installDir
+    Copy-Item -LiteralPath $dllSource, $viewerSource, $rollbackSource, $keepSource, $configureSource, $configurePivSource -Destination $installDir
     foreach ($file in Get-ChildItem -LiteralPath $installDir -File) {
         $fileAcl = Get-Acl -LiteralPath $file.FullName
         $allowedSids = @($fileAcl.Access | Where-Object {
@@ -127,6 +164,48 @@ try {
         } | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value })
         if ('S-1-5-18' -notin $allowedSids -or 'S-1-5-32-544' -notin $allowedSids) {
             throw "The staged file ACL is missing SYSTEM or Administrators access: $($file.Name)"
+        }
+    }
+
+    if ($pivSid) {
+        New-Item -ItemType Directory -Path $pivCertInstallDir -Force | Out-Null
+        Copy-Item -LiteralPath $pivReaderSource -Destination $pivCertInstallDir -Force
+        $pivCertPath = Join-Path $pivCertInstallDir 'piv-phone-logon.cer'
+        Copy-Item -LiteralPath $PivCertificatePath -Destination $pivCertPath -Force
+        $pivScriptPath = Join-Path $pivCertInstallDir 'piv-phone-reader-poc.py'
+        foreach ($protectedFile in @($pivScriptPath, $pivCertPath)) {
+            $fileAcl = Get-Acl -LiteralPath $protectedFile
+            $allowedSids = @($fileAcl.Access | Where-Object {
+                $_.AccessControlType -eq 'Allow' -and $_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl
+            } | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value })
+            if ('S-1-5-18' -notin $allowedSids -or 'S-1-5-32-544' -notin $allowedSids) {
+                throw "The PIV relay file ACL is missing SYSTEM or Administrators access: $protectedFile"
+            }
+        }
+        $pivArguments = '-I "{0}" --user-sid "{1}" --certificate "{2}"' -f $pivScriptPath, $pivSid, $pivCertPath
+        $pivAction = New-ScheduledTaskAction -Execute $pivPython -Argument $pivArguments -WorkingDirectory $pivCertInstallDir
+        $pivTrigger = New-ScheduledTaskTrigger -AtStartup -RandomDelay (New-TimeSpan -Seconds 20)
+        $pivPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $pivSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1)
+        Register-ScheduledTask -TaskName $pivTaskName -Action $pivAction -Trigger $pivTrigger `
+            -Principal $pivPrincipal -Settings $pivSettings `
+            -Description 'Runs the disposable Thessley PIV phone-sign relay at the Windows sign-in screen.' | Out-Null
+        $pivReaderTaskRegistered = $true
+        $pivTask = Get-ScheduledTask -TaskName $pivTaskName
+        if ($pivTask.State -notin @('Ready', 'Running') -or $pivTask.Principal.UserId -notin @('SYSTEM', 'S-1-5-18')) {
+            throw 'The PIV phone-reader startup task could not be verified as a SYSTEM task.'
+        }
+        Start-ScheduledTask -TaskName $pivTaskName
+        $relayStarted = $false
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            Start-Sleep -Milliseconds 500
+            $pivTask = Get-ScheduledTask -TaskName $pivTaskName
+            if ($pivTask.State -eq 'Running') { $relayStarted = $true; break }
+        }
+        if (-not $relayStarted) {
+            $lastResult = (Get-ScheduledTaskInfo -TaskName $pivTaskName).LastTaskResult
+            throw "The PIV phone-reader task did not stay running (last result $lastResult). Check the relay log and Python imports."
         }
     }
     foreach ($pinFile in Get-ChildItem -LiteralPath $pinDir -File -Force) {
@@ -180,11 +259,19 @@ try {
     }
 
     Write-Output "Experimental Thessley AD tile registered for $configuredCount configured account SID(s). Recovery is armed until $($taskInfo.NextRunTime)."
+    if ($pivSid) {
+        Write-Output "The PIV phone-sign relay is running as SYSTEM and will restart at boot for SID $pivSid."
+        Write-Output "PIV relay log: $(Join-Path $env:PUBLIC 'piv-phone-reader-poc.log')"
+    }
     Write-Output "To keep after verifying a successful domain sign-in, run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $installDir 'keep-ad-lab-provider.ps1')`""
     Write-Output "To roll back now: powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$rollbackPath`" -FromTimer"
     Write-Output 'Existing Thessley local tile, VSC smart-card tile, PIN, and password provider registrations were not modified.'
 }
 catch {
+    if ($pivReaderTaskRegistered) {
+        Stop-ScheduledTask -TaskName $pivTaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $pivTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
     $registry = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
         [Microsoft.Win32.RegistryHive]::LocalMachine,
         [Microsoft.Win32.RegistryView]::Registry64)
@@ -193,6 +280,9 @@ catch {
         $registry.DeleteSubKeyTree($classPath, $false)
     } finally {
         $registry.Dispose()
+    }
+    if ($pivReaderTaskRegistered) {
+        Unregister-ScheduledTask -TaskName $pivTaskName -Confirm:$false -ErrorAction SilentlyContinue
     }
     if ($registeredTask) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
     throw

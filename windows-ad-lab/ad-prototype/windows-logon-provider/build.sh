@@ -25,7 +25,7 @@ mkdir -p "$out_dir"
   "$serialization_dir/ad_approval_client.cpp" \
   "$out_dir/provider-res.o" "$provider_dir/samplev2credentialprovider.def" \
   -lcredui -lole32 -loleaut32 -lshlwapi -lsecur32 -ladvapi32 -lgdi32 \
-  -lws2_32 -luuid -lcrypt32 \
+  -lws2_32 -luuid -lcrypt32 -lwtsapi32 \
   -o "$out_dir/ThessleyADCredentialProvider.dll"
 
 "${tool_prefix}-g++" \
@@ -44,7 +44,7 @@ mkdir -p "$out_dir"
   "$serialization_dir/ad_approval_client.cpp" \
   "$out_dir/provider-res.o" "$provider_dir/samplev2credentialprovider.def" \
   -lcredui -lole32 -loleaut32 -lshlwapi -lsecur32 -ladvapi32 -lgdi32 \
-  -lws2_32 -luuid -lcrypt32 \
+  -lws2_32 -luuid -lcrypt32 -lwtsapi32 \
   -o "$out_dir/ThessleyADTicketTestCredentialProvider.dll"
 
 pushd "$viewer_dir" >/dev/null

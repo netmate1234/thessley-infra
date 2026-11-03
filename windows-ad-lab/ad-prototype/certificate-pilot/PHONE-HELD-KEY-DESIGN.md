@@ -591,108 +591,167 @@ reg delete HKLM\SOFTWARE\Policies\Microsoft\Windows\SmartCardCredentialProvider 
 reg delete HKLM\SOFTWARE\Policies\Microsoft\Windows\SmartCardCredentialProvider /v AllowSignatureOnlyKeys /f
 ```
 
-### Direct phone-key certificate issuance (2026-10-30)
+The DC's isolated `ThessleyPhoneKeyPilot` template remains unpublished. A
+read-only check confirmed version 4, four-hour validity, minimum key size
+2048, CNG default key spec (`0`), digital-signature and key-encipherment key
+usage, and Smart Card Logon plus Client Authentication EKUs. It is not yet
+proven that this template issues a usable ECDSA certificate for the enrolled
+phone key. No such certificate has been issued. The phone app already has a
+biometric-gated `NONEwithECDSA` helper for a 32-byte PIV SHA-256 digest, but
+no Windows-to-phone PIV signing request path calls it. The next decisive test
+is to issue a short-lived certificate matching the enrolled phone key, expose
+it through PIV key reference `9A` with algorithm `11`, and confirm Windows
+requests an ECDSA signature and the DC records PKINIT. This first test is
+online; offline ECC logon would additionally require an associated ECDH key.
 
-The Android app created a PKCS#10 request after the phone biometrically signed
-the request-info bytes with the already-enrolled `THESSLEYLAB\startmenutest`
-P-256 TEE key. The CSR signature verified with both OpenSSL and Python
-`cryptography`. Its DER SHA-256 was
-`351a1a2be9dff62b457bef9fb2c7983e1e984698b6861b3fc5c065b9a00de1ce`; its SPKI
-SHA-256 was `3ba18d16a94a44cc51a81eceaeb2592a8da19394b89d5a0d7a12010d91b3177a`,
-matching the active verified phone-key record. No private key was exported.
+### PIV phone-sign relay implementation status (2026-10-30)
 
-The isolated version-4 `ThessleyPhoneKeyPilot` template was changed from RSA
-to `ECDSA_P256`, SHA-256, 256-bit minimum, and digital-signature-only key
-usage. It retains the four-hour validity, Smart Card Logon and Client
-Authentication EKUs, AD-derived subject, UPN SAN, and SID security extension.
-Only `startmenutest` received a direct Enroll ACE. The template was published
-only for the request, then unpublished and that ACE removed immediately after
-issuance. The shared SmartcardLogon template was not changed. The pilot
-template object remains in AD, unpublished, with the ECDSA test settings.
+The source now contains an opt-in PIV signing path, but it has **not** been
+deployed or validated end to end on Clone 1. An interactive AD QR request can
+carry the PIV mode; the service will only queue a digest after that exact login
+approval was delivered, and it verifies the returned ECDSA signature against
+the active AD logon key linked to the approving phone credential. The Android
+client probes all active keys on that phone so key rotation does not silently
+select a different certificate. The Windows reader helper accepts only the
+disposable test PIN, asks the phone to sign the PIV digest, verifies the result
+against the card certificate, and returns it to the card. It does not store a
+phone private key on Windows.
 
-The CA issued request 26, serial
-`120000001abf60982543cd1afb00000000001a`, as a four-hour certificate from
-`THESSLEY-LAB-CA`. On Clone 1, the certificate's EC point exactly matched the
-phone CSR key; the subject was `CN=Start Menu Test`; the UPN SAN was
-`startmenutest@lab.thessley.test`; the SID extension matched the account SID;
-and the certificate contained the expected template OID, Smart Card Logon EKU,
-and digital-signature-only Key Usage. Validity was 2026-10-30 20:26:32 through
-2026-10-31 00:26:32 local time. `certutil -verify -urlfetch` built the chain
-to the lab CA, but could not retrieve LDAP AIA/CDP data from the SSH logon
-token (`ERROR_LOGON_FAILURE`), so that command did not establish revocation
-status. The certificate itself was issued and its identity/key bindings were
-verified locally.
+The helper must remain available before sign-in, so the opt-in lab installer
+now stages it in the protected provider directory and registers a SYSTEM
+startup task with restart-on-failure. The existing AD provider rollback also
+stops that task and restores the previous smart-card transaction timeout. The
+installer requires an explicit public certificate path and preserves the
+normal password recovery route. The timeout is increased only for this lab
+path because Microsoft's smart-card KSP default is 1.5 seconds; it is restored
+by disable or rollback.
 
-A separate temporary ECDSA control certificate was issued to the same
-low-privilege test account from an OpenSSL-generated P-256 CSR, then revoked
-with Certificate Hold and a new CRL was published. Its private key and files
-were deleted. The first phone-CSR submission was rejected; rewriting the
-exact CSR bytes to Clone 1 and confirming the SHA-256 before resubmitting
-produced the successful request 26. This indicates a transfer error in the
-first attempt, not a failure of the phone CSR or CA's ECDSA support.
+Server signature-store tests pass, and the Windows Credential Provider
+cross-build completes. These checks establish code-level wiring only. Clone 1
+still had the older foreground, discovery-only reader helper at the last
+inspection; the current provider, startup relay, and backend have not been
+installed together, and no AD desktop sign-in has succeeded through this
+path. The next proof requires deploying the matching backend/provider build,
+confirming the SYSTEM relay stays running, then reconnecting the phone for one
+biometric signing and checking the DC's Kerberos event.
 
-This is a real phone-key-bound certificate, but not yet a working Windows
-sign-in. The certificate remains on Clone 1 as public material for the next
-PIV test. There is still no Windows-to-phone signing relay, no completed
-PIV-backed PKINIT, and no proof of domain sign-in without a password.
-The next milestone is to expose this certificate through the disposable PIV
-reader and route the card's signing operation to the phone's verified TEE key;
-only a matching DC PKINIT event and successful Windows session will prove the
-login path. Offline ECC logon would additionally require an associated ECDH
-key.
+### Clone 1 PIV reader enumeration check (2026-10-31)
 
-### Disposable virtual-reader discovery POC (2026-10-30)
+The phone's saved `Documents/thessley-ad-logon.csr (1)` was pulled over ADB
+without changing phone data. It is a 371-byte ECDSA P-256 CSR; its SPKI SHA-256
+is `3ba18d16a94a44cc51a81eceaeb2592a8da19394b89d5a0d7a12010d91b3177a`, which
+matches the P-256 key in the four-hour CA-issued certificate. The CSR is public
+material only. The corresponding certificate is currently configured in the
+Clone 1 relay.
 
-The Clone 1 experiment uses a loopback-only vpcd client and a disposable PIV
-card responder. It does not change the physical phone, the phone's secure
-element/TEE, or any enrolled key. It reads the already-issued public
-`startmenutest` certificate from the VM's `.cer` file; it has no private key
-and does not communicate with the phone to sign.
+`certutil -scinfo` under SYSTEM with that phone certificate returned
+`NTE_BAD_KEYSET`; the PIV reader was detected, but Windows did not create a key
+container for its EC 9A certificate. The earlier policy values
+`EnumerateECCCerts=1` and `AllowSignatureOnlyKeys=1` were already enabled, so
+those settings alone do not solve it.
 
-The responder advertises the full versioned PIV AID and exposes the
-certificate only in PIV Authentication object `5FC105`. It accepts only the
-test PIN `0000` and deliberately refuses GENERAL AUTHENTICATE (`6A81`). Its
-log contains APDU names and lengths, but does not log the PIN value. It is a
-diagnostic harness, not a usable smart card or login mechanism.
+To isolate card-format handling, the relay was temporarily switched to the
+existing RSA-2048 parser-test certificate. `certutil -scinfo` then enumerated
+the card certificate through `Microsoft Smart Card Key Storage Provider`,
+created container `cc4b44bf-3f02-5c5b-946b-0a119b5fc105`, and reported that the
+public-key match succeeded. Its expiry and self-signed trust errors were
+expected for this parser-only certificate. The four-hour phone certificate
+was restored immediately afterward and the SYSTEM relay restarted; its SHA-256
+is back to `BFDFC64589686E2ACDA61DE33222FDC3D5A20D859F50C22743BA299FF0437D6A`.
+The temporary diagnostic scheduled task and backup file were removed.
 
-Observed on Clone 1: Windows selected the PIV AID, fetched CHUID (`5FC102`),
-and in one enumeration fetched all 2,243 bytes of the certificate object
-(`5FC105`) using GET RESPONSE chaining. Windows also queried several optional
-objects, which the responder correctly reported absent. A later scan read
-only CHUID and reset the card. No VERIFY or GENERAL AUTHENTICATE was observed
-in the latest trace. `certutil -scinfo` reported `NTE_BAD_KEYSET` / “Missing
-stored keyset” for the virtual PIV card and did not enumerate the phone-bound
-certificate as a usable sign-in certificate. The user-facing smart-card
-message was “No valid certificates were found on this smartcard.”
+The reader, PIV application, and certificate-object retrieval work for the
+P-256 certificate. The current failure is later: the inbox stack does not
+associate that EC certificate with a usable key container. The RSA parser
+certificate did get a container, but it is a different certificate and key;
+this A/B does not prove that RSA is the only supported algorithm. In
+particular, Microsoft documents the `EnumerateECCCerts` policy for domain
+logon with ECC smart-card certificates, and that policy was enabled here. The
+remaining question is whether this PIV profile's EC key metadata/container
+mapping is compatible with the inbox minidriver.
 
-This establishes that the UMDF reader, PC/SC path, PIV AID selection, and
-certificate-object transport can work. It does **not** establish that Windows
-accepts the returned object as a usable certificate/key pair, that Windows
-requested a phone signature, that PKINIT reached the DC, or that AD login
-works. The unchanged physical phone is not the card presented by this VM
-POC. Microsoft's documented sign-in enumeration first opens the card's
-default crypto container; if that fails, Windows considers the card unusable.
-It then obtains certificates from the provider's user certificate store or
-from the container's `AT_KEYEXCHANGE` certificate. The POC deliberately has
-no private-key container and rejects signing, so `NTE_BAD_KEYSET` is expected
-and explains why the certificate is not offered as a usable logon credential.
-This is a missing bridge implementation, not a change to or failure of the
-phone's secure chip. See Microsoft's [certificate enumeration and sign-in
-flow](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-certificate-requirements-and-enumeration).
+The next discriminating POC is an additional RSA-2048 AD logon key generated
+in Android Keystore, with its own short-lived certificate, while retaining the
+existing P-256 approval/logon key. The app source already has a dedicated
+`generateAdLogonDeviceKey` RSA-2048 path that prefers StrongBox and falls back
+to TEE only when StrongBox is unavailable. A successful RSA phone-key test
+would establish a practical inbox-driver route; if it fails, compare the
+certificate/container metadata before concluding the key algorithm is the
+cause. No existing phone key should be revoked or replaced for this test.
 
-The next implementation step is to connect PIV key reference `9A` and its
-ECDSA operation to the existing phone TEE key, with a fresh, account- and
-computer-bound phone approval before the signature is returned. The card
-provider must then expose the certificate and key as one usable container.
-Only after Windows requests the signature can a matching DC PKINIT event and
-a successful Windows session establish end-to-end login.
+References: [Windows inbox smart-card minidriver](https://learn.microsoft.com/en-us/windows-hardware/drivers/smartcard/windows-inbox-smart-card-minidriver),
+[ECC smart-card logon policy](https://learn.microsoft.com/en-us/windows/security/identity-protection/smart-cards/smart-card-group-policy-and-registry-settings),
+[YubiKey minidriver features](https://docs.yubico.com/software/yubikey/tools/minidriver/md_features.html).
 
-The 2026-10-30 21:15 local lock-screen capture shows the built-in Windows
-smart-card tile selected (the third icon from the left), not either of the two
-Thessley shield tiles. A later `sc queryex SCardSvr` showed the Smart Card
-service running (PID 1216). Running `certutil -scinfo` directly from the SSH
-session returned `0x80070005` / `SCardAccessStartedEvent: unknown state`; that
-is an SSH-session access limitation and is not evidence that the service was
-stopped. The previous SYSTEM-run task completed at 21:07 with
-`0x80090016 (NTE_BAD_KEYSET)`, which is the useful diagnostic for the
-certificate-only POC.
+### RSA PIV sign-in reached the private-key operation (2026-10-31)
+
+After mapping the PIV container to `Microsoft Base Smart Card Crypto Provider`
+with `AT_KEYEXCHANGE`, Windows passed certificate enumeration and requested
+RSA signatures from key reference `9A`. The first relay helper understood only
+SHA-256 DigestInfo. Shape-only diagnostics showed that Windows supplied
+canonical RSA-2048 EMSA-PKCS1-v1_5 blocks whose DigestInfo payloads were 83 and
+35 bytes, so the helper rejected them before a phone signature request was
+created. This accounts for the Windows tile pausing at “Welcome” and then
+failing without a second biometric prompt.
+
+The helper now accepts only canonical SHA-1, SHA-256, SHA-384, or SHA-512
+DigestInfo encodings (plus SHA-256 for ECDSA); arbitrary RSA blocks still fail
+closed. The AD service stores that exact algorithm-tagged input, the Android
+app asks for a fresh biometric signature with the requested RSA hash named in
+the prompt, and the service verifies the signature using the encoded hash
+algorithm. This was deployed to `THESSLEY-DC1` using the rollback-capable
+installer; the original database, TLS pin, and firewall scopes were retained.
+The updated reader helper is active on Clone 1 with a verified SHA-256 and a
+timestamped rollback copy. Android 0.1.31 was installed in place after its
+release signer was confirmed to match the installed app, preserving app data
+and enrolled keys.
+
+The focused PIV service tests pass. End-to-end Windows sign-in is still
+unverified: the next attempt should show a second phone biometric prompt after
+the ordinary AD QR approval. The prompt identifies the RSA hash algorithm;
+Windows reaching desktop and a successful DC Kerberos event are still required
+to call this proof successful.
+
+### RSA PIV response chaining and expired-certificate result (2026-10-31)
+
+The next Clone 1 attempt reached the Android-held RSA operation. The phone
+completed its second biometric approval, the reader verified the returned
+signature against the RSA certificate, and the helper returned the 266-byte
+PIV response using ISO 7816 response chaining: 240 bytes followed by a
+`GET RESPONSE` carrying the remaining 24 bytes. Windows requested and consumed
+that second fragment. This resolved the earlier Smart Card service buffer-too-
+small error; it did not yet establish successful logon.
+
+The subsequent Windows/KDC failure is now identified. Clone 1's configured
+`piv-phone-logon.cer` has `NotBefore=2026-10-31 02:21` and
+`NotAfter=2026-10-31 06:21` local time. At 10:20 local time, the provider
+reported `STATUS_LOGON_FAILURE` with substatus `0xC000038D`
+(`STATUS_SMARTCARD_CERT_EXPIRED`), and the DC's Security-Kerberos event 8
+explicitly rejected `startmenutest@lab.thessley.test` because the client
+certificate was outside its validity period. This is a certificate-lifetime
+failure after phone signing, not a response-chaining failure or rollback.
+
+No desktop sign-in has succeeded yet. The RSA phone key and its saved CSR are
+unchanged; the existing CSR's public key matches the expired certificate. The
+four-hour CA template is still in use for this disposable test. Renewing this
+certificate requires a password-authenticated `startmenutest` session so the
+existing interactive issuer task can submit that same CSR as the account.
+The previous `.cer` and `.rsp` outputs have been moved to
+`.expired-20261031` names to avoid `certreq` overwrite prompts. After renewal,
+verify the new certificate's SID, public key, issuer, template and future
+`NotAfter`, install it in the PIV relay, and remove the temporary direct Enroll
+ACE from the pilot template before another QR attempt. The shared
+`SmartcardLogon` template remains untouched.
+
+The first renewal submission was also denied (CA request 39,
+`CERTSRV_E_BAD_REQUESTSTATUS`, `0x80094003`). The CA database shows that its
+PKCS#10 bytes are identical to already-issued request 38 (both SHA-256
+`3FD9F0B78B583BB2E74844EE199DA9F65C65D722D60A76A730401D799B177AEE`). The
+denial's generic status does not by itself prove that exact replay caused the
+policy decision, so this remains a hypothesis to test. Android 0.1.32 now
+adds a random tag to the requester-supplied CSR subject and a unique output
+filename for each CSR; the template's `0x82000000` name flags build the
+issued subject from AD. The in-place update was verified against the
+installed app's signing certificate and completed successfully, preserving
+app data. A fresh, distinct CSR signed by the same enrolled RSA key is still
+needed to distinguish replay handling from another CA policy rejection.

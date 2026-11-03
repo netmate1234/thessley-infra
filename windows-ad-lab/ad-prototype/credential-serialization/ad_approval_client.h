@@ -10,6 +10,10 @@
 // The caller should call ClearAdApprovalOutput as soon as it has consumed it.
 HRESULT StartAdApprovalForSid(
     PCWSTR sid, PCWSTR context, const std::atomic_bool& cancelled,
+    std::string* output, bool pivSigning = false);
+
+HRESULT StartAdApprovalForAccount(
+    PCWSTR account, PCWSTR context, const std::atomic_bool& cancelled,
     std::string* output);
 
 HRESULT PollAdApproval(

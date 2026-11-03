@@ -380,12 +380,17 @@ def _signed_post(path: str, body: dict, timeout: float = 8.0) -> dict:
     return _post(host, port, pin, path, body, headers, timeout)
 
 
-def start_login(sid: str, context: str) -> dict:
+def start_login(sid: str, context: str, *, piv_signing: bool = False) -> dict:
     """Ask AD-backed service to authorize the selected domain SID and create a phone request."""
-    if not isinstance(sid, str) or not _SID.fullmatch(sid) or context not in ("interactive", "unlock", "ssh"):
+    if (not isinstance(sid, str) or not _SID.fullmatch(sid)
+            or context not in ("interactive", "unlock", "ssh")
+            or not isinstance(piv_signing, bool) or (piv_signing and context != "interactive")):
         raise AgentError("The selected domain SID or Windows logon context is invalid.")
     principal_id = hashlib.sha256(sid.upper().encode("ascii")).hexdigest()
-    result = _signed_post("/thessley-ad/v1/requests", {"sid": sid.upper(), "context": context})
+    body = {"sid": sid.upper(), "context": context}
+    if piv_signing:
+        body["piv_signing"] = True
+    result = _signed_post("/thessley-ad/v1/requests", body)
     request = result.get("request")
     link = result.get("app_link")
     method = result.get("credential_method")
@@ -425,9 +430,64 @@ def start_login(sid: str, context: str) -> dict:
                        ("auth", request.get("authority")), ("scope", "domain")):
         if query.get(key) != [value]:
             raise AgentError("The AD service returned a phone link for a different account.")
+    if (query.get("piv") == ["1"]) != piv_signing:
+        raise AgentError("The AD service returned a phone link with the wrong PIV-signing mode.")
     return {"request_id": request_id, "link": link, "credential_method": method,
             "policy_source": source,
+            "piv_signing_required": piv_signing,
             "qr_matrix": "/".join(qr.bitmap_rows(link, border=2))}
+
+
+def start_piv_signature(request_id: str, ad_logon_key_sha256: str, digest: bytes) -> dict:
+    """Queue one approved PIV digest/DigestInfo for a fresh phone signature."""
+    if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
+            or not isinstance(ad_logon_key_sha256, str) or not _SHA256.fullmatch(ad_logon_key_sha256)
+            or not isinstance(digest, bytes) or len(digest) not in (32, 35, 51, 67, 83)):
+        raise AgentError("Invalid PIV signature request.")
+    result = _signed_post("/thessley-ad/v1/piv-sign/start", {
+        "request_id": request_id,
+        "ad_logon_key_sha256": ad_logon_key_sha256,
+        "digest_b64": base64.b64encode(digest).decode("ascii"),
+    })
+    sign_request_id, expires_at = result.get("sign_request_id"), result.get("expires_at")
+    if (result.get("result") != "queued" or not isinstance(sign_request_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", sign_request_id)
+            or isinstance(expires_at, bool) or not isinstance(expires_at, (int, float))):
+        raise AgentError("The AD service returned an invalid PIV signature request.")
+    return {"sign_request_id": sign_request_id, "expires_at": expires_at}
+
+
+def wait_piv_signature(request_id: str, sign_request_id: str, digest: bytes,
+                       cancel, timeout: int = 75) -> bytes | None:
+    """Poll for the phone's verified signature; a cancel or timeout fails closed."""
+    if (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id)
+            or not isinstance(sign_request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", sign_request_id)
+            or not isinstance(digest, bytes) or len(digest) not in (32, 35, 51, 67, 83)
+            or isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 85):
+        raise AgentError("Invalid PIV signature polling request.")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cancel.is_set():
+            return None
+        result = _signed_post("/thessley-ad/v1/piv-sign/result", {
+            "request_id": request_id, "sign_request_id": sign_request_id,
+        }, timeout=8.0)
+        if result.get("status") == "signed":
+            encoded = result.get("signature_b64")
+            try:
+                signature = base64.b64decode(encoded, validate=True)
+            except (TypeError, ValueError, binascii.Error):
+                raise AgentError("The AD service returned an invalid PIV signature.")
+            if (base64.b64encode(signature).decode("ascii") != encoded
+                    or not 64 <= len(signature) <= 512):
+                raise AgentError("The AD service returned an invalid PIV signature.")
+            return signature
+        if result.get("status") == "expired":
+            return None
+        if result.get("status") != "pending":
+            raise AgentError("The AD service returned an invalid PIV request state.")
+        cancel.wait(min(0.5, max(0.0, deadline - time.monotonic())))
+    return None
 
 
 def start_certificate_login(sid: str, certificate_request_sha256: str) -> dict:
